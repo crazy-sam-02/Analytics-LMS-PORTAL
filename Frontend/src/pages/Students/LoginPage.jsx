@@ -1,0 +1,130 @@
+import { useState } from "react";
+import { Eye, EyeOff, Lock, UserRound } from "lucide-react";
+import { useDispatch, useSelector } from "react-redux";
+import { Navigate } from "react-router-dom";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { loginStudent } from "@/features/Students/authSlice";
+import heroImage from "@/assets/hero.png";
+
+export default function LoginPage() {
+  const dispatch = useDispatch();
+  const { user, loading, error } = useSelector((state) => state.auth);
+
+  const [identifier, setIdentifier] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [keepLoggedIn, setKeepLoggedIn] = useState(true);
+
+  if (user) return <Navigate to="/tests/ongoing" replace />;
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    await dispatch(loginStudent({ identifier, password, keepLoggedIn }));
+  };
+
+  return (
+    <section className="relative grid min-h-screen place-items-center bg-[#e9edf5] p-3 sm:p-4 lg:p-8">
+      <Card className="grid w-full max-w-6xl overflow-hidden rounded-[18px] border-white/60 bg-[#f7f8fc] shadow-[0_30px_70px_-30px_rgba(15,35,71,0.45)] lg:grid-cols-[1.35fr_1fr]">
+        <div className="relative hidden min-h-167.5 overflow-hidden bg-linear-to-br from-[#005fae] to-[#0a4f9c] p-10 text-white lg:block">
+          <img src={heroImage} alt="Students" className="absolute inset-0 h-full w-full object-cover opacity-25" />
+          <div className="absolute inset-0 bg-linear-to-b from-[#0d3f7c]/20 via-[#0a63bb]/15 to-[#0d4e93]/45" />
+
+          <div className="relative z-10 flex h-full flex-col justify-between">
+            <div>
+              <p className="text-[34px] leading-none font-semibold tracking-tight">TestAnalytics</p>
+              <div className="mt-3 h-1 w-14 rounded-full bg-white/55" />
+            </div>
+
+            <div>
+              <h1 className="max-w-md text-[56px] leading-[1.02] font-semibold tracking-tight">
+                Unlock your
+                <br />
+                academic potential.
+              </h1>
+              <p className="mt-6 max-w-sm text-base leading-relaxed text-blue-50/92">
+                Access personalized test metrics, performance insights, and AI-driven study recommendations in one clean, quiet space.
+              </p>
+            </div>
+
+            <div className="w-max rounded-xl border border-white/25 bg-white/12 px-4 py-3 text-sm text-blue-50 backdrop-blur-md">
+              Joined by 12,000+ students this semester
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-[#f8f9fd] p-5 sm:p-10 lg:p-12">
+          <Badge className="rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold tracking-wide text-blue-800 uppercase" variant="secondary">
+            Student Portal
+          </Badge>
+          <h2 className="mt-4 text-3xl leading-tight font-semibold tracking-tight text-slate-900 sm:text-[38px]">Welcome Back</h2>
+          <p className="mt-2 text-sm text-slate-500">Please enter your credentials to access your test portal.</p>
+
+          <form onSubmit={handleSubmit} className="mt-7 space-y-5 sm:mt-9 sm:space-y-6">
+            <div>
+              <label className="mb-2 block text-xs font-semibold text-slate-500 uppercase">Student ID or Email</label>
+              <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)]">
+                <UserRound className="size-4 text-slate-400" />
+                <Input
+                  value={identifier}
+                  onChange={(event) => setIdentifier(event.target.value)}
+                  className="h-auto border-0 bg-transparent p-0 text-sm text-slate-700 shadow-none ring-0 focus-visible:ring-0"
+                  placeholder="e.g. STU-882910"
+                />
+              </div>
+            </div>
+
+            <div>
+              <div className="mb-2 flex items-center justify-between text-xs font-semibold text-slate-500 uppercase">
+                <span>Password</span>
+                <button type="button" className="text-[11px] font-semibold text-blue-700 normal-case">
+                  Forgot Password?
+                </button>
+              </div>
+              <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)]">
+                <Lock className="size-4 text-slate-400" />
+                <Input
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  className="h-auto border-0 bg-transparent p-0 text-sm text-slate-700 shadow-none ring-0 focus-visible:ring-0"
+                  placeholder="Enter password"
+                />
+                <button
+                  type="button"
+                  className="text-slate-400"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                >
+                  {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                </button>
+              </div>
+            </div>
+
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-500">
+              <Checkbox
+                checked={keepLoggedIn}
+                onCheckedChange={(checked) => setKeepLoggedIn(Boolean(checked))}
+              />
+              Keep me logged in for 30 days
+            </label>
+
+            {error ? <p className="text-sm text-red-500">{error}</p> : null}
+
+            <Button
+              type="submit"
+              className="h-11 w-full rounded-xl bg-[#0767c2] text-base font-semibold text-white shadow-lg shadow-blue-700/25 hover:bg-[#0659a8]"
+              disabled={loading}
+            >
+              {loading ? "Logging in..." : "Login as Student"}
+            </Button>
+          </form>
+
+          <p className="mt-8 text-xs text-slate-500">Need assistance? Contact technical support</p>
+        </div>
+      </Card>
+    </section>
+  );
+}

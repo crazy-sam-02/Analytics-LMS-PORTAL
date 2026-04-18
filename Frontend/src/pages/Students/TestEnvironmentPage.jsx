@@ -1,0 +1,406 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useDispatch, useSelector } from "react-redux";
+import { useNavigate, useParams } from "react-router-dom";
+import { AlertTriangle, Clock3, ShieldAlert } from "lucide-react";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  clearAnswer,
+  loadAttempt,
+  resetAttemptState,
+  setAnswer,
+  setPendingSubmit,
+  setCurrentQuestionIndex,
+  startAttempt,
+  submitAttempt,
+  toggleMarkedForReview,
+} from "@/features/Students/testSlice";
+import { useAttemptTimer } from "@/hooks/useAttemptTimer";
+import { useAttemptAutosave } from "@/hooks/useAttemptAutosave";
+import { useProctoringGuard } from "@/hooks/useProctoringGuard";
+import { useAttemptHeartbeat } from "@/hooks/useAttemptHeartbeat";
+import { QuestionRenderer } from "@/components/Students/test-engine/QuestionRenderer";
+import { TestNavigationPanel } from "@/components/Students/test-engine/TestNavigationPanel";
+
+const pendingSubmitStorageKey = "lms:test:pending-submit";
+
+const formatDuration = (remainingSeconds) => {
+  const safe = Math.max(0, remainingSeconds);
+  const minutes = Math.floor(safe / 60);
+  const seconds = safe % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+};
+
+const shouldAutoNextSingle = (proctoringConfig) => Boolean(proctoringConfig?.auto_next_single);
+
+const exitFullscreenIfActive = async () => {
+  if (typeof document === "undefined") {
+    return;
+  }
+
+  if (document.fullscreenElement && typeof document.exitFullscreen === "function") {
+    try {
+      await document.exitFullscreen();
+    } catch {
+      // Ignore exit failures and continue with navigation.
+    }
+  }
+};
+
+export default function TestEnvironmentPage() {
+  const dispatch = useDispatch();
+  const navigate = useNavigate();
+  const { attemptId, testId } = useParams();
+  const [submitWarningOpen, setSubmitWarningOpen] = useState(false);
+
+  const submitLockRef = useRef(false);
+
+  const {
+    attempt_id,
+    test_id,
+    question_order,
+    questions,
+    answers,
+    marked_for_review,
+    current_question_index,
+    server_end_time,
+    proctoring_config,
+    violations,
+    save_status,
+    submit_status,
+    start_status,
+    load_status,
+  } = useSelector((state) => state.test);
+
+  const questionId = question_order[current_question_index];
+  const currentQuestion = questionId ? questions[questionId] : null;
+
+  useEffect(() => {
+    if (attemptId) {
+      dispatch(loadAttempt({ attempt_id: attemptId }));
+      return;
+    }
+
+    if (testId) {
+      dispatch(startAttempt({ test_id: testId }));
+    }
+  }, [attemptId, dispatch, testId]);
+
+  useEffect(() => {
+    if (!attemptId && attempt_id) {
+      navigate(`/test/${attempt_id}`, { replace: true });
+    }
+  }, [attemptId, attempt_id, navigate]);
+
+  useEffect(() => {
+    return () => {
+      dispatch(resetAttemptState());
+    };
+  }, [dispatch]);
+
+  const { flushPendingSaves } = useAttemptAutosave();
+
+  const trySubmit = useCallback(async (reason) => {
+    if (!attempt_id || !test_id || submitLockRef.current || submit_status === "submitting" || submit_status === "submitted") {
+      return;
+    }
+
+    submitLockRef.current = true;
+
+    const payload = {
+      attempt_id,
+      test_id,
+      reason,
+      created_at: Date.now(),
+    };
+
+    dispatch(setPendingSubmit(payload));
+
+    try {
+      sessionStorage.setItem(pendingSubmitStorageKey, JSON.stringify(payload));
+    } catch {
+      // Ignore storage failures.
+    }
+
+    try {
+      await flushPendingSaves();
+      await dispatch(submitAttempt({ attempt_id, test_id, reason })).unwrap();
+
+      dispatch(setPendingSubmit(null));
+
+      try {
+        sessionStorage.removeItem(pendingSubmitStorageKey);
+        sessionStorage.removeItem(`lms:attempt:draft:${attempt_id}`);
+      } catch {
+        // Ignore storage failures.
+      }
+
+      await exitFullscreenIfActive();
+      navigate(`/results/${attempt_id}`, { replace: true });
+      return;
+    } catch {
+      toast.error("Submit failed. Auto-retry is active.", {
+        dismissible: false,
+        duration: 3000,
+      });
+    } finally {
+      submitLockRef.current = false;
+    }
+  }, [attempt_id, dispatch, flushPendingSaves, navigate, submit_status, test_id]);
+
+  useEffect(() => {
+    let timer = null;
+
+    const retryPending = async () => {
+      let parsed = null;
+
+      try {
+        parsed = JSON.parse(sessionStorage.getItem(pendingSubmitStorageKey) || "null");
+      } catch {
+        parsed = null;
+      }
+
+      if (!parsed?.attempt_id || !parsed?.test_id) {
+        return;
+      }
+
+      if (String(parsed.attempt_id) !== String(attempt_id)) {
+        return;
+      }
+
+      await trySubmit(parsed.reason || "retry_submission");
+    };
+
+    if (attempt_id && navigator.onLine) {
+      timer = window.setTimeout(retryPending, 600);
+    }
+
+    const onlineHandler = () => {
+      retryPending();
+    };
+
+    window.addEventListener("online", onlineHandler);
+
+    return () => {
+      if (timer) {
+        window.clearTimeout(timer);
+      }
+      window.removeEventListener("online", onlineHandler);
+    };
+  }, [attempt_id, trySubmit]);
+
+  const { remainingSeconds } = useAttemptTimer({
+    serverEndTime: server_end_time,
+    onExpired: () => {
+      trySubmit("time_expired");
+    },
+  });
+
+  useAttemptHeartbeat({
+    attemptId: attempt_id,
+    testId: test_id,
+    onNotFound: () => {
+      toast.error("Test session no longer exists.");
+      navigate("/tests/ongoing", { replace: true });
+    },
+    onAlreadySubmitted: () => {
+      exitFullscreenIfActive().finally(() => {
+        navigate(`/results/${attempt_id}`, { replace: true });
+      });
+    },
+  });
+
+  const { fullscreenBlocked, reEnterFullscreen } = useProctoringGuard({
+    attemptId: attempt_id,
+    testId: test_id,
+    enabled: Boolean(proctoring_config?.enabled),
+    threshold: Number(proctoring_config?.threshold || 3),
+    fullscreenRequired: Boolean(proctoring_config?.fullscreen_required),
+    onThresholdExceeded: () => {
+      trySubmit("violation_threshold_exceeded");
+    },
+  });
+
+  const inputDisabled = submit_status === "submitting" || submit_status === "submitted";
+
+  const onAnswerChange = (patch) => {
+    if (!questionId || inputDisabled) {
+      return;
+    }
+
+    const current = answers[questionId] || {};
+
+    const normalizedPatch = {
+      ...current,
+      ...patch,
+    };
+
+    if (currentQuestion?.type === "FILL_BLANK") {
+      normalizedPatch.answer_text = String(normalizedPatch.answer_text || "").trim();
+    }
+
+    dispatch(
+      setAnswer({
+        question_id: questionId,
+        answer: normalizedPatch,
+      })
+    );
+
+    if (currentQuestion?.type === "MCQ_SINGLE" && shouldAutoNextSingle(proctoring_config)) {
+      if (current_question_index < question_order.length - 1) {
+        dispatch(setCurrentQuestionIndex(current_question_index + 1));
+      }
+    }
+  };
+
+  const goPrev = () => {
+    dispatch(setCurrentQuestionIndex(Math.max(0, current_question_index - 1)));
+  };
+
+  const goNext = () => {
+    dispatch(setCurrentQuestionIndex(Math.min(question_order.length - 1, current_question_index + 1)));
+  };
+
+  const resolvedLoadingState = start_status === "loading" || load_status === "loading" || !currentQuestion;
+
+  const remainingColorClass = remainingSeconds <= 10 ? "text-red-700 bg-red-100" : "text-blue-700 bg-blue-100";
+
+  const title = useMemo(() => {
+    if (start_status === "failed" || load_status === "failed") {
+      return "Unable to load test";
+    }
+
+    return `Question ${current_question_index + 1} of ${question_order.length}`;
+  }, [current_question_index, load_status, question_order.length, start_status]);
+
+  if (resolvedLoadingState) {
+    return <div className="grid min-h-screen place-items-center text-slate-600">Loading secure test environment...</div>;
+  }
+
+  return (
+    <section className="grid min-h-screen bg-slate-100 lg:grid-cols-[1fr_340px]">
+      <div className="p-4 sm:p-6">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+          <div>
+            <p className="text-sm font-semibold text-slate-700">{title}</p>
+            <p className="text-xs text-slate-500">Attempt: {attempt_id}</p>
+          </div>
+
+          <div className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-lg font-bold ${remainingColorClass}`}>
+            <Clock3 className="size-5" />
+            {formatDuration(remainingSeconds)}
+          </div>
+        </div>
+
+        {save_status === "error" ? (
+          <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800">
+            Saving locally. Changes will sync automatically when connection recovers.
+          </div>
+        ) : null}
+
+        <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+          <div className="mb-4 flex flex-wrap items-start justify-between gap-2">
+            <h2 className="text-2xl font-semibold leading-tight text-slate-900">{currentQuestion?.prompt}</h2>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={inputDisabled}
+              onClick={() => dispatch(toggleMarkedForReview(questionId))}
+            >
+              {marked_for_review.includes(questionId) ? "Unmark Review" : "Mark for Review"}
+            </Button>
+          </div>
+
+          <QuestionRenderer
+            question={currentQuestion}
+            answer={answers[questionId]}
+            disabled={inputDisabled}
+            paragraphWordLimit={Number(proctoring_config?.paragraph_word_limit || 250)}
+            onChange={onAnswerChange}
+          />
+
+          <div className="mt-6 flex flex-wrap items-center gap-2">
+            <Button type="button" variant="outline" onClick={() => dispatch(clearAnswer(questionId))} disabled={inputDisabled}>Clear</Button>
+            <Button type="button" variant="outline" onClick={goPrev} disabled={current_question_index <= 0}>Prev</Button>
+            <Button type="button" onClick={goNext} disabled={current_question_index >= question_order.length - 1}>Next</Button>
+            <Button
+              type="button"
+              className="ml-auto bg-blue-700 hover:bg-blue-800"
+              disabled={submit_status === "submitting" || submit_status === "submitted"}
+              onClick={() => setSubmitWarningOpen(true)}
+            >
+              {submit_status === "submitting" ? "Submitting..." : "Submit Test"}
+            </Button>
+          </div>
+
+          <div className="mt-4 rounded-xl bg-slate-50 p-3 text-xs text-slate-600">
+            Violations: {violations.total}/{Number(proctoring_config?.threshold || 3)}
+          </div>
+        </article>
+      </div>
+
+      <TestNavigationPanel
+        questionOrder={question_order}
+        answers={answers}
+        markedForReview={marked_for_review}
+        currentIndex={current_question_index}
+        onJump={(index) => dispatch(setCurrentQuestionIndex(index))}
+        onPrev={goPrev}
+        onNext={goNext}
+        disableNext={current_question_index >= question_order.length - 1}
+      />
+
+      <Dialog open={fullscreenBlocked}>
+        <DialogContent showCloseButton={false} className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><ShieldAlert className="size-5 text-red-600" />Fullscreen Required</DialogTitle>
+            <DialogDescription>
+              Fullscreen mode is mandatory for this test. Re-enter fullscreen to continue.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" onClick={reEnterFullscreen}>Re-enter Fullscreen</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={violations.total >= Number(proctoring_config?.threshold || 3)}>
+        <DialogContent showCloseButton={false} className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><AlertTriangle className="size-5 text-red-600" />Violation Threshold Reached</DialogTitle>
+            <DialogDescription>
+              Your test is being auto-submitted due to repeated proctoring violations.
+            </DialogDescription>
+          </DialogHeader>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={submitWarningOpen} onOpenChange={setSubmitWarningOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><AlertTriangle className="size-5 text-amber-600" />Submit Test?</DialogTitle>
+            <DialogDescription>
+              Once you submit, you cannot edit your answers. Are you sure you want to submit now?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setSubmitWarningOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                setSubmitWarningOpen(false);
+                trySubmit("manual_submit");
+              }}
+              disabled={submit_status === "submitting" || submit_status === "submitted"}
+            >
+              Confirm Submit
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </section>
+  );
+}
