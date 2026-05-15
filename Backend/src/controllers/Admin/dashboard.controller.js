@@ -1,7 +1,9 @@
-const prisma = require("../../config/db");
+const models = require("../../models");
 const { asyncHandler } = require("../../utils/http");
 
 const getAdminDashboard = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const collegeId = req.collegeId;
   const now = new Date();
 
@@ -14,9 +16,9 @@ const getAdminDashboard = asyncHandler(async (req, res) => {
     recentActivity,
     tests,
   ] = await Promise.all([
-    prisma.student.count({ where: { collegeId, isActive: true } }),
-    prisma.test.count({ where: { collegeId } }),
-    prisma.test.count({
+    db.student.count({ where: { collegeId, isActive: true } }),
+    db.test.count({ where: { collegeId } }),
+    db.test.count({
       where: {
         collegeId,
         startsAt: { lte: now },
@@ -24,13 +26,13 @@ const getAdminDashboard = asyncHandler(async (req, res) => {
         isPublished: true,
       },
     }),
-    prisma.test.count({
+    db.test.count({
       where: {
         collegeId,
         startsAt: { gt: now },
       },
     }),
-    prisma.submission.findMany({
+    db.submission.findMany({
       where: {
         collegeId,
         status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
@@ -42,11 +44,18 @@ const getAdminDashboard = asyncHandler(async (req, res) => {
         test: {
           select: { title: true },
         },
+        violations: {
+          select: { id: true, type: true, createdAt: true },
+          orderBy: { createdAt: "desc" },
+        },
+        _count: {
+          select: { violations: true },
+        },
       },
       orderBy: { submittedAt: "desc" },
       take: 10,
     }),
-    prisma.auditLog.findMany({
+    db.auditLog.findMany({
       where: { collegeId },
       include: {
         admin: {
@@ -59,7 +68,7 @@ const getAdminDashboard = asyncHandler(async (req, res) => {
       orderBy: { createdAt: "desc" },
       take: 10,
     }),
-    prisma.test.findMany({
+    db.test.findMany({
       where: { collegeId },
       include: {
         submissions: {

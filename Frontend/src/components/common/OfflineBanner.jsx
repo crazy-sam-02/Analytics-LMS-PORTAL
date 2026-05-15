@@ -30,7 +30,7 @@ export default function OfflineBanner() {
   return (
     <div
       className={`sticky top-0 z-100 border-b px-4 py-2 text-sm font-medium ${
-        inTestFlow ? "border-red-300 bg-red-50 text-red-800" : "border-amber-300 bg-amber-50 text-amber-800"
+        inTestFlow ? "border-danger/30 bg-danger/10 text-danger" : "border-warning/30 bg-warning/10 text-warning"
       }`}
       role="status"
     >

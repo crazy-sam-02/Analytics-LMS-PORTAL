@@ -178,7 +178,7 @@ export default function QuestionBankPage() {
 
   return (
     <div className="space-y-6">
-      <Card className="rounded-2xl border-slate-200">
+      <Card className="rounded-2xl border-border">
         <CardHeader>
           <CardTitle>Question Bank Dashboard</CardTitle>
         </CardHeader>
@@ -211,13 +211,13 @@ export default function QuestionBankPage() {
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {subjects.map((subject) => (
-          <Card key={subject.id} className="rounded-2xl border-slate-200">
+          <Card key={subject.id} className="rounded-2xl border-border">
             <CardHeader>
               <CardTitle className="text-lg">{subject.name}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
-              <p className="text-sm text-slate-600">Total Questions: <span className="font-semibold">{subject.questionCount || 0}</span></p>
-              <p className="text-xs text-slate-500">Updated: {new Date(subject.lastUpdated || subject.updatedAt || subject.createdAt).toLocaleString()}</p>
+              <p className="text-sm text-text-secondary">Total Questions: <span className="font-semibold text-text-primary">{subject.questionCount || 0}</span></p>
+              <p className="text-xs text-text-secondary">Updated: {new Date(subject.lastUpdated || subject.updatedAt || subject.createdAt).toLocaleString()}</p>
               <div className="flex items-center gap-2">
                 <Button size="sm" onClick={() => openAdd(subject)}>Add Questions</Button>
                 <Button size="sm" variant="outline" onClick={() => openView(subject)}>View Questions</Button>
@@ -243,10 +243,10 @@ export default function QuestionBankPage() {
       </div>
 
       {addDialogOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
-          <div className="max-h-[90vh] w-full max-w-4xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-              <h2 className="text-lg font-semibold text-slate-900">Add Questions: {activeSubject?.name}</h2>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-primary-dark/40 p-4 backdrop-blur-sm">
+          <div className="max-h-[90vh] w-full max-w-4xl overflow-hidden rounded-2xl border border-border bg-card shadow-2xl">
+            <div className="flex items-center justify-between border-b border-border px-5 py-4">
+              <h2 className="text-lg font-semibold text-text-primary">Add Questions: {activeSubject?.name}</h2>
               <Button type="button" variant="ghost" onClick={() => setAddDialogOpen(false)}>Close</Button>
             </div>
 
@@ -258,10 +258,10 @@ export default function QuestionBankPage() {
                 </TabsList>
                 <TabsContent value="manual" className="space-y-4">
                   {manualQuestions.map((item, index) => (
-                    <Card key={`manual-${index}`} className="rounded-xl border-slate-200">
+                    <Card key={`manual-${index}`} className="rounded-xl border-border">
                       <CardContent className="space-y-3 pt-5">
                         <div className="flex items-center justify-between">
-                          <p className="text-sm font-semibold text-slate-700">Question {index + 1}</p>
+                          <p className="text-sm font-semibold text-text-primary">Question {index + 1}</p>
                           <Button type="button" size="sm" variant="destructive" onClick={() => removeQuestionRow(index)}>
                             Delete Question
                           </Button>
@@ -286,7 +286,7 @@ export default function QuestionBankPage() {
                             </SelectContent>
                           </Select>
                           <div className="flex items-center gap-2">
-                            <label className="text-sm text-slate-500">Marks</label>
+                            <label className="text-sm text-text-secondary">Marks</label>
                             <Input type="text" min={1} value={item.marks} onChange={(e) => updateQuestion(index, { marks: Number(e.target.value || 1) })} placeholder="Marks" />
                           </div>
                         </div>
@@ -322,13 +322,13 @@ export default function QuestionBankPage() {
                       </CardContent>
                     </Card>
                   ))}
-                  <div className=" sticky bottom-0 flex gap-2 bg-white p-4">
+                  <div className=" sticky bottom-0 flex gap-2 bg-card p-4">
                     <Button variant="outline" onClick={addQuestionRow}>Add Question Row</Button>
                     <Button onClick={saveManualQuestions}>Save Questions</Button>
                   </div>
                 </TabsContent>
                 <TabsContent value="bulk" className="space-y-3">
-                  <p className="rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
+                  <p className="rounded-lg bg-muted p-3 text-xs text-text-secondary">
                     Bulk upload format must include: type, question, options, correctAnswer, marks, difficulty, topic.
                     Topic will be saved as the selected subject name.
                   </p>
@@ -342,11 +342,11 @@ export default function QuestionBankPage() {
       ) : null}
 
       {viewDialogOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
-          <div className="max-h-[90vh] w-full max-w-6xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-              <h2 className="text-lg font-semibold text-slate-900">Questions: {activeSubject?.name}</h2>
-              <Button type="button" className = "rounded-full bg-red-500 " onClick={() => setViewDialogOpen(false)}>Close</Button>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-primary-dark/40 p-4 backdrop-blur-sm">
+          <div className="max-h-[90vh] w-full max-w-6xl overflow-hidden rounded-2xl border border-border bg-card shadow-2xl">
+            <div className="flex items-center justify-between border-b border-border px-5 py-4">
+              <h2 className="text-lg font-semibold text-text-primary">Questions: {activeSubject?.name}</h2>
+              <Button type="button" variant="destructive" size="sm" className="rounded-full" onClick={() => setViewDialogOpen(false)}>Close</Button>
             </div>
 
             <div className="max-h-[calc(90vh-72px)] space-y-3 overflow-y-auto p-5">
@@ -384,14 +384,14 @@ export default function QuestionBankPage() {
               </div>
 
               <div className="max-h-[55vh] space-y-3 overflow-y-auto">
-                {loading ? <p className="text-sm text-slate-500">Loading questions...</p> : null}
+                {loading ? <p className="text-sm text-text-secondary">Loading questions...</p> : null}
                 {questions.map((item) => (
-                  <Card key={item.id} className="rounded-xl border-slate-200">
+                  <Card key={item.id} className="rounded-xl border-border">
                     <CardContent className="space-y-3 pt-5">
                       <div className="flex items-start justify-between gap-3">
                         <div>
-                          <p className="font-medium text-slate-800">{item.prompt}</p>
-                          <p className="text-xs text-slate-500">{String(item.type || "").toLowerCase()} | {item.difficulty} | {item.marks} marks</p>
+                          <p className="font-medium text-text-primary">{item.prompt}</p>
+                          <p className="text-xs text-text-secondary">{String(item.type || "").toLowerCase()} | {item.difficulty} | {item.marks} marks</p>
                         </div>
                         <Checkbox checked={selected.includes(item.id)} onCheckedChange={() => dispatch(toggleQuestionBankSelected(item.id))} />
                       </div>
@@ -408,7 +408,7 @@ export default function QuestionBankPage() {
               </div>
 
               <div className="flex items-center justify-between pt-2">
-                <p className="text-xs text-slate-500">Selected: {selected.length} questions</p>
+                <p className="text-xs text-text-secondary">Selected: {selected.length} questions</p>
                 <div className="flex items-center gap-2">
                   <Button
                     variant="outline"
@@ -417,7 +417,7 @@ export default function QuestionBankPage() {
                   >
                     Prev
                   </Button>
-                  <span className="text-xs text-slate-500">Page {pagination.page} / {pagination.totalPages}</span>
+                  <span className="text-xs text-text-secondary">Page {pagination.page} / {pagination.totalPages}</span>
                   <Button
                     variant="outline"
                     disabled={pagination.page >= pagination.totalPages}
@@ -433,14 +433,14 @@ export default function QuestionBankPage() {
       ) : null}
 
       {previewItem ? (
-        <div className="fixed inset-0 z-60 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
+        <div className="fixed inset-0 z-60 flex items-center justify-center bg-primary-dark/40 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-2xl rounded-2xl border border-border bg-card p-5 shadow-2xl">
             <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-slate-900">Question Preview</h2>
+              <h2 className="text-lg font-semibold text-text-primary">Question Preview</h2>
               <Button type="button" variant="ghost" onClick={() => setPreviewItem(null)}>Close</Button>
             </div>
-            <div className="space-y-2 text-sm text-slate-700">
-              <p className="font-semibold text-slate-900">{previewItem.prompt}</p>
+            <div className="space-y-2 text-sm text-text-secondary">
+              <p className="font-semibold text-text-primary">{previewItem.prompt}</p>
               <p>Type: {String(previewItem.type || "").toLowerCase()}</p>
               <p>Difficulty: {previewItem.difficulty}</p>
               <p>Marks: {previewItem.marks}</p>

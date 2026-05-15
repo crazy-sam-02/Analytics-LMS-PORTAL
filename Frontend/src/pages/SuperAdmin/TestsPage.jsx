@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useDispatch, useSelector } from "react-redux";
+import { openTestEditDialog } from "@/features/Admin/testCreationSlice";
 import { fetchSuperColleges } from "@/features/SuperAdmin/superAdminPanelSlice";
 import { superAdminApi } from "@/services/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,7 +13,77 @@ import ConfirmActionDialog from "@/components/Admin/ConfirmActionDialog";
 import TestCreationDialog from "@/components/Admin/TestCreationDialog";
 
 const PAGE_SIZE = 10;
-const STATUS_OPTIONS = ["ALL", "DRAFT", "UPCOMING", "LIVE", "COMPLETED", "ARCHIVED"];
+const STATUS_OPTIONS = ["ALL", "DRAFT", "SCHEDULED", "LIVE", "COMPLETED", "ARCHIVED"];
+
+const STATUS_TONE = {
+  DRAFT: "bg-muted text-text-secondary border-border",
+  SCHEDULED: "bg-primary/10 text-primary border-primary/30",
+  LIVE: "bg-success/10 text-success border-success/30",
+  COMPLETED: "bg-teal-50 text-teal-700 border-teal-200",
+  ARCHIVED: "bg-background text-text-secondary border-border",
+};
+
+const normalizeStatus = (status) => {
+  if (status === "UPCOMING") return "SCHEDULED";
+  if (status === "PUBLISHED") return "LIVE";
+  return status || "DRAFT";
+};
+
+const getAssignedDepartmentIds = (test) => {
+  const ids = Array.isArray(test?.assignedTo) ? test.assignedTo : [];
+  return [...new Set(ids.filter(Boolean).map((id) => String(id)))];
+};
+
+const getAssignedDepartmentNames = (test, nameById) => {
+  const ids = getAssignedDepartmentIds(test);
+  if (!ids.length) {
+    return [];
+  }
+
+  return ids.map((id) => nameById[id] || "Unknown Department");
+};
+
+const transitionsForStatus = (status) => {
+  switch (status) {
+    case "DRAFT":
+      return [
+        { action: "SCHEDULE", label: "Schedule" },
+        { action: "GO_LIVE", label: "Go Live" },
+        { action: "ARCHIVE", label: "Archive" },
+      ];
+    case "SCHEDULED":
+      return [
+        { action: "GO_LIVE", label: "Go Live" },
+        { action: "ARCHIVE", label: "Archive" },
+      ];
+    case "LIVE":
+      return [
+        { action: "COMPLETE", label: "Mark Complete" },
+        { action: "ARCHIVE", label: "Archive" },
+      ];
+    case "COMPLETED":
+      return [
+        { action: "ARCHIVE", label: "Archive" },
+      ];
+    default:
+      return [];
+  }
+};
+
+const transitionConfirmationText = (testTitle, action) => {
+  switch (action) {
+    case "SCHEDULE":
+      return `Schedule "${testTitle}" as upcoming? Students will see it before start time.`;
+    case "GO_LIVE":
+      return `Go live now for "${testTitle}"? Questions become locked for editing after publish.`;
+    case "COMPLETE":
+      return `Mark "${testTitle}" as completed? This will stop it from remaining active.`;
+    case "ARCHIVE":
+      return `Archive "${testTitle}"? It will be hidden from active workflows but retained for reports.`;
+    default:
+      return `Apply transition ${action} for "${testTitle}"?`;
+  }
+};
 
 export default function TestsPage() {
   const dispatch = useDispatch();
@@ -29,11 +100,13 @@ export default function TestsPage() {
   const [scopeOptions, setScopeOptions] = useState([]);
   const [loadingScopeOptions, setLoadingScopeOptions] = useState(false);
   const [scopeSearch, setScopeSearch] = useState("");
-  const [pendingDeactivate, setPendingDeactivate] = useState(null);
+  const [pendingAction, setPendingAction] = useState(null);
 
   const [tests, setTests] = useState([]);
+  const [departmentNameById, setDepartmentNameById] = useState({});
   const [loadingTests, setLoadingTests] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [editingTestId, setEditingTestId] = useState("");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [page, setPage] = useState(1);
@@ -50,15 +123,43 @@ export default function TestsPage() {
     }
   };
 
+  const loadDepartmentDirectory = async () => {
+    let pageCursor = 1;
+    const limit = 200;
+    const byId = {};
+
+    while (true) {
+      const response = await superAdminApi.getDepartments(`?page=${pageCursor}&limit=${limit}`);
+      const rows = Array.isArray(response?.data) ? response.data : [];
+      rows.forEach((item) => {
+        if (item?.id) {
+          byId[String(item.id)] = item.name || String(item.id);
+        }
+      });
+
+      const totalPages = Number(response?.pagination?.pages || 1);
+      if (pageCursor >= totalPages) {
+        break;
+      }
+
+      pageCursor += 1;
+    }
+
+    setDepartmentNameById(byId);
+  };
+
   useEffect(() => {
     dispatch(fetchSuperColleges());
     loadTests();
+    loadDepartmentDirectory().catch(() => {
+      setDepartmentNameById({});
+    });
   }, [dispatch]);
 
   const filteredTests = useMemo(() => {
     const term = search.trim().toLowerCase();
     return tests.filter((item) => {
-      const statusOk = statusFilter === "ALL" || String(item.status || "").toUpperCase() === statusFilter;
+      const statusOk = statusFilter === "ALL" || normalizeStatus(String(item.status || "").toUpperCase()) === statusFilter;
       if (!statusOk) return false;
       if (!term) return true;
       const haystack = `${item.title || ""} ${item.subject || ""} ${item.college?.name || ""}`.toLowerCase();
@@ -138,14 +239,23 @@ export default function TestsPage() {
 
     setSubmitting(true);
     try {
-      await superAdminApi.cloneTest(cloneTarget.testId, {
+      const clonedResp = await superAdminApi.cloneTest(cloneTarget.testId, {
         destinationCollegeId: cloneTarget.destinationCollegeId,
         assignmentMethod: cloneTarget.assignmentMethod,
         departmentIds: cloneTarget.assignmentMethod === "department_wise" ? cloneTarget.departmentIds : [],
         batchIds: cloneTarget.assignmentMethod === "batch_wise" ? cloneTarget.batchIds : [],
       });
-      toast.success("Test cloned.");
-      setBanner({ type: "success", title: "Clone complete", message: "Test cloned to destination college as a draft with selected assignment scope." });
+
+      const clonedId = clonedResp?.id || (clonedResp?.data && clonedResp.data.id);
+
+      toast.success("Draft clone created.");
+      setBanner({
+        type: "success",
+        title: "Draft clone created",
+        message: "Test cloned as a draft. Edit it, then schedule or publish it when ready.",
+        testId: clonedId,
+      });
+
       setCloneTarget({
         testId: "",
         destinationCollegeId: "",
@@ -164,22 +274,76 @@ export default function TestsPage() {
     }
   };
 
-  const confirmDeactivate = async () => {
-    if (!pendingDeactivate?.id) {
-      setPendingDeactivate(null);
+  const onOpenEdit = async (testId) => {
+    if (!testId) return;
+
+    try {
+      setEditingTestId(testId);
+      const testDetail = await superAdminApi.getTestById(testId);
+      dispatch(openTestEditDialog({ test: testDetail }));
+    } catch (error) {
+      toast.error(error?.message || "Failed to load test for editing.");
+    } finally {
+      setEditingTestId("");
+    }
+  };
+
+  const onTransition = (test, action) => {
+    setPendingAction({
+      test,
+      action,
+      description: transitionConfirmationText(test.title, action),
+    });
+  };
+
+  const onDeleteTest = async (test) => {
+    if (!test?.id) return;
+
+    const submissionCount = Number(test?._count?.submissions || 0);
+    if (submissionCount > 0) {
+      setBanner({
+        type: "warning",
+        title: "Archive test instead",
+        message: `"${test.title || "Untitled Test"}" already has ${submissionCount} submission${submissionCount === 1 ? "" : "s"}, so it cannot be deleted. Archive it to keep reports intact.`,
+        testId: test.id,
+      });
+      toast.error("This test has submissions. Archive it instead.");
+      return;
+    }
+
+    const confirmed = window.confirm(`Delete test "${test.title || "Untitled Test"}"? This cannot be undone.`);
+    if (!confirmed) return;
+
+    setSubmitting(true);
+    try {
+      await superAdminApi.deactivateTest(test.id);
+      toast.success("Test deleted.");
+      setBanner({ type: "success", title: "Test deleted", message: "The selected test was removed." });
+      await loadTests();
+    } catch (error) {
+      setBanner({ type: "error", title: "Delete failed", message: error?.message || "Unable to delete test." });
+      toast.error(error?.message || "Failed to delete test.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const confirmPendingAction = async () => {
+    if (!pendingAction?.test?.id) {
+      setPendingAction(null);
       return;
     }
 
     setSubmitting(true);
     try {
-      await superAdminApi.deactivateTest(pendingDeactivate.id);
-      toast.success("Test deactivated.");
-      setBanner({ type: "success", title: "Test deactivated", message: "The test has been archived successfully." });
-      setPendingDeactivate(null);
+      await superAdminApi.transitionTestStatus(pendingAction.test.id, pendingAction.action);
+      toast.success("Test status updated.");
+      setBanner({ type: "success", title: "Status updated", message: `Test moved via ${pendingAction.action}.` });
+      setPendingAction(null);
       await loadTests();
     } catch (error) {
-      setBanner({ type: "error", title: "Deactivate failed", message: error?.message || "Unable to deactivate test." });
-      toast.error(error?.message || "Failed to deactivate test.");
+      setBanner({ type: "error", title: "Transition failed", message: error?.message || "Unable to update test status." });
+      toast.error(error?.message || "Failed to update test status.");
     } finally {
       setSubmitting(false);
     }
@@ -188,13 +352,24 @@ export default function TestsPage() {
   return (
     <div className="space-y-6">
       {banner.type ? (
-        <Alert variant={banner.type === "error" ? "destructive" : "default"} className={banner.type === "warning" ? "border-amber-300 bg-amber-50 text-amber-800" : ""}>
-          <AlertTitle>{banner.title}</AlertTitle>
-          <AlertDescription>{banner.message}</AlertDescription>
+        <Alert variant={banner.type === "error" ? "destructive" : "default"} className={banner.type === "warning" ? "border-warning/30 bg-warning/10 text-warning" : ""}>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <AlertTitle>{banner.title}</AlertTitle>
+              <AlertDescription>{banner.message}</AlertDescription>
+            </div>
+            {banner.testId ? (
+              <div className="shrink-0">
+                <Button variant="outline" onClick={() => onOpenEdit(banner.testId)} disabled={!!editingTestId}>
+                  View / Manage
+                </Button>
+              </div>
+            ) : null}
+          </div>
         </Alert>
       ) : null}
 
-      <Card className="rounded-2xl border-slate-200">
+      <Card className="rounded-2xl border-border">
         <CardHeader className="flex flex-row items-center justify-between gap-3">
           <div>
             <CardTitle>Create Global Test</CardTitle>
@@ -204,18 +379,18 @@ export default function TestsPage() {
         </CardHeader>
       </Card>
 
-      <Card className="rounded-2xl border-slate-200">
+      <Card className="rounded-2xl border-border">
         <CardHeader>
           <CardTitle>Clone Test Across Colleges</CardTitle>
-          <CardDescription>Super admin can clone and assign the test by department or batch inside the selected destination college.</CardDescription>
+          <CardDescription>Clones are created as drafts so they can be reviewed, edited, then scheduled or published when ready.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <div className="space-y-1.5">
-            <label htmlFor="clone-test-id" className="text-sm font-medium text-slate-700">Source test</label>
+            <label htmlFor="clone-test-id" className="text-sm font-medium text-text-secondary">Source test</label>
             <select
               id="clone-test-id"
-              className="h-10 w-full rounded-lg border border-slate-200 px-2"
+              className="h-10 w-full rounded-lg border border-border px-2"
               value={cloneTarget.testId}
               onChange={(e) => setCloneTarget((p) => ({ ...p, testId: e.target.value }))}
             >
@@ -228,8 +403,8 @@ export default function TestsPage() {
             </select>
           </div>
           <div className="space-y-1.5">
-            <label htmlFor="clone-destination-college" className="text-sm font-medium text-slate-700">Destination college</label>
-            <select id="clone-destination-college" className="h-10 w-full rounded-lg border border-slate-200 px-2" value={cloneTarget.destinationCollegeId} onChange={(e) => setCloneTarget((p) => ({ ...p, destinationCollegeId: e.target.value }))}>
+            <label htmlFor="clone-destination-college" className="text-sm font-medium text-text-secondary">Destination college</label>
+            <select id="clone-destination-college" className="h-10 w-full rounded-lg border border-border px-2" value={cloneTarget.destinationCollegeId} onChange={(e) => setCloneTarget((p) => ({ ...p, destinationCollegeId: e.target.value }))}>
               <option value="">Destination college</option>
               {colleges.map((college) => (
                 <option key={college.id} value={college.id}>{college.name}</option>
@@ -237,10 +412,10 @@ export default function TestsPage() {
             </select>
           </div>
           <div className="space-y-1.5">
-            <label htmlFor="clone-assignment-method" className="text-sm font-medium text-slate-700">Assignment mode</label>
+            <label htmlFor="clone-assignment-method" className="text-sm font-medium text-text-secondary">Assignment mode</label>
             <select
               id="clone-assignment-method"
-              className="h-10 w-full rounded-lg border border-slate-200 px-2"
+              className="h-10 w-full rounded-lg border border-border px-2"
               value={cloneTarget.assignmentMethod}
               onChange={(e) => {
                 const method = e.target.value;
@@ -258,13 +433,13 @@ export default function TestsPage() {
             </select>
           </div>
           <div className="flex items-end">
-            <Button className="w-full bg-blue-500 hover:bg-blue-600" onClick={clone} disabled={submitting || !cloneTarget.testId || !cloneTarget.destinationCollegeId || !selectedScopeIds.length}>Clone Test</Button>
+            <Button className="w-full bg-primary hover:bg-primary" onClick={clone} disabled={submitting || !cloneTarget.testId || !cloneTarget.destinationCollegeId || !selectedScopeIds.length}>Clone Test</Button>
           </div>
           </div>
 
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">
-              <p className="text-sm font-medium text-slate-700">
+              <p className="text-sm font-medium text-text-secondary">
                 {cloneTarget.assignmentMethod === "department_wise" ? "Select Departments" : "Select Batches"}
               </p>
               <Input
@@ -275,21 +450,21 @@ export default function TestsPage() {
               />
             </div>
 
-            <div className="max-h-52 space-y-2 overflow-y-auto rounded-lg border border-slate-200 p-2">
-              {loadingScopeOptions ? <p className="text-xs text-slate-500">Loading options...</p> : null}
-              {!loadingScopeOptions && !cloneTarget.destinationCollegeId ? <p className="text-xs text-slate-500">Choose destination college to load options.</p> : null}
-              {!loadingScopeOptions && cloneTarget.destinationCollegeId && filteredScopeOptions.length === 0 ? <p className="text-xs text-slate-500">No matching options found.</p> : null}
+            <div className="max-h-52 space-y-2 overflow-y-auto rounded-lg border border-border p-2">
+              {loadingScopeOptions ? <p className="text-xs text-text-secondary">Loading options...</p> : null}
+              {!loadingScopeOptions && !cloneTarget.destinationCollegeId ? <p className="text-xs text-text-secondary">Choose destination college to load options.</p> : null}
+              {!loadingScopeOptions && cloneTarget.destinationCollegeId && filteredScopeOptions.length === 0 ? <p className="text-xs text-text-secondary">No matching options found.</p> : null}
 
               {filteredScopeOptions.map((item) => {
                 const isChecked = selectedScopeIds.includes(item.id);
                 return (
-                  <label key={item.id} className="flex cursor-pointer items-center justify-between gap-3 rounded-md border border-slate-200 px-3 py-2">
+                  <label key={item.id} className="flex cursor-pointer items-center justify-between gap-3 rounded-md border border-border px-3 py-2">
                     <div>
-                      <p className="text-sm font-medium text-slate-800">{item.name}</p>
+                      <p className="text-sm font-medium text-text-primary">{item.name}</p>
                       {cloneTarget.assignmentMethod === "batch_wise" ? (
-                        <p className="text-xs text-slate-500">{item.year || "-"} • {item.department?.name || "-"}</p>
+                        <p className="text-xs text-text-secondary">{item.year || "-"} • {item.department?.name || "-"}</p>
                       ) : (
-                        <p className="text-xs text-slate-500">{item.college?.name || "-"}</p>
+                        <p className="text-xs text-text-secondary">{item.college?.name || "-"}</p>
                       )}
                     </div>
                     <input
@@ -317,14 +492,14 @@ export default function TestsPage() {
               })}
             </div>
 
-            <p className="text-xs text-slate-500">
+            <p className="text-xs text-text-secondary">
               Selected: {selectedScopeIds.length}
             </p>
           </div>
         </CardContent>
       </Card>
 
-      <Card className="rounded-2xl border-slate-200">
+      <Card className="rounded-2xl border-border">
         <CardHeader>
           <CardTitle>All Global Tests</CardTitle>
           <CardDescription>Admin-like searchable test inventory with lifecycle visibility and archive actions.</CardDescription>
@@ -332,12 +507,12 @@ export default function TestsPage() {
         <CardContent className="space-y-3">
           <div className="grid gap-3 sm:grid-cols-3">
             <div className="space-y-1.5 sm:col-span-2">
-              <label htmlFor="test-search" className="text-sm font-medium text-slate-700">Search</label>
+              <label htmlFor="test-search" className="text-sm font-medium text-text-secondary">Search</label>
               <Input id="test-search" placeholder="Search by title, subject, or college" value={search} onChange={(e) => setSearch(e.target.value)} />
             </div>
             <div className="space-y-1.5">
-              <label htmlFor="test-status-filter" className="text-sm font-medium text-slate-700">Status</label>
-              <select id="test-status-filter" className="h-10 w-full rounded-lg border border-slate-200 px-2" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+              <label htmlFor="test-status-filter" className="text-sm font-medium text-text-secondary">Status</label>
+              <select id="test-status-filter" className="h-10 w-full rounded-lg border border-border px-2" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
                 {STATUS_OPTIONS.map((item) => (
                   <option key={item} value={item}>{item}</option>
                 ))}
@@ -353,27 +528,68 @@ export default function TestsPage() {
             </div>
           ) : null}
 
-          {!loadingTests && pagedTests.length === 0 ? <p className="text-sm text-slate-500">No tests found for selected filters.</p> : null}
+          {!loadingTests && pagedTests.length === 0 ? <p className="text-sm text-text-secondary">No tests found for selected filters.</p> : null}
 
           {!loadingTests ? (
             <div className="space-y-2">
-              {pagedTests.map((test) => (
-                <div key={test.id} className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 px-3 py-2">
-                  <div>
-                    <p className="font-medium text-slate-800">{test.title}</p>
-                    <p className="text-xs text-slate-500">{test.subject} | {test.status} | {test.college?.name || "-"}</p>
-                    <p className="text-xs text-slate-500">Questions: {test?._count?.questions || 0} | Attempts: {test?._count?.submissions || 0}</p>
+              {pagedTests.map((test) => {
+                const submissionCount = Number(test?._count?.submissions || 0);
+                const canDeleteTest = submissionCount === 0;
+
+                return (
+                  <div key={test.id} className="flex items-center justify-between gap-2 rounded-xl border border-border px-3 py-2">
+                    <div>
+                      <p className="font-medium text-text-primary">{test.title}</p>
+                      <p className="text-xs text-text-secondary">{test.subject} | {test.college?.name || "-"}</p>
+                      <p className="mt-1">
+                        <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${STATUS_TONE[normalizeStatus(test.status)] || STATUS_TONE.DRAFT}`}>
+                          {normalizeStatus(test.status)}
+                        </span>
+                      </p>
+                      <p className="text-xs text-text-secondary">Questions: {test?._count?.questions || 0} | Attempts: {submissionCount}</p>
+                      <p className="text-xs text-text-secondary">
+                        AssignedTo (Departments): {getAssignedDepartmentNames(test, departmentNameById).length ? getAssignedDepartmentNames(test, departmentNameById).join(", ") : "-"}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-end gap-1">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => onOpenEdit(test.id)}
+                        disabled={editingTestId === test.id || normalizeStatus(test.status) === "ARCHIVED"}
+                      >
+                        {editingTestId === test.id ? "Opening..." : "Edit Test"}
+                      </Button>
+                      {canDeleteTest ? (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => onDeleteTest(test)}
+                          disabled={submitting}
+                        >
+                          Delete Test
+                        </Button>
+                      ) : null}
+                      {transitionsForStatus(normalizeStatus(test.status)).map((transition) => (
+                        <Button
+                          key={`${test.id}-${transition.action}`}
+                          size="sm"
+                          variant={transition.action === "ARCHIVE" ? "ghost" : "outline"}
+                          onClick={() => onTransition(test, transition.action)}
+                          disabled={submitting}
+                        >
+                          {transition.label}
+                        </Button>
+                      ))}
+                    </div>
                   </div>
-                  <Button size="sm" variant="outline" onClick={() => setPendingDeactivate(test)} disabled={submitting || String(test.status || "").toUpperCase() === "ARCHIVED"}>
-                    {String(test.status || "").toUpperCase() === "ARCHIVED" ? "Archived" : "Deactivate"}
-                  </Button>
-                </div>
-              ))}
+                );
+              })}
             </div>
           ) : null}
 
           {filteredTests.length > PAGE_SIZE ? (
-            <div className="flex items-center justify-between border-t border-slate-100 pt-2 text-xs text-slate-500">
+            <div className="flex items-center justify-between border-t border-border pt-2 text-xs text-text-secondary">
               <p>Page {page} of {totalPages}</p>
               <div className="flex items-center gap-2">
                 <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage((prev) => Math.max(prev - 1, 1))}>Previous</Button>
@@ -385,13 +601,12 @@ export default function TestsPage() {
       </Card>
 
       <ConfirmActionDialog
-        open={Boolean(pendingDeactivate)}
-        onOpenChange={(open) => !open && setPendingDeactivate(null)}
-        title="Deactivate Test"
-        description={`Deactivate "${pendingDeactivate?.title || "this test"}"? It will no longer be active for colleges.`}
-        confirmLabel="Deactivate"
-        confirmVariant="destructive"
-        onConfirm={confirmDeactivate}
+        open={Boolean(pendingAction)}
+        onOpenChange={(open) => !open && setPendingAction(null)}
+        title="Confirm Status Transition"
+        description={pendingAction?.description || "Please confirm this action."}
+        confirmLabel="Confirm"
+        onConfirm={confirmPendingAction}
       />
     </div>
   );

@@ -1,4 +1,4 @@
-const prisma = require("../../config/db");
+const models = require("../../models");
 const { ApiError, asyncHandler } = require("../../utils/http");
 
 const mapQuestionType = (type) => {
@@ -12,6 +12,8 @@ const mapQuestionType = (type) => {
 };
 
 const addQuestionBankItem = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const collegeId = req.collegeId;
 
   if (!req.body.subjectId && !req.body.subject) {
@@ -20,7 +22,7 @@ const addQuestionBankItem = asyncHandler(async (req, res) => {
 
   let subjectId = req.body.subjectId || null;
   if (!subjectId) {
-    const existingSubject = await prisma.subject.findFirst({
+    const existingSubject = await db.subject.findFirst({
       where: {
         collegeId,
         name: { equals: String(req.body.subject || "").trim(), mode: "insensitive" },
@@ -30,7 +32,7 @@ const addQuestionBankItem = asyncHandler(async (req, res) => {
     if (existingSubject) {
       subjectId = existingSubject.id;
     } else {
-      const createdSubject = await prisma.subject.create({
+      const createdSubject = await db.subject.create({
         data: {
           name: String(req.body.subject || "").trim(),
           collegeId,
@@ -41,7 +43,7 @@ const addQuestionBankItem = asyncHandler(async (req, res) => {
     }
   }
 
-  const item = await prisma.questionBank.create({
+  const item = await db.questionBank.create({
     data: {
       collegeId,
       subjectId,
@@ -59,12 +61,18 @@ const addQuestionBankItem = asyncHandler(async (req, res) => {
       isActive: true,
       createdByAdminId: req.admin.id,
     },
+    include: {
+      createdByAdmin: true,
+      subjectRef: true,
+    },
   });
 
   res.status(201).json(item);
 });
 
 const getQuestionBank = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const collegeId = req.collegeId;
   const page = Number(req.query.page || 1);
   const limit = Number(req.query.limit || 20);
@@ -72,12 +80,18 @@ const getQuestionBank = asyncHandler(async (req, res) => {
   const fromDate = req.query.fromDate ? new Date(req.query.fromDate) : null;
   const toDate = req.query.toDate ? new Date(req.query.toDate) : null;
 
+  // Map incoming type query parameter to database type
+  let typeFilter = null;
+  if (req.query.type) {
+    typeFilter = mapQuestionType(req.query.type);
+  }
+
   const where = {
     collegeId,
     ...(req.query.subjectId ? { subjectId: req.query.subjectId } : {}),
-    ...(req.query.subject ? { subject: req.query.subject } : {}),
+    ...(req.query.subject ? { subject: { equals: req.query.subject, mode: "insensitive" } } : {}),
     ...(req.query.difficulty ? { difficulty: req.query.difficulty } : {}),
-    ...(req.query.type ? { type: mapQuestionType(req.query.type) } : {}),
+    ...(typeFilter ? { type: typeFilter } : {}),
     ...(req.query.search
       ? {
           prompt: {
@@ -97,9 +111,13 @@ const getQuestionBank = asyncHandler(async (req, res) => {
   };
 
   const [total, data] = await Promise.all([
-    prisma.questionBank.count({ where }),
-    prisma.questionBank.findMany({
+    db.questionBank.count({ where }),
+    db.questionBank.findMany({
       where,
+      include: {
+        createdByAdmin: true,
+        subjectRef: true,
+      },
       orderBy: { createdAt: "desc" },
       skip: (page - 1) * limit,
       take: limit,
@@ -118,10 +136,16 @@ const getQuestionBank = asyncHandler(async (req, res) => {
 });
 
 const exportQuestionBankJson = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const collegeId = req.collegeId;
 
-  const items = await prisma.questionBank.findMany({
+  const items = await db.questionBank.findMany({
     where: { collegeId },
+    include: {
+      createdByAdmin: true,
+      subjectRef: true,
+    },
     orderBy: { createdAt: "desc" },
   });
 
@@ -133,12 +157,17 @@ const exportQuestionBankJson = asyncHandler(async (req, res) => {
     marks: item.marks,
     difficulty: item.difficulty,
     subject: item.subject,
+    subjectId: item.subjectId,
+    tags: item.tags || [],
+    isActive: item.isActive,
   }));
 
   res.status(200).json(payload);
 });
 
 const importQuestionBankJson = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const collegeId = req.collegeId;
   const items = req.body.items;
 
@@ -178,21 +207,22 @@ const importQuestionBankJson = asyncHandler(async (req, res) => {
     };
   });
 
-  await prisma.$transaction([
-    prisma.questionBank.createMany({
-      data,
-      skipDuplicates: true,
-    }),
-  ]);
+  // Use sequential createMany instead of $transaction (native driver doesn't support transactions same way)
+  await db.questionBank.createMany({
+    data,
+    skipDuplicates: true,
+  });
 
   res.status(201).json({ message: "Question bank import complete", count: data.length });
 });
 
 const updateQuestionBankItem = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const collegeId = req.collegeId;
   const { id } = req.params;
 
-  const existing = await prisma.questionBank.findFirst({
+  const existing = await db.questionBank.findFirst({
     where: { id, collegeId },
   });
 
@@ -202,7 +232,7 @@ const updateQuestionBankItem = asyncHandler(async (req, res) => {
 
   const type = req.body.type || String(existing.type || "").toLowerCase();
 
-  const updated = await prisma.questionBank.update({
+  const updated = await db.questionBank.update({
     where: { id },
     data: {
       subjectId: req.body.subjectId || existing.subjectId || null,
@@ -227,16 +257,22 @@ const updateQuestionBankItem = asyncHandler(async (req, res) => {
       tags: Array.isArray(req.body.tags) ? req.body.tags : existing.tags || [],
       isActive: typeof req.body.isActive === "boolean" ? req.body.isActive : existing.isActive,
     },
+    include: {
+      createdByAdmin: true,
+      subjectRef: true,
+    },
   });
 
   res.status(200).json(updated);
 });
 
 const deleteQuestionBankItem = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const collegeId = req.collegeId;
   const { id } = req.params;
 
-  const existing = await prisma.questionBank.findFirst({
+  const existing = await db.questionBank.findFirst({
     where: { id, collegeId },
   });
 
@@ -248,7 +284,7 @@ const deleteQuestionBankItem = asyncHandler(async (req, res) => {
     throw new ApiError(409, "Question already used in tests and cannot be deleted", null, "QUESTION_IN_USE");
   }
 
-  await prisma.questionBank.delete({ where: { id } });
+  await db.questionBank.delete({ where: { id } });
 
   res.status(200).json({ message: "Question deleted" });
 });

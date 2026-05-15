@@ -1,8 +1,9 @@
 import { NavLink } from "react-router-dom";
 import { useState } from "react";
-import { useDispatch } from "react-redux";
-import { LayoutDashboard, School, ShieldUser, Users, Building2, FileCheck2, Layers3, CalendarDays, FileBarChart2, ChartNoAxesCombined, ScrollText, Settings, LogOut, Crown } from "lucide-react";
+import { useDispatch, useSelector } from "react-redux";
+import { LayoutDashboard, School, ShieldUser, Users, Building2, FileCheck2, BookOpen, Layers3, CalendarDays, FileBarChart2, ChartNoAxesCombined, ScrollText, Settings, LogOut, Crown, ChevronLeft } from "lucide-react";
 import { logoutSuperAdmin } from "@/features/SuperAdmin/superAdminAuthSlice";
+import { toggleSidebar } from "@/features/SuperAdmin/superAdminUiSlice";
 import ConfirmActionDialog from "@/components/Admin/ConfirmActionDialog";
 
 const navItems = [
@@ -12,28 +13,43 @@ const navItems = [
   { to: "/super-admin/students", label: "Students", icon: Users },
   { to: "/super-admin/departments", label: "Departments", icon: Building2 },
   { to: "/super-admin/tests", label: "Tests", icon: FileCheck2 },
+  { to: "/super-admin/question-bank", label: "Question Bank", icon: BookOpen },
   { to: "/super-admin/batches", label: "Batches", icon: Layers3 },
   { to: "/super-admin/events", label: "Events", icon: CalendarDays },
   { to: "/super-admin/reports", label: "Reports", icon: FileBarChart2 },
-  { to: "/super-admin/analytics", label: "Analytics", icon: ChartNoAxesCombined },
   { to: "/super-admin/audit-logs", label: "Audit Logs", icon: ScrollText },
   { to: "/super-admin/settings", label: "Settings", icon: Settings },
 ];
 
 export default function SuperAdminSidebar() {
   const dispatch = useDispatch();
+  const collapsed = useSelector((state) => state.superAdminUi?.sidebarCollapsed);
   const [logoutOpen, setLogoutOpen] = useState(false);
 
   return (
-    <aside className="flex w-full max-w-72 flex-col border-r border-slate-200 bg-white px-4 py-5 lg:h-screen">
-      <div className="mb-8 flex items-center gap-3 px-1">
-        <div className="grid size-10 place-items-center rounded-xl bg-blue-500 text-white shadow-lg shadow-blue-500/30">
+    <aside
+      className={`fixed inset-y-0 left-0 z-40 hidden border-r border-sidebar-border bg-linear-to-b from-primary-dark to-sidebar py-5 text-sidebar-foreground transition-all duration-200 lg:flex lg:flex-col ${
+        collapsed ? "w-16 px-2" : "w-64 px-4"
+      }`}
+    >
+      <div className={`mb-6 flex items-center ${collapsed ? "justify-center" : "justify-between"}`}>
+        <div className="grid size-10 place-items-center rounded-xl bg-sidebar-primary text-sidebar-primary-foreground shadow-md shadow-primary/40">
           <Crown className="size-5" />
         </div>
-        <div>
-          <p className="text-2xl leading-none font-semibold tracking-tight text-slate-900">LMS Super</p>
-          <p className="mt-1 text-[11px] tracking-wide text-slate-500 uppercase">Platform Control Center</p>
-        </div>
+        {!collapsed ? (
+          <div className="ml-3 flex-1">
+            <p className="text-xl leading-none font-semibold tracking-tight text-sidebar-foreground">LMS Super</p>
+            <p className="mt-1 text-[11px] tracking-wide text-sidebar-foreground/70 uppercase">Platform Control Center</p>
+          </div>
+        ) : null}
+        <button
+          type="button"
+          onClick={() => dispatch(toggleSidebar())}
+          className="grid size-8 place-items-center rounded-lg border border-sidebar-foreground/25 text-sidebar-foreground/80 hover:bg-sidebar-accent"
+          aria-label="Toggle sidebar"
+        >
+          <ChevronLeft className={`size-4 transition-transform ${collapsed ? "rotate-180" : ""}`} />
+        </button>
       </div>
 
       <nav className="space-y-1.5">
@@ -45,12 +61,15 @@ export default function SuperAdminSidebar() {
               to={item.to}
               className={({ isActive }) =>
                 `group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
-                  isActive ? "bg-blue-50 text-blue-700" : "text-slate-600 hover:bg-slate-100"
+                  isActive
+                    ? "bg-sidebar-primary text-sidebar-primary-foreground shadow-sm shadow-primary/35 ring-1 ring-sidebar-ring/30"
+                    : "text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground"
                 }`
               }
+              title={collapsed ? item.label : undefined}
             >
               <IconComponent className="size-4" strokeWidth={2.1} />
-              {item.label}
+              {!collapsed ? item.label : null}
             </NavLink>
           );
         })}
@@ -59,10 +78,11 @@ export default function SuperAdminSidebar() {
       <button
         type="button"
         onClick={() => setLogoutOpen(true)}
-        className="mt-auto flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+        className="mt-auto flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-sidebar-border bg-sidebar-accent/30 text-sm font-medium text-sidebar-foreground transition hover:bg-sidebar-accent/50"
+        title={collapsed ? "Logout" : undefined}
       >
         <LogOut className="size-4" />
-        Logout
+        {!collapsed ? "Logout" : null}
       </button>
 
       <ConfirmActionDialog

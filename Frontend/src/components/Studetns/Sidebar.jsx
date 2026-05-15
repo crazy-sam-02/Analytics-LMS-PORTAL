@@ -21,15 +21,15 @@ function Sidebar({ collapsed, mobile = false, onNavigate, upcomingCount = 0 }) {
   const shellWidthClass = collapsed ? "w-12" : "w-60";
 
   return (
-    <aside className={`flex h-full flex-col border-r border-slate-200 bg-white px-2 py-4 ${mobile ? "w-full max-w-80" : shellWidthClass}`}>
+    <aside className={`flex h-full flex-col border-r border-sidebar-border bg-linear-to-b from-primary-dark to-sidebar px-2 py-4 text-sidebar-foreground ${mobile ? "w-full max-w-80" : shellWidthClass}`}>
       <Link to="/tests/ongoing" onClick={onNavigate} className="mb-6 flex items-center gap-2 px-1">
-        <div className="grid size-8 shrink-0 place-items-center rounded-lg bg-blue-700 text-white shadow-lg shadow-blue-700/25">
+        <div className="grid size-8 shrink-0 place-items-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground shadow-lg shadow-primary/25">
           <BarChart3 className="size-4" />
         </div>
         {!collapsed ? (
           <div>
-            <p className="text-lg leading-none font-semibold tracking-tight text-[#0e3b78]">Analytica</p>
-            <p className="mt-1 text-[10px] tracking-wide text-slate-500 uppercase">Student Portal</p>
+            <p className="text-lg leading-none font-semibold tracking-tight text-sidebar-foreground">Analytica</p>
+            <p className="mt-1 text-[10px] tracking-wide text-sidebar-foreground/75 uppercase">Student Portal</p>
           </div>
         ) : null}
       </Link>
@@ -44,15 +44,15 @@ function Sidebar({ collapsed, mobile = false, onNavigate, upcomingCount = 0 }) {
             className={({ isActive }) =>
               `group flex items-center gap-2 rounded-lg px-2 py-2 text-sm font-medium transition ${
                 isActive
-                  ? "bg-blue-50 text-blue-700"
-                  : "text-slate-600 hover:bg-slate-100"
+                  ? "bg-sidebar-primary text-sidebar-primary-foreground ring-1 ring-sidebar-ring/30 shadow-sm shadow-primary/35"
+                  : "text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground"
               }`
             }
           >
             <item.icon className="size-4 shrink-0" strokeWidth={2.2} />
             {!collapsed ? <span className="truncate">{item.label}</span> : null}
             {!collapsed && item.to === "/tests/upcoming" ? (
-              <Badge variant="secondary" className="ml-auto bg-slate-200/70 text-[10px] font-semibold text-slate-700">
+              <Badge variant="secondary" className="ml-auto bg-sidebar-accent text-[10px] font-semibold text-sidebar-foreground">
                 {upcomingCount}
               </Badge>
             ) : null}
@@ -65,7 +65,7 @@ function Sidebar({ collapsed, mobile = false, onNavigate, upcomingCount = 0 }) {
           type="button"
           onClick={() => dispatch(logoutStudent())}
           variant="outline"
-          className={`h-10 w-full rounded-lg text-slate-600 hover:bg-slate-50 ${collapsed ? "px-0" : ""}`}
+          className={`h-10 w-full rounded-lg border-sidebar-border bg-sidebar-accent/30 text-sidebar-foreground hover:bg-sidebar-accent/50 ${collapsed ? "px-0" : ""}`}
         >
           <LogOut className="size-4" />
           {!collapsed ? "Logout" : null}

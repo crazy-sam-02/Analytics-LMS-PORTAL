@@ -1,5 +1,7 @@
-const prisma = require("../../config/db");
+const models = require("../../models");
 const { enqueueReportJob } = require("../../services/admin-report-queue.service");
+const { generateAdminReportHTML } = require("../../services/report-formatter.service");
+const { renderHtmlToPdfBuffer } = require("../../services/report-pdf.service");
 const { createAuditLog } = require("../../services/audit.service");
 const { emitToRole } = require("../../realtime/socket");
 const { asyncHandler } = require("../../utils/http");
@@ -20,10 +22,127 @@ const deriveMonthKey = (dateLike) => {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 };
 
+const toValidDate = (value) => {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) ? parsed : null;
+};
+
+const resolveSubmissionStudentId = (submission) => submission?.userId || submission?.studentId || submission?.user?.id || null;
+
+const normalizeId = (value) => String(value || "").trim();
+
+const normalizeIdList = (values = []) =>
+  [...new Set(values.map((value) => normalizeId(value)).filter(Boolean))];
+
+const buildEmptyAnalyticsPayload = (mode = "department") => ({
+  mode,
+  metrics: {
+    avgScore: 0,
+    passRate: 0,
+    participationRate: 0,
+    violations: 0,
+  },
+  scoreTrend: [],
+  topicPerformance: [],
+  departmentComparative: [],
+  batchComparative: [],
+  distribution: [
+    { range: "0-20", count: 0 },
+    { range: "21-40", count: 0 },
+    { range: "41-60", count: 0 },
+    { range: "61-80", count: 0 },
+    { range: "81-100", count: 0 },
+  ],
+  tableRows: [],
+  attemptHistory: [],
+  selectedStudent: null,
+  anomalyAlerts: [],
+});
+
+const buildAdminReportScope = async ({ db, req, filters = {}, testSelect = { id: true } }) => {
+  const collegeId = req.collegeId;
+  const adminDepartmentId = req.admin?.departmentId || null;
+  const requestedDepartmentId = filters.departmentId ? normalizeId(filters.departmentId) : null;
+
+  if (!adminDepartmentId) {
+    return { ok: false, reason: "MISSING_ADMIN_DEPARTMENT" };
+  }
+
+  if (requestedDepartmentId && normalizeId(adminDepartmentId) !== requestedDepartmentId) {
+    return { ok: false, reason: "DEPARTMENT_OUT_OF_SCOPE" };
+  }
+
+  const departmentId = normalizeId(adminDepartmentId);
+  const departmentBatches = await db.batch.findMany({
+    where: { collegeId, departmentId },
+    select: { id: true },
+  });
+  const departmentBatchIds = normalizeIdList(departmentBatches.map((batch) => batch.id));
+
+  const requestedBatchId = filters.batchId ? normalizeId(filters.batchId) : null;
+  if (requestedBatchId && !departmentBatchIds.includes(requestedBatchId)) {
+    return { ok: false, reason: "BATCH_OUT_OF_SCOPE" };
+  }
+
+  const batchScopeIds = requestedBatchId ? [requestedBatchId] : departmentBatchIds;
+
+  const orFilters = [];
+
+  if (departmentId) {
+    orFilters.push({ assignmentMethod: "department_wise", departmentId });
+    orFilters.push({ assignmentMethod: "department_wise", assignedTo: { in: [departmentId] } });
+    orFilters.push({ assignmentMethod: null, departmentId });
+    orFilters.push({ assignmentMethod: null, assignedTo: { in: [departmentId] } });
+  }
+
+  if (batchScopeIds.length > 0) {
+    orFilters.push({ assignmentMethod: "batch_wise", batchId: { in: batchScopeIds } });
+    orFilters.push({ assignmentMethod: "batch_wise", batchAssignments: { some: { batchId: { in: batchScopeIds } } } });
+    orFilters.push({ assignmentMethod: "department_wise", departmentId: null, batchId: { in: batchScopeIds } });
+    orFilters.push({ assignmentMethod: "department_wise", departmentId: null, batchAssignments: { some: { batchId: { in: batchScopeIds } } } });
+    orFilters.push({ assignmentMethod: null, batchId: { in: batchScopeIds } });
+    orFilters.push({ assignmentMethod: null, batchAssignments: { some: { batchId: { in: batchScopeIds } } } });
+  }
+
+  if (orFilters.length === 0) {
+    return {
+      ok: true,
+      tests: [],
+      testIds: [],
+      departmentId,
+      batchId: requestedBatchId,
+      batchIds: batchScopeIds,
+    };
+  }
+
+  const testWhere = {
+    collegeId,
+    OR: orFilters,
+    ...(filters.testId ? { id: filters.testId } : {}),
+  };
+
+  const tests = await db.test.findMany({
+    where: testWhere,
+    select: testSelect,
+  });
+
+  return {
+    ok: true,
+    tests,
+    testIds: normalizeIdList(tests.map((test) => test.id)),
+    departmentId,
+    batchId: requestedBatchId,
+    batchIds: batchScopeIds,
+  };
+};
+
 const getReportJobStatus = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const { reportJobId } = req.params;
 
-  const job = await prisma.reportJob.findFirst({
+  const job = await db.reportJob.findFirst({
     where: {
       id: reportJobId,
       collegeId: req.collegeId,
@@ -47,42 +166,67 @@ const getReportJobStatus = asyncHandler(async (req, res) => {
 });
 
 const getReportAnalytics = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const collegeId = req.collegeId;
   const mode = req.query.mode;
   const testId = req.query.testId;
   const departmentId = req.query.departmentId;
   const batchId = req.query.batchId;
   const studentId = req.query.studentId;
+  const dateFrom = req.query.dateFrom;
+  const dateTo = req.query.dateTo;
+  const dateFromValue = toValidDate(dateFrom);
+  const dateToValue = toValidDate(dateTo);
 
-  const testWhere = {
-    collegeId,
-    ...(testId ? { id: testId } : {}),
-  };
+  const scope = await buildAdminReportScope({
+    db,
+    req,
+    filters: { testId, departmentId, batchId },
+    testSelect: { id: true, title: true, subject: true, totalMarks: true, departmentId: true, batchId: true },
+  });
+
+  if (!scope.ok || scope.testIds.length === 0) {
+    return res.status(200).json(buildEmptyAnalyticsPayload(mode));
+  }
+
+  const tests = Array.isArray(scope.tests) ? scope.tests : [];
+  const testIds = scope.testIds;
+  const scopedDepartmentId = scope.departmentId;
+  const scopedBatchId = scope.batchId;
 
   const studentWhere = {
     collegeId,
-    ...(departmentId ? { departmentId } : {}),
-    ...(batchId ? { batchId } : {}),
+    ...(scopedDepartmentId ? { departmentId: scopedDepartmentId } : {}),
+    ...(scopedBatchId ? { batchId: scopedBatchId } : {}),
     ...(studentId ? { id: studentId } : {}),
   };
-
-  const tests = await prisma.test.findMany({
-    where: testWhere,
-    select: { id: true, title: true, subject: true, totalMarks: true, departmentId: true, batchId: true },
-  });
-
-  const testIds = tests.map((item) => item.id);
-  const submissions = await prisma.submission.findMany({
+  const submissions = await db.submission.findMany({
     where: {
       collegeId,
       ...(testIds.length ? { testId: { in: testIds } } : {}),
       ...(studentId ? { userId: studentId } : {}),
       status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
+      ...(scopedDepartmentId || scopedBatchId
+        ? {
+            user: {
+              ...(scopedDepartmentId ? { departmentId: scopedDepartmentId } : {}),
+              ...(scopedBatchId ? { batchId: scopedBatchId } : {}),
+            },
+          }
+        : {}),
     },
     include: {
       user: { select: { id: true, fullName: true, studentId: true, departmentId: true, batchId: true } },
       test: { select: { id: true, title: true, subject: true, totalMarks: true } },
-      violations: { select: { id: true } },
+      violations: {
+        select: {
+          id: true,
+          type: true,
+          createdAt: true,
+          metadata: true,
+        },
+      },
       answers: {
         select: {
           questionId: true,
@@ -96,12 +240,17 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
   });
 
   const scopedSubmissions = submissions.filter((item) => {
-    if (departmentId && item.user?.departmentId !== departmentId) return false;
-    if (batchId && item.user?.batchId !== batchId) return false;
+    if (scopedDepartmentId && item.user?.departmentId !== scopedDepartmentId) return false;
+    if (scopedBatchId && item.user?.batchId !== scopedBatchId) return false;
+
+    const eventDate = toValidDate(item.submittedAt || item.updatedAt || item.createdAt);
+    if (dateFromValue && (!eventDate || eventDate < dateFromValue)) return false;
+    if (dateToValue && (!eventDate || eventDate > dateToValue)) return false;
+
     return true;
   });
 
-  const students = await prisma.student.findMany({
+  const students = await db.student.findMany({
     where: studentWhere,
     include: {
       department: { select: { id: true, name: true } },
@@ -109,12 +258,13 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
     },
   });
 
-  const departments = await prisma.department.findMany({ where: { collegeId }, select: { id: true, name: true } });
-  const batches = await prisma.batch.findMany({ where: { collegeId }, select: { id: true, name: true, year: true } });
+  const departments = await db.department.findMany({ where: { collegeId }, select: { id: true, name: true } });
+  const batches = await db.batch.findMany({ where: { collegeId }, select: { id: true, name: true, year: true } });
 
   const submissionsByStudent = new Map();
   scopedSubmissions.forEach((item) => {
-    const key = item.userId;
+    const key = resolveSubmissionStudentId(item);
+    if (!key) return;
     const list = submissionsByStudent.get(key) || [];
     list.push(item);
     submissionsByStudent.set(key, list);
@@ -124,6 +274,20 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
     const rows = submissionsByStudent.get(student.id) || [];
     const average = rows.length ? rows.reduce((sum, row) => sum + Number(row.score || 0), 0) / rows.length : 0;
     const violations = rows.reduce((sum, row) => sum + Number(row.violationCount || row.violations?.length || 0), 0);
+    const violationEvents = rows
+      .flatMap((row) =>
+        (row.violations || []).map((violation) => ({
+          id: violation.id,
+          type: violation.type,
+          createdAt: violation.createdAt,
+          metadata: violation.metadata || null,
+          testId: row.testId,
+          testName: row.test?.title || "Test",
+          submissionId: row.id,
+        }))
+      )
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
     return {
       studentId: student.id,
       name: student.fullName,
@@ -135,11 +299,13 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
       avgScore: toPercent(average),
       testsTaken: rows.length,
       violations,
+      violationEvents,
       participation: tests.length > 0 ? toPercent((rows.length / tests.length) * 100) : 0,
     };
   });
 
-  const ranked = [...studentRows].sort((a, b) => b.avgScore - a.avgScore).map((item, index) => ({ ...item, rank: index + 1 }));
+  const attendedRows = studentRows.filter((row) => row.testsTaken > 0);
+  const ranked = [...attendedRows].sort((a, b) => b.avgScore - a.avgScore).map((item, index) => ({ ...item, rank: index + 1 }));
   const avgScore = ranked.length ? ranked.reduce((sum, row) => sum + row.avgScore, 0) / ranked.length : 0;
   const passRate = scopedSubmissions.length
     ? (scopedSubmissions.filter((row) => {
@@ -147,8 +313,8 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
         return Number(row.score || 0) >= totalMarks * 0.4;
       }).length / scopedSubmissions.length) * 100
     : 0;
-  const participatingStudents = ranked.filter((item) => item.testsTaken > 0).length;
-  const participationRate = ranked.length ? (participatingStudents / ranked.length) * 100 : 0;
+  const participatingStudents = attendedRows.length;
+  const participationRate = studentRows.length ? (participatingStudents / studentRows.length) * 100 : 0;
   const totalViolations = ranked.reduce((sum, item) => sum + item.violations, 0);
 
   const trendMap = new Map();
@@ -217,7 +383,10 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
 
   const selectedStudent = ranked.find((row) => row.studentId === studentId) || null;
   const attemptHistory = scopedSubmissions
-    .filter((row) => !studentId || row.userId === studentId)
+    .filter((row) => {
+      const rowStudentId = resolveSubmissionStudentId(row);
+      return !studentId || rowStudentId === studentId;
+    })
     .map((row) => ({
       testName: row.test?.title || "Test",
       score: Number(row.score || 0),
@@ -241,7 +410,7 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
         id: `fast-${row.id}`,
         type: "UNUSUALLY_FAST_HIGH_SCORE",
         severity: "HIGH",
-        studentId: row.userId,
+        studentId: resolveSubmissionStudentId(row),
         studentName: row.user?.fullName || "Student",
         testId: row.testId,
         testName: row.test?.title || "Test",
@@ -255,7 +424,7 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
         id: `viol-high-${row.id}`,
         type: "HIGH_VIOLATIONS_HIGH_SCORE",
         severity: "MEDIUM",
-        studentId: row.userId,
+        studentId: resolveSubmissionStudentId(row),
         studentName: row.user?.fullName || "Student",
         testId: row.testId,
         testName: row.test?.title || "Test",
@@ -317,6 +486,409 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
   });
 });
 
+const resolveDateFilters = (query = {}) => {
+  const dateFromInput = query.dateFrom;
+  const dateToInput = query.dateTo;
+  const validDateFrom = toValidDate(dateFromInput);
+  const validDateTo = toValidDate(dateToInput);
+
+  const result = {
+    testId: query.testId,
+    departmentId: query.departmentId,
+    batchId: query.batchId,
+    studentId: query.studentId,
+    dateFrom: validDateFrom ? validDateFrom.toISOString() : undefined,
+    dateTo: validDateTo ? validDateTo.toISOString() : undefined,
+    mode: query.mode || "department",
+  };
+
+  if (!result.dateFrom && !result.dateTo && query.dateRange && query.dateRange !== "custom") {
+    const now = Date.now();
+    const days = query.dateRange === "7d" ? 7 : query.dateRange === "90d" ? 90 : 30;
+    result.dateFrom = new Date(now - days * 24 * 60 * 60 * 1000).toISOString();
+    result.dateTo = new Date(now).toISOString();
+  }
+
+  return result;
+};
+
+const fetchAnalyticsPayload = async (req, filters = {}) => {
+  const mockReq = {
+    ...req,
+    query: {
+      ...req.query,
+      ...filters,
+    },
+  };
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+
+    const mockRes = {
+      status: () => ({
+        json: (data) => {
+          finish(data);
+          return data;
+        },
+      }),
+    };
+
+    getReportAnalytics(mockReq, mockRes, (error) => {
+      if (error) {
+        if (!settled) {
+          settled = true;
+          reject(error);
+        }
+        return;
+      }
+
+      finish(null);
+    });
+  });
+};
+
+const getReportSummaryDashboard = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
+  const filters = resolveDateFilters(req.query || {});
+  const analytics = await fetchAnalyticsPayload(req, filters);
+  const tableRows = Array.isArray(analytics?.tableRows) ? analytics.tableRows : [];
+  const attempted = tableRows.filter((item) => Number(item.testsTaken || 0) > 0);
+  const scores = tableRows.map((item) => Number(item.avgScore || 0));
+  const highestScore = scores.length ? Math.max(...scores) : 0;
+  const lowestScore = scores.length ? Math.min(...scores) : 0;
+
+  res.status(200).json({
+    summary: {
+      totalStudentsAttempted: attempted.length,
+      averageScore: Number(analytics?.metrics?.avgScore || 0),
+      highestScore: Number(highestScore || 0),
+      lowestScore: Number(lowestScore || 0),
+      completionRate: Number(analytics?.metrics?.participationRate || 0),
+    },
+    sparkline: Array.isArray(analytics?.scoreTrend) ? analytics.scoreTrend : [],
+    leaderboard: tableRows.slice(0, 10).map((item) => ({
+      studentId: item.studentId,
+      rank: item.rank,
+      name: item.name,
+      batch: item.batchName,
+      score: item.avgScore,
+    })),
+  });
+});
+
+const getReportChartsDashboard = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
+  const filters = resolveDateFilters(req.query || {});
+  const analytics = await fetchAnalyticsPayload(req, filters);
+  const topPerformers = (analytics?.tableRows || []).slice(0, 10).map((item) => ({
+    studentId: item.studentId,
+    studentName: item.name,
+    score: Number(item.avgScore || 0),
+  }));
+
+  res.status(200).json({
+    scoreDistribution: analytics?.distribution || [],
+    performanceTrend: (analytics?.scoreTrend || []).map((item) => ({
+      date: item.month,
+      averageScore: Number(item.score || 0),
+    })),
+    departmentPerformance: (analytics?.departmentComparative || []).map((item) => ({
+      department: item.departmentName,
+      avgScore: Number(item.avgScore || 0),
+      passRate: Number(item.passRate || 0),
+      participationRate: Number(item.participationRate || 0),
+    })),
+    topPerformers,
+  });
+});
+
+const getReportTableDashboard = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
+  const filters = resolveDateFilters(req.query || {});
+  const page = Math.max(Number(req.query.page || 1), 1);
+  const limit = Math.min(Math.max(Number(req.query.limit || 10), 1), 100);
+  const sortBy = String(req.query.sortBy || "date");
+  const sortDir = String(req.query.sortDir || "desc").toLowerCase() === "asc" ? "asc" : "desc";
+  const search = String(req.query.search || req.query.studentSearch || "").trim().toLowerCase();
+
+  const scope = await buildAdminReportScope({
+    db,
+    req,
+    filters: {
+      testId: filters.testId,
+      departmentId: filters.departmentId,
+      batchId: filters.batchId,
+    },
+  });
+
+  if (!scope.ok || scope.testIds.length === 0) {
+    return res.status(200).json({
+      data: [],
+      pagination: {
+        page: 1,
+        limit,
+        total: 0,
+        totalPages: 1,
+      },
+    });
+  }
+
+  const scopedDepartmentId = scope.departmentId;
+  const scopedBatchId = scope.batchId;
+
+  const submissions = await db.submission.findMany({
+    where: {
+      collegeId: req.collegeId,
+      status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
+      ...(scope.testIds.length ? { testId: { in: scope.testIds } } : {}),
+      ...(filters.studentId ? { userId: filters.studentId } : {}),
+      ...(scopedDepartmentId || scopedBatchId
+        ? {
+            user: {
+              ...(scopedDepartmentId ? { departmentId: scopedDepartmentId } : {}),
+              ...(scopedBatchId ? { batchId: scopedBatchId } : {}),
+            },
+          }
+        : {}),
+      ...(filters.dateFrom || filters.dateTo
+        ? {
+            submittedAt: {
+              ...(filters.dateFrom ? { gte: new Date(filters.dateFrom) } : {}),
+              ...(filters.dateTo ? { lte: new Date(filters.dateTo) } : {}),
+            },
+          }
+        : {}),
+    },
+    include: {
+      user: {
+        select: {
+          id: true,
+          fullName: true,
+          studentId: true,
+          department: { select: { name: true } },
+          batch: { select: { name: true } },
+        },
+      },
+      test: {
+        select: {
+          title: true,
+          totalMarks: true,
+        },
+      },
+      violations: {
+        select: { id: true, type: true, createdAt: true },
+        orderBy: { createdAt: "desc" },
+      },
+      _count: {
+        select: { violations: true },
+      },
+    },
+    orderBy: { submittedAt: "desc" },
+  });
+
+  const attemptsPerStudent = submissions.reduce((acc, submission) => {
+    const key = resolveSubmissionStudentId(submission);
+    if (!key) return acc;
+    acc[key] = Number(acc[key] || 0) + 1;
+    return acc;
+  }, {});
+
+  let rows = submissions.map((submission) => {
+    const totalMarks = Number(submission.test?.totalMarks || 0);
+    const score = Number(submission.score || 0);
+    const accuracy = totalMarks > 0 ? (score / totalMarks) * 100 : score;
+    const date = submission.submittedAt || submission.updatedAt || submission.createdAt || new Date();
+
+    return {
+      id: submission.id,
+      submissionId: submission.id,
+      studentId: resolveSubmissionStudentId(submission),
+      studentName: submission.user?.fullName || "-",
+      studentRollNo: submission.user?.studentId || "-",
+      department: submission.user?.department?.name || "-",
+      batch: submission.user?.batch?.name || "-",
+      testName: submission.test?.title || "-",
+      score,
+      accuracy: Number(accuracy.toFixed(2)),
+      timeTaken: Number(submission.timeSpentSeconds || 0),
+      attemptCount: Number(attemptsPerStudent[resolveSubmissionStudentId(submission)] || 0),
+      status: submission.status || "IN_PROGRESS",
+      violationCount: Number(submission._count?.violations || submission.violations?.length || 0),
+      violations: (submission.violations || []).map((violation) => ({
+        id: violation.id,
+        type: violation.type,
+        createdAt: violation.createdAt,
+      })),
+      date: new Date(date).toISOString(),
+    };
+  });
+
+  if (search) {
+    rows = rows.filter((row) => {
+      const text = `${row.studentName} ${row.studentRollNo} ${row.department} ${row.batch} ${row.testName}`.toLowerCase();
+      return text.includes(search);
+    });
+  }
+
+  rows.sort((a, b) => {
+    const av = a?.[sortBy];
+    const bv = b?.[sortBy];
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    if (typeof av === "number" && typeof bv === "number") {
+      return sortDir === "asc" ? av - bv : bv - av;
+    }
+    return sortDir === "asc" ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
+  });
+
+  const total = rows.length;
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  const safePage = Math.min(page, totalPages);
+  const start = (safePage - 1) * limit;
+
+  res.status(200).json({
+    data: rows.slice(start, start + limit),
+    pagination: {
+      page: safePage,
+      limit,
+      total,
+      totalPages,
+    },
+  });
+});
+
+const getReportStudentDetailDashboard = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
+  const studentId = req.params.studentId;
+  const filters = resolveDateFilters({ ...req.query, studentId });
+  const scope = await buildAdminReportScope({
+    db,
+    req,
+    filters: {
+      testId: filters.testId,
+      departmentId: filters.departmentId,
+      batchId: filters.batchId,
+    },
+  });
+
+  if (!scope.ok || scope.testIds.length === 0) {
+    return res.status(200).json({
+      student: null,
+      tests: [],
+      accuracyGraph: [],
+      timePerQuestion: [],
+    });
+  }
+
+  const analytics = await fetchAnalyticsPayload(req, {
+    ...filters,
+    departmentId: scope.departmentId,
+    batchId: scope.batchId,
+  });
+
+  const student = await db.student.findFirst({
+    where: {
+      id: studentId,
+      collegeId: req.collegeId,
+      ...(scope.departmentId ? { departmentId: scope.departmentId } : {}),
+      ...(scope.batchId ? { batchId: scope.batchId } : {}),
+    },
+    include: {
+      department: { select: { name: true } },
+      batch: { select: { name: true } },
+      submissions: {
+        where: {
+          status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
+          ...(scope.testIds.length ? { testId: { in: scope.testIds } } : {}),
+          ...(filters.dateFrom || filters.dateTo
+            ? {
+                createdAt: {
+                  ...(filters.dateFrom ? { gte: new Date(filters.dateFrom) } : {}),
+                  ...(filters.dateTo ? { lte: new Date(filters.dateTo) } : {}),
+                },
+              }
+            : {}),
+        },
+        include: {
+          test: { select: { title: true, totalMarks: true } },
+          answers: { select: { questionId: true } },
+        },
+        orderBy: { submittedAt: "asc" },
+      },
+    },
+  });
+
+  if (!student) {
+    return res.status(404).json({ message: "Student not found" });
+  }
+
+  const tests = (student.submissions || []).map((submission) => {
+    const totalQuestions = (submission.answers || []).length;
+    const totalMarks = Number(submission.test?.totalMarks || 100);
+    const accuracy = totalMarks > 0 ? (Number(submission.score || 0) / totalMarks) * 100 : Number(submission.score || 0);
+    const correct = Math.max(0, Math.min(totalQuestions, Math.round((accuracy / 100) * totalQuestions)));
+    const incorrect = Math.max(0, totalQuestions - correct);
+
+    return {
+      id: submission.id,
+      testName: submission.test?.title || "Test",
+      score: Number(submission.score || 0),
+      accuracy: Number(accuracy.toFixed(2)),
+      timeTaken: Number(submission.timeSpentSeconds || 0),
+      status: submission.status,
+      date: (submission.submittedAt || submission.updatedAt || submission.createdAt || new Date()).toISOString(),
+      questionAnalysis: {
+        correct,
+        incorrect,
+        total: totalQuestions,
+      },
+    };
+  });
+
+  const accuracyGraph = tests.map((item) => ({
+    date: new Date(item.date).toLocaleDateString(),
+    accuracy: Number(item.accuracy || 0),
+  }));
+
+  const timePerQuestion = [];
+  const baseAttempt = student.submissions?.[0];
+  if (baseAttempt && Array.isArray(baseAttempt.answers) && baseAttempt.answers.length > 0) {
+    const perQuestion = Number(baseAttempt.timeSpentSeconds || 0) / baseAttempt.answers.length;
+    baseAttempt.answers.slice(0, 12).forEach((answer, index) => {
+      timePerQuestion.push({
+        question: `Q${index + 1}`,
+        seconds: Number(perQuestion.toFixed(1)),
+      });
+    });
+  }
+
+  const selected = analytics?.selectedStudent || null;
+
+  res.status(200).json({
+    student: {
+      id: student.id,
+      name: student.fullName,
+      studentId: student.studentId,
+      department: student.department?.name || "-",
+      batch: student.batch?.name || "-",
+      rank: selected?.rank || null,
+    },
+    tests,
+    accuracyGraph,
+    timePerQuestion,
+  });
+});
+
 const ENTITY_SCOPED_CHECKS = {
   STUDENT_WISE: { key: "studentId", model: "student", message: "Student not found for this college" },
   TEST_WISE: { key: "testId", model: "test", message: "Test not found for this college" },
@@ -337,10 +909,10 @@ const normalizeFilters = (filters = {}) => {
   return Object.fromEntries(Object.entries(normalized).filter(([, value]) => value != null));
 };
 
-const validateScopedFilters = async ({ type, filters, collegeId }) => {
+const validateScopedFilters = async ({ db, type, filters, collegeId }) => {
   const rule = ENTITY_SCOPED_CHECKS[type];
   if (rule && filters?.[rule.key]) {
-    const exists = await prisma[rule.model].findFirst({
+    const exists = await db[rule.model].findFirst({
       where: {
         id: filters[rule.key],
         collegeId,
@@ -365,8 +937,11 @@ const validateScopedFilters = async ({ type, filters, collegeId }) => {
 };
 
 const generateReport = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const filters = normalizeFilters(req.body.filters || {});
   const validation = await validateScopedFilters({
+    db,
     type: req.body.type,
     filters,
     collegeId: req.collegeId,
@@ -376,7 +951,7 @@ const generateReport = asyncHandler(async (req, res) => {
     return res.status(validation.status).json({ message: validation.message });
   }
 
-  const job = await prisma.reportJob.create({
+  const job = await db.reportJob.create({
     data: {
       type: req.body.type,
       filters,
@@ -395,7 +970,9 @@ const generateReport = asyncHandler(async (req, res) => {
 });
 
 const getReportJobs = asyncHandler(async (req, res) => {
-  const jobs = await prisma.reportJob.findMany({
+  const m = await models.init();
+  const db = m.dbClient;
+  const jobs = await db.reportJob.findMany({
     where: {
       collegeId: req.collegeId,
     },
@@ -420,9 +997,11 @@ const getReportJobs = asyncHandler(async (req, res) => {
 });
 
 const downloadReport = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const { reportJobId } = req.params;
 
-  const job = await prisma.reportJob.findFirst({
+  const job = await db.reportJob.findFirst({
     where: {
       id: reportJobId,
       collegeId: req.collegeId,
@@ -447,20 +1026,32 @@ const downloadReport = asyncHandler(async (req, res) => {
   }
 
   const reportRows = Array.isArray(job.filters?.generatedData) ? job.filters.generatedData : [];
-
-  res.status(200).json({
-    reportJobId,
-    type: job.type,
-    generatedAt: job.updatedAt,
-    expiresAt: expiresAt ? expiresAt.toISOString() : null,
+  const reportData = {
     rows: reportRows,
-  });
+  };
+
+  const htmlContent = generateAdminReportHTML(
+    {
+      ...job,
+      generatedAt: job.updatedAt,
+      expiresAt: expiresAt ? expiresAt.toISOString() : null,
+    },
+    reportData
+  );
+
+  const pdfBuffer = await renderHtmlToPdfBuffer(htmlContent);
+
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="report-${reportJobId}.pdf"`);
+  res.status(200).send(pdfBuffer);
 });
 
 const regenerateReportLink = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const { reportJobId } = req.params;
 
-  const job = await prisma.reportJob.findFirst({
+  const job = await db.reportJob.findFirst({
     where: {
       id: reportJobId,
       collegeId: req.collegeId,
@@ -478,7 +1069,7 @@ const regenerateReportLink = asyncHandler(async (req, res) => {
   const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
   const resultUrl = `/api/admin/reports/${reportJobId}/download?expires=${encodeURIComponent(expiresAt)}`;
 
-  const updated = await prisma.reportJob.update({
+  const updated = await db.reportJob.update({
     where: { id: reportJobId },
     data: {
       resultUrl,
@@ -497,9 +1088,11 @@ const regenerateReportLink = asyncHandler(async (req, res) => {
 });
 
 const reviewAnomaly = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const { testId, anomalyId, anomalyType, action, reason } = req.body;
 
-  const test = await prisma.test.findFirst({
+  const test = await db.test.findFirst({
     where: {
       id: testId,
       collegeId: req.collegeId,
@@ -527,7 +1120,7 @@ const reviewAnomaly = asyncHandler(async (req, res) => {
     nextReview,
   ];
 
-  await prisma.test.update({
+  await db.test.update({
     where: { id: test.id },
     data: {
       anomalyReviews: nextReviews,
@@ -569,6 +1162,10 @@ module.exports = {
   getReportJobs,
   getReportJobStatus,
   getReportAnalytics,
+  getReportSummaryDashboard,
+  getReportChartsDashboard,
+  getReportTableDashboard,
+  getReportStudentDetailDashboard,
   downloadReport,
   regenerateReportLink,
   reviewAnomaly,

@@ -1,7 +1,7 @@
 const MAX_AVATAR_SIZE_BYTES = 2 * 1024 * 1024;
 const allowedAvatarTypes = new Set(["image/jpeg", "image/png"]);
 
-export const validateAvatarFile = (file) => {
+export const validateImageFile = (file, { maxSizeBytes = MAX_AVATAR_SIZE_BYTES, label = "Image" } = {}) => {
   if (!file) {
     return "Please select an image file.";
   }
@@ -10,12 +10,14 @@ export const validateAvatarFile = (file) => {
     return "Only JPG and PNG files are allowed.";
   }
 
-  if (file.size > MAX_AVATAR_SIZE_BYTES) {
-    return "Avatar size must be 2MB or less.";
+  if (file.size > maxSizeBytes) {
+    return `${label} size must be 2MB or less.`;
   }
 
   return null;
 };
+
+export const validateAvatarFile = (file) => validateImageFile(file, { label: "Avatar" });
 
 const readFileAsImage = (file) =>
   new Promise((resolve, reject) => {

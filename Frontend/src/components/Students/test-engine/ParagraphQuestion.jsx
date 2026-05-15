@@ -27,9 +27,9 @@ export function ParagraphQuestion({ answer, onChange, disabled, wordLimit = 250 
         value={answer?.answer_text || ""}
         onChange={(event) => handleChange(event.target.value)}
         placeholder="Write your answer"
-        className="w-full resize-y rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-slate-900 outline-none ring-blue-400 focus:ring"
+        className="w-full resize-y rounded-xl border border-border bg-card px-3 py-2.5 text-text-primary outline-none ring-blue-400 focus:ring"
       />
-      <p className={`text-xs ${words >= wordLimit ? "text-red-600" : "text-slate-500"}`}>
+      <p className={`text-xs ${words >= wordLimit ? "text-danger" : "text-text-secondary"}`}>
         {words}/{wordLimit} words
       </p>
     </div>

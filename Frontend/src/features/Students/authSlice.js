@@ -2,29 +2,83 @@ import { createAsyncThunk, createSlice } from "@reduxjs/toolkit";
 import { setAccessToken } from "@/services/httpClient";
 import { studentApi } from "@/services/studentApi";
 
-const SESSION_KEY = "session_id";
+const ACCESS_TOKEN_KEY = "student_access_token";
+const SESSION_KEY = "student_session_id";
+const LEGACY_SESSION_KEY = "session_id";
+const USER_KEY = "student_user";
 
-const persistSessionId = (sessionId) => {
+const safeReadStorage = (key) => {
   try {
-    if (sessionId) {
-      localStorage.setItem(SESSION_KEY, sessionId);
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+};
+
+const safeWriteStorage = (key, value) => {
+  try {
+    if (value === null || value === undefined || value === "") {
+      localStorage.removeItem(key);
       return;
     }
 
-    localStorage.removeItem(SESSION_KEY);
+    localStorage.setItem(key, value);
   } catch {
     // Ignore storage failures.
   }
 };
 
+const readPersistedUser = () => {
+  const raw = safeReadStorage(USER_KEY);
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+};
+
+const persistStudentAuth = ({ accessToken = null, sessionId = null, user = null }) => {
+  safeWriteStorage(ACCESS_TOKEN_KEY, accessToken || null);
+  safeWriteStorage(SESSION_KEY, sessionId || null);
+  safeWriteStorage(LEGACY_SESSION_KEY, sessionId || null);
+  safeWriteStorage(USER_KEY, user ? JSON.stringify(user) : null);
+};
+
+const clearPersistedStudentAuth = () => {
+  safeWriteStorage(ACCESS_TOKEN_KEY, null);
+  safeWriteStorage(SESSION_KEY, null);
+  safeWriteStorage(LEGACY_SESSION_KEY, null);
+  safeWriteStorage(USER_KEY, null);
+};
+
+const persistSessionId = (sessionId) => {
+  safeWriteStorage(SESSION_KEY, sessionId || null);
+  safeWriteStorage(LEGACY_SESSION_KEY, sessionId || null);
+};
+
+const isDefinitiveRefreshFailure = (error) => {
+  const status = error?.status;
+  const code = String(error?.code || "");
+  const message = String(error?.message || "");
+
+  return status === 400 || status === 401 || status === 403 || /refresh token required|invalid refresh token/i.test(message) || code === "INVALID_REFRESH_TOKEN";
+};
+
+const persistedAccessToken = safeReadStorage(ACCESS_TOKEN_KEY);
+const persistedSessionId = safeReadStorage(SESSION_KEY) || safeReadStorage(LEGACY_SESSION_KEY);
+
 const initialState = {
-  accessToken: null,
-  user: null,
+  accessToken: persistedAccessToken,
+  user: readPersistedUser(),
   loading: false,
   initialized: false,
   error: null,
   accountInactive: false,
-  sessionId: null,
+  sessionId: persistedSessionId,
   sessionConflict: false,
 };
 
@@ -32,13 +86,40 @@ export const loginStudent = createAsyncThunk("auth/login", async (payload, { rej
   try {
     const data = await studentApi.login(payload);
     setAccessToken(data.accessToken || null);
-    persistSessionId(data.sessionId || null);
+    persistStudentAuth({
+      accessToken: data.accessToken || null,
+      sessionId: data.sessionId || null,
+      user: data.user || null,
+    });
     return data;
   } catch (error) {
+    const code = String(error?.code || "");
+
     if (error?.code === "ACCOUNT_INACTIVE" || error?.status === 403) {
       return rejectWithValue({
         accountInactive: true,
         message: error?.message || "Account is inactive",
+      });
+    }
+
+    if (code === "EMAIL_WRONG") {
+      return rejectWithValue({
+        accountInactive: false,
+        message: "Email is wrong",
+      });
+    }
+
+    if (code === "IDENTIFIER_WRONG") {
+      return rejectWithValue({
+        accountInactive: false,
+        message: "Student ID is wrong",
+      });
+    }
+
+    if (code === "PASSWORD_WRONG") {
+      return rejectWithValue({
+        accountInactive: false,
+        message: "Password is wrong",
       });
     }
 
@@ -53,9 +134,22 @@ export const refreshSession = createAsyncThunk("auth/refresh", async (_, { rejec
   try {
     const data = await studentApi.refreshSession();
     setAccessToken(data.accessToken || null);
-    persistSessionId(data.sessionId || null);
+    persistStudentAuth({
+      accessToken: data.accessToken || null,
+      sessionId: data.sessionId || null,
+      user: data.user || null,
+    });
     return data;
   } catch (error) {
+    const forceLogout = isDefinitiveRefreshFailure(error);
+
+    if (forceLogout) {
+      setAccessToken(null);
+      clearPersistedStudentAuth();
+    }
+
+    const isMissingRefreshToken = error?.status === 400 && /refresh token required/i.test(String(error?.message || ""));
+
     if (error?.code === "ACCOUNT_INACTIVE" || error?.status === 403) {
       return rejectWithValue({
         accountInactive: true,
@@ -65,7 +159,8 @@ export const refreshSession = createAsyncThunk("auth/refresh", async (_, { rejec
 
     return rejectWithValue({
       accountInactive: false,
-      message: error?.message || "Session refresh failed",
+      transient: !forceLogout,
+      message: isMissingRefreshToken ? null : error?.message || "Session refresh failed",
     });
   }
 });
@@ -85,7 +180,7 @@ export const logoutStudent = createAsyncThunk("auth/logout", async () => {
     await studentApi.logout();
   } finally {
     setAccessToken(null);
-    persistSessionId(null);
+    clearPersistedStudentAuth();
   }
 
   return null;
@@ -160,12 +255,14 @@ const authSlice = createSlice({
       })
       .addCase(refreshSession.rejected, (state, action) => {
         state.loading = false;
-        state.accessToken = null;
-        state.user = null;
         state.initialized = true;
-        state.sessionId = null;
+        if (!action.payload?.transient) {
+          state.accessToken = null;
+          state.user = null;
+          state.sessionId = null;
+        }
         state.accountInactive = Boolean(action.payload?.accountInactive);
-        state.error = action.payload?.message || action.error.message || null;
+        state.error = action.payload?.message || null;
       })
       .addCase(fetchCurrentUser.fulfilled, (state, action) => {
         state.user = action.payload || null;

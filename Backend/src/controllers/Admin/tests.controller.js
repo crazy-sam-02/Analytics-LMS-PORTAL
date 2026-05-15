@@ -1,8 +1,15 @@
-const prisma = require("../../config/db");
+const models = require("../../models");
 const { createAuditLog } = require("../../services/audit.service");
 const { completeSubmission } = require("../../services/test.service");
 const { emitToCollege, emitToTestRoom } = require("../../realtime/socket");
 const { ApiError, asyncHandler } = require("../../utils/http");
+const { invalidateTestCache } = require("../../services/test-cache.service");
+const { getExamRateLimitMetricsSnapshot } = require("../../services/rate-limit-metrics.service");
+const {
+  attachResolvedTestConfiguration,
+  resolvePersistedTestConfiguration,
+} = require("../../services/test-config.service");
+const { cloneTestWithinCollege } = require("../../services/clone.service");
 
 const TEST_STATUS = {
   DRAFT: "DRAFT",
@@ -24,6 +31,12 @@ const TRANSITION_ACTION = {
   ARCHIVE: "ARCHIVE",
 };
 
+const ASSIGNMENT_METHOD = {
+  EVERYONE: "everyone",
+  DEPARTMENT_WISE: "department_wise",
+  BATCH_WISE: "batch_wise",
+};
+
 const ALLOWED_TRANSITIONS = {
   [TEST_STATUS.DRAFT]: [TEST_STATUS.SCHEDULED, TEST_STATUS.LIVE, TEST_STATUS.ARCHIVED],
   [TEST_STATUS.SCHEDULED]: [TEST_STATUS.LIVE, TEST_STATUS.ARCHIVED],
@@ -42,7 +55,7 @@ const mapQuestionType = (type) => {
   return map[type];
 };
 
-const isPublishNow = (publishState) => publishState === "PUBLISH_NOW";
+const isPublishNow = (publishState) => publishState === "PUBLISH";
 const isUpcoming = (publishState) => publishState === "UPCOMING";
 
 const deriveLifecycleStatus = (test, now = new Date()) => {
@@ -119,6 +132,19 @@ const assertTransition = (currentStatus, nextStatus) => {
 
 const hasQuestionMutation = (body) => Array.isArray(body?.questions);
 
+const assertAdminCanOperateTest = (test) => {
+  if (!test?.isGlobal) {
+    return;
+  }
+
+  throw new ApiError(
+    403,
+    "This test is managed by super admin and is read-only for admins",
+    { testId: test.id, scope: "SUPER_ADMIN" },
+    "SUPER_ADMIN_TEST_READ_ONLY"
+  );
+};
+
 const resolveTransitionTarget = (currentStatus, action) => {
   switch (action) {
     case TRANSITION_ACTION.SCHEDULE:
@@ -149,8 +175,8 @@ const transitionAuditAction = (action) => {
   }
 };
 
-const ensureBatchScope = async ({ batchIds, collegeId }) => {
-  const matched = await prisma.batch.findMany({
+const ensureBatchScope = async ({ db, batchIds, collegeId }) => {
+  const matched = await db.batch.findMany({
     where: {
       id: { in: batchIds },
       collegeId,
@@ -163,36 +189,78 @@ const ensureBatchScope = async ({ batchIds, collegeId }) => {
   }
 };
 
-const resolveAssignmentBatchIds = async ({ assignmentMethod, batchIds, departmentId, collegeId }) => {
-  if (assignmentMethod === "batch_wise") {
+const ensureBatchDepartmentScope = async ({ db, batchIds, collegeId, departmentId }) => {
+  if (!Array.isArray(batchIds) || batchIds.length === 0) return;
+  if (!departmentId) {
+    throw new ApiError(422, "Department scope is required for batch-wise assignment");
+  }
+
+  const matched = await db.batch.findMany({
+    where: {
+      id: { in: batchIds },
+      collegeId,
+      departmentId,
+    },
+    select: { id: true },
+  });
+
+  if (matched.length !== batchIds.length) {
+    throw new ApiError(422, "One or more batches are outside your department");
+  }
+};
+
+const deriveAssignmentMethod = (test) => {
+  if (Object.values(ASSIGNMENT_METHOD).includes(test?.assignmentMethod)) {
+    return test.assignmentMethod;
+  }
+
+  if (test?.departmentId) {
+    return ASSIGNMENT_METHOD.DEPARTMENT_WISE;
+  }
+
+  return ASSIGNMENT_METHOD.BATCH_WISE;
+};
+
+const resolveAssignmentBatchIds = async ({ db, assignmentMethod, batchIds, departmentId, collegeId }) => {
+  if (assignmentMethod === ASSIGNMENT_METHOD.BATCH_WISE) {
     if (!Array.isArray(batchIds) || batchIds.length === 0) {
       throw new ApiError(422, "Select at least one batch for batch-wise assignment");
     }
     return batchIds;
   }
 
+  if (assignmentMethod === ASSIGNMENT_METHOD.DEPARTMENT_WISE && !departmentId) {
+    throw new ApiError(422, "Select a department for department-wise assignment");
+  }
+
   const where = {
     collegeId,
-    ...(departmentId ? { departmentId } : {}),
+    ...(assignmentMethod === ASSIGNMENT_METHOD.DEPARTMENT_WISE ? { departmentId } : {}),
   };
 
-  const batches = await prisma.batch.findMany({
+  const batches = await db.batch.findMany({
     where,
     select: { id: true },
   });
 
   const resolved = batches.map((batch) => batch.id);
+
   if (!resolved.length) {
-    throw new ApiError(422, "No batches found for selected department scope");
+    if (assignmentMethod === ASSIGNMENT_METHOD.EVERYONE) {
+      throw new ApiError(422, "No batches found in this college for everyone assignment");
+    }
+
+    // Department-wise tests are allowed even when a department currently has no batches.
+    return [];
   }
 
   return resolved;
 };
 
-const assertNoOverlap = async ({ startsAt, endsAt, collegeId, skip }) => {
+const assertNoOverlap = async ({ db, startsAt, endsAt, collegeId, skip }) => {
   if (skip) return;
 
-  const overlap = await prisma.test.findFirst({
+  const overlap = await db.test.findFirst({
     where: {
       collegeId,
       isPublished: true,
@@ -212,8 +280,11 @@ const assertNoOverlap = async ({ startsAt, endsAt, collegeId, skip }) => {
 };
 
 const createTest = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const collegeId = req.collegeId;
   const adminId = req.admin.id;
+  const adminDepartmentId = req.admin?.departmentId;
 
   const {
     name,
@@ -226,51 +297,53 @@ const createTest = asyncHandler(async (req, res) => {
     startsAt,
     endsAt,
     assignmentMethod,
-    departmentId,
     batchIds,
+    testType,
+    proctoringPreset,
+    proctoringConfig,
     questions,
     restrictions,
     publishState,
     skipOverlapCheck,
   } = req.body;
 
+  if (!adminDepartmentId) {
+    throw new ApiError(403, "Admin is not linked to a department", null, "ADMIN_DEPARTMENT_REQUIRED");
+  }
+
   const startsAtDate = new Date(startsAt);
   const endsAtDate = new Date(endsAt);
-
-  const tabSwitchRestricted = typeof restrictions?.tabSwitch === "boolean"
-    ? restrictions.tabSwitch
-    : restrictions?.tabSwitch !== "allowed";
-  const copyPasteRestricted = typeof restrictions?.copyPaste === "boolean"
-    ? restrictions.copyPaste
-    : restrictions?.copyPaste !== "allowed";
-  const rightClickRestricted = typeof restrictions?.rightClickDisabled === "boolean"
-    ? restrictions.rightClickDisabled
-    : Boolean(restrictions?.rightClick);
-  const fullscreenRequired = typeof restrictions?.fullscreenRequired === "boolean"
-    ? restrictions.fullscreenRequired
-    : Boolean(restrictions?.fullscreen);
-  const violationThreshold = Number(
-    restrictions?.violationThreshold
-    ?? restrictions?.violationLimit
-    ?? 3
-  );
+  const resolvedTestConfiguration = resolvePersistedTestConfiguration({
+    testType,
+    proctoringPreset,
+    proctoringConfig,
+    restrictions,
+  });
 
   if (isPublishNow(publishState) && startsAtDate > new Date()) {
     throw new ApiError(422, "Cannot publish live before start date", null, "LIVE_BEFORE_START_NOT_ALLOWED");
   }
 
-  const resolvedAssignmentMethod = assignmentMethod || "department_wise";
+  const resolvedAssignmentMethod = assignmentMethod || ASSIGNMENT_METHOD.DEPARTMENT_WISE;
+  if (resolvedAssignmentMethod === ASSIGNMENT_METHOD.EVERYONE) {
+    throw new ApiError(422, "Admins can only assign tests within their department", null, "INVALID_ASSIGNMENT_SCOPE");
+  }
+  const resolvedDepartmentId = adminDepartmentId;
   const resolvedBatchIds = await resolveAssignmentBatchIds({
+    db,
     assignmentMethod: resolvedAssignmentMethod,
     batchIds: Array.isArray(batchIds) ? batchIds : [],
-    departmentId,
+    departmentId: resolvedDepartmentId,
     collegeId,
   });
 
-  await ensureBatchScope({ batchIds: resolvedBatchIds, collegeId });
-  await assertNoOverlap({ startsAt: startsAtDate, endsAt: endsAtDate, collegeId, skip: skipOverlapCheck });
+  await ensureBatchScope({ db, batchIds: resolvedBatchIds, collegeId });
+  if (resolvedAssignmentMethod === ASSIGNMENT_METHOD.BATCH_WISE) {
+    await ensureBatchDepartmentScope({ db, batchIds: resolvedBatchIds, collegeId, departmentId: resolvedDepartmentId });
+  }
+  await assertNoOverlap({ db, startsAt: startsAtDate, endsAt: endsAtDate, collegeId, skip: skipOverlapCheck });
 
-  const test = await prisma.$transaction(async (tx) => {
+  const test = await db.$transaction(async (tx) => {
     const createdTest = await tx.test.create({
       data: {
         title: name,
@@ -285,25 +358,24 @@ const createTest = asyncHandler(async (req, res) => {
         status: resolveStatus(publishState, startsAtDate),
         isPublished: isPublishNow(publishState) || isUpcoming(publishState),
         createdByAdminId: adminId,
-        departmentId: departmentId || null,
+        assignmentMethod: resolvedAssignmentMethod,
+        departmentId: resolvedDepartmentId,
         collegeId,
         batchId: resolvedBatchIds[0] || null,
-        restrictTabSwitch: Boolean(tabSwitchRestricted),
-        restrictCopyPaste: Boolean(copyPasteRestricted),
-        restrictRightClick: Boolean(rightClickRestricted),
-        requireFullscreen: Boolean(fullscreenRequired),
-        violationLimit: Number.isFinite(violationThreshold) ? Math.max(1, violationThreshold) : 3,
+        ...resolvedTestConfiguration.persistenceFields,
       },
     });
 
-    await tx.testBatch.createMany({
-      data: resolvedBatchIds.map((batchId) => ({
-        testId: createdTest.id,
-        batchId,
-        collegeId,
-      })),
-      skipDuplicates: true,
-    });
+    if (resolvedBatchIds.length > 0) {
+      await tx.testBatch.createMany({
+        data: resolvedBatchIds.map((batchId) => ({
+          testId: createdTest.id,
+          batchId,
+          collegeId,
+        })),
+        skipDuplicates: true,
+      });
+    }
 
     await tx.question.createMany({
       data: questions.map((question, index) => ({
@@ -320,18 +392,6 @@ const createTest = asyncHandler(async (req, res) => {
       })),
     });
 
-    if (isPublishNow(publishState)) {
-      await tx.notification.create({
-        data: {
-          title: "Test Published",
-          message: `Test \"${name}\" is now live.`,
-          collegeId,
-          adminId,
-          testId: createdTest.id,
-        },
-      });
-    }
-
     await createAuditLog({
       action: "TEST_CREATED",
       targetType: "TEST",
@@ -345,16 +405,23 @@ const createTest = asyncHandler(async (req, res) => {
         publishState,
         assignmentMethod: resolvedAssignmentMethod,
         batchIds: resolvedBatchIds,
+        testType: resolvedTestConfiguration.testType,
+        proctoringPreset: resolvedTestConfiguration.proctoringPreset,
       },
     });
 
     return createdTest;
   });
 
-  res.status(201).json(test);
+  // Invalidate any cached test data so students see fresh content.
+  await invalidateTestCache(test.id);
+
+  res.status(201).json(attachResolvedTestConfiguration(test));
 });
 
 const getTests = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const collegeId = req.collegeId;
   const page = Math.max(1, Number(req.query.page || 1));
   const limit = Math.min(100, Math.max(1, Number(req.query.limit || 20)));
@@ -403,8 +470,8 @@ const getTests = asyncHandler(async (req, res) => {
   };
 
   const [total, data, statusCounts] = await Promise.all([
-    prisma.test.count({ where }),
-    prisma.test.findMany({
+    db.test.count({ where }),
+    db.test.findMany({
       where,
       include: {
         batchAssignments: {
@@ -424,12 +491,12 @@ const getTests = asyncHandler(async (req, res) => {
       take: limit,
     }),
     Promise.all([
-      prisma.test.count({ where: baseWhere }),
-      prisma.test.count({ where: { ...baseWhere, status: TEST_STATUS.DRAFT } }),
-      prisma.test.count({ where: { ...baseWhere, status: { in: [TEST_STATUS.SCHEDULED, LEGACY_STATUS.UPCOMING] } } }),
-      prisma.test.count({ where: { ...baseWhere, status: { in: [TEST_STATUS.LIVE, LEGACY_STATUS.PUBLISHED] } } }),
-      prisma.test.count({ where: { ...baseWhere, status: TEST_STATUS.COMPLETED } }),
-      prisma.test.count({ where: { ...baseWhere, status: TEST_STATUS.ARCHIVED } }),
+      db.test.count({ where: baseWhere }),
+      db.test.count({ where: { ...baseWhere, status: TEST_STATUS.DRAFT } }),
+      db.test.count({ where: { ...baseWhere, status: { in: [TEST_STATUS.SCHEDULED, LEGACY_STATUS.UPCOMING] } } }),
+      db.test.count({ where: { ...baseWhere, status: { in: [TEST_STATUS.LIVE, LEGACY_STATUS.PUBLISHED] } } }),
+      db.test.count({ where: { ...baseWhere, status: TEST_STATUS.COMPLETED } }),
+      db.test.count({ where: { ...baseWhere, status: TEST_STATUS.ARCHIVED } }),
     ]).then(([all, draft, scheduled, live, completed, archived]) => ({
       ALL: all,
       DRAFT: draft,
@@ -445,15 +512,17 @@ const getTests = asyncHandler(async (req, res) => {
       const lifecycleStatus = deriveLifecycleStatus(item);
 
       if (lifecycleStatus !== item.status) {
-        await prisma.test.update({
+        await db.test.update({
           where: { id: item.id },
           data: { status: lifecycleStatus },
         });
       }
 
       return {
-        ...item,
+        ...attachResolvedTestConfiguration(item),
         status: lifecycleStatus,
+        canAdminOperate: !item.isGlobal,
+        managedBy: item.isGlobal ? "SUPER_ADMIN" : "ADMIN",
       };
     })
   );
@@ -470,11 +539,60 @@ const getTests = asyncHandler(async (req, res) => {
   });
 });
 
-const duplicateTest = asyncHandler(async (req, res) => {
+const getTestById = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const { testId } = req.params;
   const collegeId = req.collegeId;
 
-  const source = await prisma.test.findFirst({
+  const test = await db.test.findFirst({
+    where: { id: testId, collegeId },
+    include: {
+      questions: {
+        orderBy: { order: "asc" },
+      },
+      batchAssignments: {
+        include: {
+          batch: true,
+        },
+      },
+      department: true,
+      _count: {
+        select: {
+          questions: true,
+          submissions: true,
+        },
+      },
+    },
+  });
+
+  if (!test) {
+    throw new ApiError(404, "Test not found");
+  }
+
+  const lifecycleStatus = deriveLifecycleStatus(test);
+  if (lifecycleStatus !== test.status) {
+    await db.test.update({
+      where: { id: test.id },
+      data: { status: lifecycleStatus },
+    });
+  }
+
+  res.status(200).json({
+    ...attachResolvedTestConfiguration(test),
+    status: lifecycleStatus,
+    canAdminOperate: !test.isGlobal,
+    managedBy: test.isGlobal ? "SUPER_ADMIN" : "ADMIN",
+  });
+});
+
+const duplicateTest = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
+  const { testId } = req.params;
+  const collegeId = req.collegeId;
+
+  const source = await db.test.findFirst({
     where: { id: testId, collegeId },
     include: {
       questions: {
@@ -487,11 +605,13 @@ const duplicateTest = asyncHandler(async (req, res) => {
     throw new ApiError(404, "Test not found");
   }
 
+  assertAdminCanOperateTest(source);
+
   const now = new Date();
   const startsAt = new Date(now.getTime() + 24 * 60 * 60 * 1000);
   const endsAt = new Date(startsAt.getTime() + Math.max(5, source.durationMins || 60) * 60 * 1000);
 
-  const duplicated = await prisma.$transaction(async (tx) => {
+  const duplicated = await db.$transaction(async (tx) => {
     const created = await tx.test.create({
       data: {
         title: `${source.title} (Copy)`,
@@ -503,17 +623,14 @@ const duplicateTest = asyncHandler(async (req, res) => {
         evaluationRule: source.evaluationRule,
         startsAt,
         endsAt,
+        assignmentMethod: source.assignmentMethod || deriveAssignmentMethod(source),
         status: TEST_STATUS.DRAFT,
         isPublished: false,
         createdByAdminId: req.admin.id,
         departmentId: source.departmentId,
         collegeId,
         batchId: null,
-        restrictTabSwitch: source.restrictTabSwitch,
-        restrictCopyPaste: source.restrictCopyPaste,
-        restrictRightClick: source.restrictRightClick,
-        requireFullscreen: source.requireFullscreen,
-        violationLimit: source.violationLimit,
+        ...resolvePersistedTestConfiguration({ existingTest: source }).persistenceFields,
       },
     });
 
@@ -548,17 +665,125 @@ const duplicateTest = asyncHandler(async (req, res) => {
     afterState: { duplicatedTestId: duplicated.id, duplicatedTitle: duplicated.title },
   });
 
-  res.status(201).json(duplicated);
+  res.status(201).json(attachResolvedTestConfiguration(duplicated));
+});
+
+const cloneTest = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
+  const { testId } = req.params;
+  const collegeId = req.collegeId;
+  const adminDepartmentId = req.admin?.departmentId;
+  const { assignmentMethod = "department_wise", departmentId = null, batchIds = [] } = req.body;
+
+  if (!adminDepartmentId) {
+    throw new ApiError(403, "Admin is not linked to a department", null, "ADMIN_DEPARTMENT_REQUIRED");
+  }
+
+  if (assignmentMethod === ASSIGNMENT_METHOD.EVERYONE) {
+    throw new ApiError(422, "Admins can only assign tests within their department", null, "INVALID_ASSIGNMENT_SCOPE");
+  }
+
+  // Validate parameters based on assignment method
+  if (assignmentMethod === "department_wise" && !departmentId) {
+    throw new ApiError(422, "For department-wise assignment, provide departmentId", { assignmentMethod }, "MISSING_DEPARTMENT_ID");
+  }
+  if (assignmentMethod === "batch_wise" && (!Array.isArray(batchIds) || batchIds.length === 0)) {
+    throw new ApiError(422, "For batch-wise assignment, provide batchIds array with at least one ID", { assignmentMethod }, "MISSING_BATCH_IDS");
+  }
+
+  if (departmentId && String(departmentId) !== String(adminDepartmentId)) {
+    throw new ApiError(422, "Admins can only assign tests within their department", null, "INVALID_ASSIGNMENT_SCOPE");
+  }
+
+  if (assignmentMethod === "batch_wise") {
+    await ensureBatchDepartmentScope({ db, batchIds, collegeId, departmentId: adminDepartmentId });
+  }
+
+  const source = await db.test.findFirst({ where: { id: testId, collegeId } });
+  if (!source) throw new ApiError(404, "Test not found in this college");
+
+  assertAdminCanOperateTest(source);
+
+  // Ensure source belongs to this college and is not global
+  if (source.isGlobal) {
+    throw new ApiError(403, "Cannot clone super-admin managed test as admin");
+  }
+
+  console.log("[CLONE_TEST_ADMIN] Cloning test within college", {
+    sourceTestId: testId,
+    collegeId,
+    assignmentMethod,
+    departmentId,
+    batchIdCount: batchIds.length,
+  });
+
+  const cloned = await cloneTestWithinCollege({
+    sourceTestId: testId,
+    collegeId,
+    assignmentMethod,
+    departmentId: adminDepartmentId,
+    batchIds: Array.isArray(batchIds) ? batchIds : [],
+    adminId: req.admin.id,
+  });
+
+  console.log("[CLONE_TEST_ADMIN] Clone successful", { clonedTestId: cloned.id, title: cloned.title });
+
+  await createAuditLog({
+    action: "TEST_CLONED",
+    targetType: "TEST",
+    targetId: cloned.id,
+    collegeId,
+    adminId: req.admin.id,
+    beforeState: { sourceTestId: testId },
+    afterState: {
+      clonedTestId: cloned.id,
+      sourceTestId: cloned.sourceTestId,
+      assignmentMethod,
+      departmentId,
+      batchIds,
+      status: cloned.status,
+      isPublished: cloned.isPublished,
+    },
+  });
+
+  res.status(201).json({
+    id: cloned.id,
+    title: cloned.title,
+    status: cloned.status,
+    isPublished: cloned.isPublished,
+    sourceTestId: cloned.sourceTestId,
+    collegeId: cloned.collegeId,
+    assignmentMethod: cloned.assignmentMethod,
+    message: "Test cloned successfully within college and kept in DRAFT status",
+    data: attachResolvedTestConfiguration(cloned),
+  });
 });
 
 const updateTest = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const { testId } = req.params;
   const collegeId = req.collegeId;
+  const adminDepartmentId = req.admin?.departmentId;
 
-  const existing = await prisma.test.findFirst({ where: { id: testId, collegeId } });
+  const existing = await db.test.findFirst({
+    where: { id: testId, collegeId },
+    include: {
+      batchAssignments: {
+        select: { batchId: true },
+      },
+    },
+  });
   if (!existing) {
     throw new ApiError(404, "Test not found");
   }
+
+  if (!adminDepartmentId) {
+    throw new ApiError(403, "Admin is not linked to a department", null, "ADMIN_DEPARTMENT_REQUIRED");
+  }
+
+  assertAdminCanOperateTest(existing);
 
   const currentStatus = deriveLifecycleStatus(existing);
   const providedKeys = Object.entries(req.body || {})
@@ -619,9 +844,47 @@ const updateTest = asyncHandler(async (req, res) => {
     }
   }
 
-  const updated = await prisma.$transaction(async (tx) => {
+  const updated = await db.$transaction(async (tx) => {
     const nextStartsAt = req.body.startsAt ? new Date(req.body.startsAt) : existing.startsAt;
     const nextEndsAt = req.body.endsAt ? new Date(req.body.endsAt) : existing.endsAt;
+
+    const shouldUpdateAssignment =
+      typeof req.body.assignmentMethod !== "undefined"
+      || typeof req.body.departmentId !== "undefined"
+      || Array.isArray(req.body.batchIds);
+    const resolvedTestConfiguration = resolvePersistedTestConfiguration({
+      existingTest: existing,
+      testType: req.body?.testType,
+      proctoringPreset: req.body?.proctoringPreset,
+      proctoringConfig: req.body?.proctoringConfig,
+      restrictions: req.body?.restrictions,
+    });
+
+    let resolvedBatchIds = existing.batchAssignments.map((item) => item.batchId);
+    let resolvedDepartmentId = existing.departmentId;
+    let resolvedAssignmentMethod = deriveAssignmentMethod(existing);
+    if (shouldUpdateAssignment) {
+      resolvedAssignmentMethod = req.body.assignmentMethod || resolvedAssignmentMethod;
+      if (resolvedAssignmentMethod === ASSIGNMENT_METHOD.EVERYONE) {
+        throw new ApiError(422, "Admins can only assign tests within their department", null, "INVALID_ASSIGNMENT_SCOPE");
+      }
+      const requestedBatchIds = Array.isArray(req.body.batchIds)
+        ? req.body.batchIds
+        : resolvedBatchIds;
+      resolvedDepartmentId = adminDepartmentId;
+
+      resolvedBatchIds = await resolveAssignmentBatchIds({
+        db,
+        assignmentMethod: resolvedAssignmentMethod,
+        batchIds: requestedBatchIds,
+        departmentId: resolvedDepartmentId,
+        collegeId,
+      });
+      await ensureBatchScope({ db, batchIds: resolvedBatchIds, collegeId });
+      if (resolvedAssignmentMethod === ASSIGNMENT_METHOD.BATCH_WISE) {
+        await ensureBatchDepartmentScope({ db, batchIds: resolvedBatchIds, collegeId, departmentId: resolvedDepartmentId });
+      }
+    }
 
     const updatedTest = await tx.test.update({
       where: { id: testId },
@@ -633,6 +896,12 @@ const updateTest = asyncHandler(async (req, res) => {
         totalMarks: req.body.totalMarks ?? existing.totalMarks,
         attemptsAllowed: req.body.attemptsAllowed ?? existing.attemptsAllowed,
         evaluationRule: req.body.evaluationRule ?? existing.evaluationRule,
+        assignmentMethod: shouldUpdateAssignment
+          ? resolvedAssignmentMethod
+          : (existing.assignmentMethod || deriveAssignmentMethod(existing)),
+        departmentId: shouldUpdateAssignment ? resolvedDepartmentId : existing.departmentId,
+        batchId: shouldUpdateAssignment ? (resolvedBatchIds[0] || null) : existing.batchId,
+        ...resolvedTestConfiguration.persistenceFields,
         startsAt: nextStartsAt,
         endsAt: nextEndsAt,
         status: deriveLifecycleStatus(
@@ -645,6 +914,18 @@ const updateTest = asyncHandler(async (req, res) => {
         ),
       },
     });
+
+    if (shouldUpdateAssignment) {
+      await tx.testBatch.deleteMany({ where: { testId, collegeId } });
+      await tx.testBatch.createMany({
+        data: resolvedBatchIds.map((batchId) => ({
+          testId,
+          batchId,
+          collegeId,
+        })),
+        skipDuplicates: true,
+      });
+    }
 
     if (hasQuestionMutation(req.body)) {
       await tx.question.deleteMany({ where: { testId, collegeId } });
@@ -683,30 +964,34 @@ const updateTest = asyncHandler(async (req, res) => {
       title: updated.title,
       startsAt: updated.startsAt,
       endsAt: updated.endsAt,
+      departmentId: updated.departmentId,
+      batchId: updated.batchId,
+      testType: updated.testType,
+      proctoringPreset: updated.proctoringPreset,
     },
   });
 
-  if (action === TRANSITION_ACTION.GO_LIVE || action === TRANSITION_ACTION.COMPLETE) {
-    emitToCollege(collegeId, "test_status_change", {
-      testId,
-      status: targetStatus,
-    });
-  }
+  // Invalidate cached test data after update.
+  await invalidateTestCache(testId);
 
-  res.status(200).json(updated);
+  res.status(200).json(attachResolvedTestConfiguration(updated));
 });
 
 const deleteTest = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const { testId } = req.params;
   const collegeId = req.collegeId;
 
-  const existing = await prisma.test.findFirst({ where: { id: testId, collegeId } });
+  const existing = await db.test.findFirst({ where: { id: testId, collegeId } });
   if (!existing) {
     throw new ApiError(404, "Test not found");
   }
 
+  assertAdminCanOperateTest(existing);
+
   const currentStatus = deriveLifecycleStatus(existing);
-  const submissionCount = await prisma.submission.count({ where: { testId, collegeId } });
+  const submissionCount = await db.submission.count({ where: { testId, collegeId } });
 
   if (currentStatus !== TEST_STATUS.DRAFT || submissionCount > 0) {
     throw new ApiError(
@@ -717,7 +1002,7 @@ const deleteTest = asyncHandler(async (req, res) => {
     );
   }
 
-  await prisma.test.delete({ where: { id: testId } });
+  await db.test.delete({ where: { id: testId } });
 
   await createAuditLog({
     action: "TEST_DELETED",
@@ -730,6 +1015,9 @@ const deleteTest = asyncHandler(async (req, res) => {
       title: existing.title,
     },
   });
+
+  // Invalidate cached test data after deletion.
+  await invalidateTestCache(testId);
 
   res.status(200).json({ message: "Test deleted" });
 });
@@ -745,11 +1033,13 @@ const archiveTest = asyncHandler(async (req, res) => {
 });
 
 const transitionTestStatus = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const { testId } = req.params;
   const collegeId = req.collegeId;
   const { action } = req.body;
 
-  const existing = await prisma.test.findFirst({
+  const existing = await db.test.findFirst({
     where: { id: testId, collegeId },
     include: {
       _count: {
@@ -764,6 +1054,8 @@ const transitionTestStatus = asyncHandler(async (req, res) => {
     throw new ApiError(404, "Test not found");
   }
 
+  assertAdminCanOperateTest(existing);
+
   const currentStatus = deriveLifecycleStatus(existing);
 
   if (action === TRANSITION_ACTION.SCHEDULE && existing.startsAt <= new Date()) {
@@ -777,7 +1069,7 @@ const transitionTestStatus = asyncHandler(async (req, res) => {
   const targetStatus = resolveTransitionTarget(currentStatus, action);
   assertTransition(currentStatus, targetStatus);
 
-  const updated = await prisma.test.update({
+  const updated = await db.test.update({
     where: { id: testId },
     data: {
       status: targetStatus,
@@ -786,18 +1078,6 @@ const transitionTestStatus = asyncHandler(async (req, res) => {
       endsAt: action === TRANSITION_ACTION.COMPLETE && existing.endsAt > new Date() ? new Date() : existing.endsAt,
     },
   });
-
-  if (action === TRANSITION_ACTION.GO_LIVE) {
-    await prisma.notification.create({
-      data: {
-        title: "Test Published",
-        message: `Test \"${updated.title}\" is now live.`,
-        collegeId,
-        adminId: req.admin.id,
-        testId,
-      },
-    });
-  }
 
   await createAuditLog({
     action: transitionAuditAction(action),
@@ -827,10 +1107,12 @@ const transitionTestStatus = asyncHandler(async (req, res) => {
 });
 
 const getLiveMonitoring = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const { testId } = req.params;
   const collegeId = req.collegeId;
 
-  const test = await prisma.test.findFirst({
+  const test = await db.test.findFirst({
     where: { id: testId, collegeId },
     select: { id: true, title: true, durationMins: true, status: true, startsAt: true, endsAt: true },
   });
@@ -839,8 +1121,10 @@ const getLiveMonitoring = asyncHandler(async (req, res) => {
     throw new ApiError(404, "Test not found");
   }
 
-  const [inProgress, questionCount, sessions] = await Promise.all([
-    prisma.submission.findMany({
+  assertAdminCanOperateTest(test);
+
+  const [inProgress, questionCount, sessions, rateLimits] = await Promise.all([
+    db.submission.findMany({
       where: { testId, collegeId, status: "IN_PROGRESS" },
       include: {
         user: {
@@ -863,8 +1147,9 @@ const getLiveMonitoring = asyncHandler(async (req, res) => {
       },
       orderBy: { updatedAt: "desc" },
     }),
-    prisma.question.count({ where: { testId, collegeId } }),
-    prisma.testSession.findMany({ where: { testId }, select: { userId: true, submissionId: true, expiresAt: true } }),
+    db.question.count({ where: { testId, collegeId } }),
+    db.testSession.findMany({ where: { testId }, select: { userId: true, submissionId: true, expiresAt: true } }),
+    getExamRateLimitMetricsSnapshot({ limit: 5, collegeId }),
   ]);
 
   const nowMs = Date.now();
@@ -914,6 +1199,7 @@ const getLiveMonitoring = asyncHandler(async (req, res) => {
       activeStudents: studentTable.length,
       questionCount,
     },
+    rateLimits,
     studentTable,
     violationFeed,
     generatedAt: new Date().toISOString(),
@@ -921,18 +1207,25 @@ const getLiveMonitoring = asyncHandler(async (req, res) => {
 });
 
 const forceSubmitAttempt = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const { testId } = req.params;
   const { submissionId, reason } = req.body;
   const collegeId = req.collegeId;
 
-  const submission = await prisma.submission.findFirst({
+  const submission = await db.submission.findFirst({
     where: { id: submissionId, testId, collegeId },
-    include: { user: { select: { fullName: true } } },
+    include: {
+      user: { select: { fullName: true } },
+      test: { select: { id: true, isGlobal: true } },
+    },
   });
 
   if (!submission) {
     throw new ApiError(404, "Submission not found");
   }
+
+  assertAdminCanOperateTest(submission.test);
 
   if (submission.status !== "IN_PROGRESS") {
     throw new ApiError(409, "Submission is already completed", null, "SUBMISSION_ALREADY_COMPLETED");
@@ -971,24 +1264,31 @@ const forceSubmitAttempt = asyncHandler(async (req, res) => {
 });
 
 const extendAttemptTime = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const { testId } = req.params;
   const { submissionId, minutes } = req.body;
   const collegeId = req.collegeId;
 
-  const submission = await prisma.submission.findFirst({
+  const submission = await db.submission.findFirst({
     where: { id: submissionId, testId, collegeId },
-    include: { user: { select: { fullName: true } } },
+    include: {
+      user: { select: { fullName: true } },
+      test: { select: { id: true, isGlobal: true } },
+    },
   });
 
   if (!submission) {
     throw new ApiError(404, "Submission not found");
   }
 
+  assertAdminCanOperateTest(submission.test);
+
   if (submission.status !== "IN_PROGRESS") {
     throw new ApiError(409, "Only in-progress attempts can be extended", null, "SUBMISSION_NOT_ACTIVE");
   }
 
-  const session = await prisma.testSession.findFirst({ where: { testId, submissionId, userId: submission.userId } });
+  const session = await db.testSession.findFirst({ where: { testId, submissionId, userId: submission.userId } });
   if (!session) {
     throw new ApiError(404, "Active test session not found", null, "SESSION_NOT_FOUND");
   }
@@ -996,7 +1296,7 @@ const extendAttemptTime = asyncHandler(async (req, res) => {
   const mins = Math.max(1, Number(minutes || 0));
   const nextExpiry = new Date(new Date(session.expiresAt).getTime() + mins * 60 * 1000);
 
-  const updated = await prisma.testSession.update({
+  const updated = await db.testSession.update({
     where: { userId_testId: { userId: submission.userId, testId } },
     data: { expiresAt: nextExpiry },
   });
@@ -1034,7 +1334,9 @@ const extendAttemptTime = asyncHandler(async (req, res) => {
 module.exports = {
   createTest,
   getTests,
+  getTestById,
   duplicateTest,
+  cloneTest,
   updateTest,
   deleteTest,
   publishTest,

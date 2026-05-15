@@ -1,11 +1,14 @@
-const prisma = require("../../config/db");
+const models = require("../../models");
 const { asyncHandler } = require("../../utils/http");
+const { buildStudentAssignmentScope } = require("../../services/student-test-assignment.service");
 
 const getSummary = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const userId = req.user.id;
   const now = new Date();
 
-  const submissions = await prisma.submission.findMany({
+  const submissions = await db.submission.findMany({
     where: {
       userId,
       status: {
@@ -28,18 +31,9 @@ const getSummary = asyncHandler(async (req, res) => {
         )
       : 0;
 
-  const ongoingTests = await prisma.test.findMany({
+  const ongoingTests = await db.test.findMany({
     where: {
-      OR: [
-        { batchId: req.user.batchId },
-        {
-          batchAssignments: {
-            some: {
-              batchId: req.user.batchId,
-            },
-          },
-        },
-      ],
+      ...buildStudentAssignmentScope(req.user),
       startsAt: { lte: now },
       endsAt: { gte: now },
       isPublished: true,
@@ -58,18 +52,9 @@ const getSummary = asyncHandler(async (req, res) => {
     },
   });
 
-  const upcomingTests = await prisma.test.findMany({
+  const upcomingTests = await db.test.findMany({
     where: {
-      OR: [
-        { batchId: req.user.batchId },
-        {
-          batchAssignments: {
-            some: {
-              batchId: req.user.batchId,
-            },
-          },
-        },
-      ],
+      ...buildStudentAssignmentScope(req.user),
       startsAt: { gt: now },
       isPublished: true,
     },
@@ -77,7 +62,7 @@ const getSummary = asyncHandler(async (req, res) => {
     take: 10,
   });
 
-  const events = await prisma.event.findMany({
+  const events = await db.event.findMany({
     where: {
       startsAt: { gte: now },
       collegeId: req.user.collegeId,

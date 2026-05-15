@@ -1,9 +1,13 @@
-const prisma = require("../../config/db");
+const models = require("../../models");
 const { enqueueSuperReportJob } = require("../../services/super-admin-report-queue.service");
+const { generateSuperAdminReportHTML } = require("../../services/report-formatter.service");
+const { renderHtmlToPdfBuffer } = require("../../services/report-pdf.service");
 const { asyncHandler } = require("../../utils/http");
 
 const generateSuperReport = asyncHandler(async (req, res) => {
-  const job = await prisma.superReportJob.create({
+  const m = await models.init();
+  const db = m.dbClient;
+  const job = await db.superReportJob.create({
     data: {
       type: req.body.type,
       filters: req.body.filters || {},
@@ -21,9 +25,11 @@ const generateSuperReport = asyncHandler(async (req, res) => {
 });
 
 const getEscalatedAnomalies = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const limit = Math.min(Number(req.query.limit || 50), 200);
 
-  const rows = await prisma.auditLog.findMany({
+  const rows = await db.auditLog.findMany({
     where: {
       action: "REPORT_ANOMALY_ESCALATED",
     },
@@ -70,7 +76,9 @@ const getEscalatedAnomalies = asyncHandler(async (req, res) => {
 });
 
 const getSuperReportJobs = asyncHandler(async (_req, res) => {
-  const jobs = await prisma.superReportJob.findMany({
+  const m = await models.init();
+  const db = m.dbClient;
+  const jobs = await db.superReportJob.findMany({
     orderBy: { createdAt: "desc" },
     take: 100,
   });
@@ -85,9 +93,11 @@ const getSuperReportJobs = asyncHandler(async (_req, res) => {
 });
 
 const downloadSuperReport = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const { reportJobId } = req.params;
 
-  const job = await prisma.superReportJob.findUnique({ where: { id: reportJobId } });
+  const job = await db.superReportJob.findUnique({ where: { id: reportJobId } });
   if (!job) {
     return res.status(404).json({ message: "Report job not found" });
   }
@@ -105,19 +115,33 @@ const downloadSuperReport = asyncHandler(async (req, res) => {
     });
   }
 
-  res.status(200).json({
-    reportJobId,
-    type: job.type,
-    generatedAt: job.updatedAt,
-    expiresAt: expiresAt ? expiresAt.toISOString() : null,
+  // Generate human-readable report and convert to PDF
+  const reportData = {
     rows: Array.isArray(job.resultData) ? job.resultData : [],
-  });
+  };
+
+  const htmlContent = generateSuperAdminReportHTML(
+    {
+      ...job,
+      generatedAt: job.updatedAt,
+      expiresAt: expiresAt ? expiresAt.toISOString() : null,
+    },
+    reportData
+  );
+
+  const pdfBuffer = await renderHtmlToPdfBuffer(htmlContent);
+
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="super-admin-report-${reportJobId}.pdf"`);
+  res.status(200).send(pdfBuffer);
 });
 
 const regenerateSuperReportLink = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const { reportJobId } = req.params;
 
-  const job = await prisma.superReportJob.findUnique({ where: { id: reportJobId } });
+  const job = await db.superReportJob.findUnique({ where: { id: reportJobId } });
   if (!job) {
     return res.status(404).json({ message: "Report job not found" });
   }
@@ -129,7 +153,7 @@ const regenerateSuperReportLink = asyncHandler(async (req, res) => {
   const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
   const resultUrl = `/api/super-admin/reports/${reportJobId}/download?expires=${encodeURIComponent(expiresAt)}`;
 
-  const updated = await prisma.superReportJob.update({
+  const updated = await db.superReportJob.update({
     where: { id: reportJobId },
     data: {
       resultUrl,

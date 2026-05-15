@@ -1,4 +1,10 @@
 const { z } = require("zod");
+const mongoose = require("mongoose");
+const {
+  TEST_TYPES,
+  PROCTORING_PRESETS,
+  DEFAULT_TEST_CONFIGURATION,
+} = require("../../services/test-config.service");
 
 const parseDateInput = (value) => {
   if (typeof value !== "string") return null;
@@ -15,7 +21,7 @@ const parseDateInput = (value) => {
   return parsed;
 };
 
-const objectIdSchema = z.string().trim().refine((value) => z.string().uuid().safeParse(value).success || z.string().cuid().safeParse(value).success, {
+const objectIdSchema = z.string().trim().refine((value) => mongoose.Types.ObjectId.isValid(value), {
   message: "Invalid id format",
 });
 
@@ -47,6 +53,8 @@ const testQuestionSchema = z
     }
   });
 
+const standardDefaults = DEFAULT_TEST_CONFIGURATION.proctoringConfig;
+
 const createAdminTestPayloadSchema = z.object({
   body: z.object({
     name: z.string().trim().min(3),
@@ -61,24 +69,33 @@ const createAdminTestPayloadSchema = z.object({
     assignmentMethod: z.enum(["department_wise", "batch_wise"]).default("department_wise"),
     departmentId: objectIdSchema.optional().nullable(),
     batchIds: z.array(objectIdSchema).default([]),
+    testType: z.enum([TEST_TYPES.STRICT, TEST_TYPES.STANDARD, TEST_TYPES.OPEN]).default(DEFAULT_TEST_CONFIGURATION.testType),
+    proctoringPreset: z.enum([
+      PROCTORING_PRESETS.STRICT_EXAM,
+      PROCTORING_PRESETS.STANDARD_TEST,
+      PROCTORING_PRESETS.OPEN_TEST,
+    ]).default(DEFAULT_TEST_CONFIGURATION.proctoringPreset),
     questionInputMode: z.enum(["manual", "bulk_json", "question_bank"]).default("manual"),
     questions: z.array(testQuestionSchema).min(1).max(500),
     restrictions: z
       .object({
+        enabled: z.boolean().default(standardDefaults.enabled),
         tabSwitch: z.union([z.boolean(), z.enum(["allowed", "monitored"])]).default("monitored"),
         copyPaste: z.union([z.boolean(), z.enum(["allowed", "monitored"])]).default("monitored"),
         rightClick: z.boolean().optional(),
         fullscreen: z.boolean().optional(),
         violationLimit: z.number().int().min(1).max(20).optional(),
-        fullscreenRequired: z.boolean().default(true),
-        windowBlur: z.boolean().default(true),
-        screenshotDetection: z.boolean().default(true),
-        rightClickDisabled: z.boolean().default(true),
-        devtoolsDetection: z.boolean().default(true),
-        violationThreshold: z.number().int().min(1).max(20).default(3),
+        fullscreenRequired: z.boolean().default(standardDefaults.fullscreenRequired),
+        windowBlur: z.boolean().default(standardDefaults.windowBlur),
+        screenshotDetection: z.boolean().default(standardDefaults.screenshotDetection),
+        rightClickDisabled: z.boolean().default(standardDefaults.rightClickDisabled),
+        devtoolsDetection: z.boolean().default(standardDefaults.devtoolsDetection),
+        violationThreshold: z.number().int().min(1).max(20).default(standardDefaults.violationThreshold),
+        autoNextSingle: z.boolean().default(standardDefaults.autoNextSingle),
+        paragraphWordLimit: z.number().int().min(10).max(5000).default(standardDefaults.paragraphWordLimit),
       })
       .default({}),
-    publishState: z.enum(["DRAFT", "UPCOMING", "PUBLISH_NOW"]).default("DRAFT"),
+    publishState: z.enum(["DRAFT", "UPCOMING", "PUBLISH"]).default("DRAFT"),
     skipOverlapCheck: z.boolean().default(false),
   }),
   params: z.object({}).optional().default({}),
@@ -116,8 +133,17 @@ const createAdminTestSchema = createAdminTestPayloadSchema
       ctx.addIssue({ code: "custom", message: "totalMarks must equal sum of all question marks" });
     }
 
-    if (input.body.assignmentMethod === "batch_wise" && (!Array.isArray(input.body.batchIds) || input.body.batchIds.length === 0)) {
-      ctx.addIssue({ code: "custom", message: "Select at least one batch for batch-wise assignment" });
+    if (input.body.assignmentMethod === "department_wise" && !input.body.departmentId) {
+      ctx.addIssue({ code: "custom", message: "Select a department for department-wise assignment" });
+    }
+
+    if (input.body.assignmentMethod === "batch_wise") {
+      if (!input.body.departmentId) {
+        ctx.addIssue({ code: "custom", message: "Select a department before choosing batches" });
+      }
+      if (!Array.isArray(input.body.batchIds) || input.body.batchIds.length === 0) {
+        ctx.addIssue({ code: "custom", message: "Select at least one batch for batch-wise assignment" });
+      }
     }
 
     const threshold = Number(
@@ -127,6 +153,11 @@ const createAdminTestSchema = createAdminTestPayloadSchema
     );
     if (!Number.isFinite(threshold) || threshold < 1) {
       ctx.addIssue({ code: "custom", message: "Violation threshold must be at least 1" });
+    }
+
+    const paragraphWordLimit = Number(input.body.restrictions?.paragraphWordLimit ?? 0);
+    if (!Number.isFinite(paragraphWordLimit) || paragraphWordLimit < 10) {
+      ctx.addIssue({ code: "custom", message: "Paragraph word limit must be at least 10" });
     }
   });
 
@@ -176,6 +207,25 @@ const extendAttemptTimeSchema = z.object({
     testId: objectIdSchema,
   }),
   query: z.object({}).optional().default({}),
+});
+
+const cloneAdminTestSchema = z.object({
+  body: z.object({
+    assignmentMethod: z.enum(["department_wise", "batch_wise"]).default("department_wise"),
+    departmentId: objectIdSchema.optional().nullable(),
+    batchIds: z.array(objectIdSchema).optional().default([]),
+  }),
+  params: z.object({
+    testId: objectIdSchema,
+  }),
+  query: z.object({}).optional().default({}),
+}).superRefine((input, ctx) => {
+  if (input.body.assignmentMethod === "department_wise" && !input.body.departmentId) {
+    ctx.addIssue({ code: "custom", message: "Select a department for department-wise assignment" });
+  }
+  if (input.body.assignmentMethod === "batch_wise" && (!Array.isArray(input.body.batchIds) || input.body.batchIds.length === 0)) {
+    ctx.addIssue({ code: "custom", message: "Select at least one batch for batch-wise assignment" });
+  }
 });
 
 module.exports = {

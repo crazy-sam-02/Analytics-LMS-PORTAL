@@ -1,8 +1,9 @@
-const prisma = require("../config/db");
+const db = require("../config/db");
 const { TokenExpiredError, JsonWebTokenError, NotBeforeError } = require("jsonwebtoken");
 const { verifyAccessToken } = require("../utils/token");
 const { ApiError, asyncHandler } = require("../utils/http");
-const { ADMIN_PERMISSIONS } = require("../constants/admin-permissions");
+const { resolveAdminPermissions } = require("../constants/admin-access-profiles");
+const { getCachedUser, setCachedUser } = require("../services/auth-cache.service");
 
 const parseTokenPayload = (req) => {
   const authHeader = req.headers.authorization || "";
@@ -35,16 +36,40 @@ const authenticateStudent = asyncHandler(async (req, _res, next) => {
     throw new ApiError(403, "Student role required");
   }
 
-  const user = await prisma.student.findUnique({
-    where: { id: payload.sub },
-    include: {
-      batch: true,
-      department: true,
-      college: true,
-    },
-  });
+  req.authIdentity = `user:STUDENT:${payload.sub}`;
+
+  // Cache-aside: check Redis/memory cache before hitting MongoDB.
+  let user = await getCachedUser("student", payload.sub);
 
   if (!user) {
+    user = await db.student.findUnique({
+      where: { id: payload.sub },
+      include: {
+        batches: true,
+        department: true,
+        college: true,
+      },
+    });
+
+    if (user) {
+      // Normalize batchId / batchIds into a consistent batchIds array.
+      // Students may have a singular batchId (legacy) or a batchIds array.
+      const rawBatchIds = Array.isArray(user.batchIds) ? user.batchIds : [];
+      const singleBatchId = user.batchId || null;
+      const merged = [...new Set([...rawBatchIds, singleBatchId].filter(Boolean))];
+      user.batchIds = merged;
+
+      // Cache for subsequent requests (passwordHash is stripped automatically).
+      await setCachedUser("student", payload.sub, user);
+    }
+  }
+
+  if (!user) {
+    throw new ApiError(401, "Invalid access token");
+  }
+
+  // Validate token department claim (defense-in-depth)
+  if (payload.departmentId && user.departmentId && String(payload.departmentId) !== String(user.departmentId)) {
     throw new ApiError(401, "Invalid access token");
   }
 
@@ -63,22 +88,42 @@ const authenticateAdmin = asyncHandler(async (req, _res, next) => {
     throw new ApiError(403, "Admin role required");
   }
 
-  const admin = await prisma.admin.findUnique({
-    where: { id: payload.sub },
-    include: {
-      department: true,
-      college: true,
-    },
-  });
+  req.authIdentity = `user:ADMIN:${payload.sub}`;
+
+  // Cache-aside: check Redis/memory cache before hitting MongoDB.
+  let admin = await getCachedUser("admin", payload.sub);
+
+  if (!admin) {
+    admin = await db.admin.findUnique({
+      where: { id: payload.sub },
+      include: {
+        department: true,
+        college: true,
+      },
+    });
+
+    if (admin) {
+      await setCachedUser("admin", payload.sub, admin);
+    }
+  }
 
   if (!admin || !admin.isActive) {
+    throw new ApiError(401, "Invalid access token");
+  }
+
+  if (!admin.collegeId || !admin.departmentId) {
+    throw new ApiError(403, "Admin must be assigned to a college and department", null, "ADMIN_SCOPE_REQUIRED");
+  }
+
+  // Validate token department claim
+  if (payload.departmentId && admin.departmentId && String(payload.departmentId) !== String(admin.departmentId)) {
     throw new ApiError(401, "Invalid access token");
   }
 
   req.admin = admin;
   req.collegeId = admin.collegeId;
   req.collegeFilter = { collegeId: admin.collegeId };
-  req.admin.permissions = Array.isArray(admin.permissions) && admin.permissions.length > 0 ? admin.permissions : ADMIN_PERMISSIONS;
+  req.admin.permissions = resolveAdminPermissions(admin);
   next();
 });
 
@@ -89,9 +134,20 @@ const authenticateSuperAdmin = asyncHandler(async (req, _res, next) => {
     throw new ApiError(403, "Super admin role required");
   }
 
-  const superAdmin = await prisma.superAdmin.findUnique({
-    where: { id: payload.sub },
-  });
+  req.authIdentity = `user:SUPER_ADMIN:${payload.sub}`;
+
+  // Cache-aside: check Redis/memory cache before hitting MongoDB.
+  let superAdmin = await getCachedUser("superadmin", payload.sub);
+
+  if (!superAdmin) {
+    superAdmin = await db.superAdmin.findUnique({
+      where: { id: payload.sub },
+    });
+
+    if (superAdmin) {
+      await setCachedUser("superadmin", payload.sub, superAdmin);
+    }
+  }
 
   if (!superAdmin || !superAdmin.isActive) {
     throw new ApiError(401, "Invalid access token");

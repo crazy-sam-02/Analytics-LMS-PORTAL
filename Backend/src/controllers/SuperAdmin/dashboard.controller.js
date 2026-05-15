@@ -1,7 +1,8 @@
-const prisma = require("../../config/db");
+const { getDb } = require("../../utils/db");
 const { asyncHandler } = require("../../utils/http");
 
 const getSuperAdminDashboard = asyncHandler(async (_req, res) => {
+  const db = await getDb();
   const now = new Date();
 
   const [
@@ -13,17 +14,17 @@ const getSuperAdminDashboard = asyncHandler(async (_req, res) => {
     submissions,
     collegePerformance,
   ] = await Promise.all([
-    prisma.college.count({ where: { isActive: true } }),
-    prisma.admin.count({ where: { isActive: true } }),
-    prisma.student.count({ where: { isActive: true } }),
-    prisma.test.count(),
-    prisma.submission.count({
+    db.college.count({ where: { isActive: true } }),
+    db.admin.count({ where: { isActive: true } }),
+    db.student.count({ where: { isActive: true } }),
+    db.test.count(),
+    db.submission.count({
       where: {
         status: { in: ["IN_PROGRESS", "SUBMITTED", "AUTO_SUBMITTED"] },
         updatedAt: { gte: new Date(now.getTime() - 24 * 60 * 60 * 1000) },
       },
     }),
-    prisma.submission.findMany({
+    db.submission.findMany({
       where: {
         status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
         submittedAt: { gte: new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000) },
@@ -35,7 +36,7 @@ const getSuperAdminDashboard = asyncHandler(async (_req, res) => {
       },
       orderBy: { submittedAt: "asc" },
     }),
-    prisma.college.findMany({
+    db.college.findMany({
       where: { isActive: true },
       select: {
         id: true,

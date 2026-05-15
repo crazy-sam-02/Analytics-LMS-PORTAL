@@ -1,7 +1,30 @@
 const bcrypt = require("bcrypt");
-const prisma = require("../../config/db");
+const mongoose = require("mongoose");
+const models = require("../../models");
 const { createAuditLog } = require("../../services/audit.service");
 const { ApiError, asyncHandler } = require("../../utils/http");
+const { ADMIN_ACCESS_PROFILES, resolvePermissionsFromProfile } = require("../../constants/admin-access-profiles");
+
+const resolveAdminById = async (Admin, adminId) => {
+  const byId = await Admin.findUnique({ where: { id: adminId } });
+  if (byId) return byId;
+  const byStringObjectId = await Admin.findFirst({ where: { _id: adminId } });
+  if (byStringObjectId) return byStringObjectId;
+  if (mongoose.isValidObjectId(adminId)) {
+    return Admin.findFirst({ where: { _id: new mongoose.Types.ObjectId(adminId) } });
+  }
+  return null;
+};
+
+const resolveAdminUpdateWhere = (adminId, existing) => {
+  if (existing?.id) {
+    return { id: existing.id };
+  }
+  if (mongoose.isValidObjectId(adminId)) {
+    return { _id: new mongoose.Types.ObjectId(adminId) };
+  }
+  return { _id: adminId };
+};
 
 const parseCsv = (csvText) => {
   const rows = String(csvText || "")
@@ -39,8 +62,17 @@ const getAdmins = asyncHandler(async (req, res) => {
   const limit = Number(req.query.limit || 20);
   const search = (req.query.search || "").trim();
   const collegeId = req.query.collegeId;
+  const status = String(req.query.status || "").trim().toLowerCase();
+
+  const statusFilter =
+    status === "active"
+      ? { isActive: true }
+      : status === "inactive"
+        ? { isActive: false }
+        : {};
 
   const where = {
+    ...statusFilter,
     ...(collegeId ? { collegeId } : {}),
     ...(search
       ? {
@@ -54,17 +86,19 @@ const getAdmins = asyncHandler(async (req, res) => {
   };
 
   const [items, total] = await Promise.all([
-    prisma.admin.findMany({
-      where,
-      include: {
-        college: true,
-        department: true,
-      },
-      orderBy: { createdAt: "desc" },
-      skip: (page - 1) * limit,
-      take: limit,
-    }),
-    prisma.admin.count({ where }),
+    (async () => {
+      const m = await models.init();
+      return m.dbClient.admin.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip: (page - 1) * limit,
+        take: limit,
+      });
+    })(),
+    (async () => {
+      const m = await models.init();
+      return m.dbClient.admin.count({ where });
+    })(),
   ]);
 
   res.status(200).json({
@@ -79,14 +113,30 @@ const getAdmins = asyncHandler(async (req, res) => {
 });
 
 const createAdmin = asyncHandler(async (req, res) => {
-  const { fullName, email, employeeId, password, collegeId, departmentId } = req.body;
+  const { fullName, email, employeeId, password, collegeId, departmentId, accessProfile = ADMIN_ACCESS_PROFILES.EDITOR } = req.body;
 
-  const college = await prisma.college.findUnique({ where: { id: collegeId } });
+  const m = await models.init();
+  const College = m.dbClient.college;
+  const Admin = m.dbClient.admin;
+  const Department = m.dbClient.department;
+
+  const college = await College.findUnique({ where: { id: collegeId } });
   if (!college || !college.isActive) {
     throw new ApiError(400, "Admin cannot be created for inactive or missing college");
   }
 
-  const existing = await prisma.admin.findFirst({
+  if (!departmentId) {
+    throw new ApiError(422, "Department is required for admin", null, "MISSING_DEPARTMENT_ID");
+  }
+
+  const department = await Department.findFirst({
+    where: { id: departmentId, collegeId },
+  });
+  if (!department) {
+    throw new ApiError(400, "Department not found for selected college");
+  }
+
+  const existing = await Admin.findFirst({
     where: {
       OR: [
         { email, collegeId },
@@ -101,7 +151,7 @@ const createAdmin = asyncHandler(async (req, res) => {
 
   const passwordHash = await bcrypt.hash(password, 10);
 
-  const admin = await prisma.admin.create({
+  const admin = await Admin.create({
     data: {
       fullName,
       email,
@@ -109,12 +159,10 @@ const createAdmin = asyncHandler(async (req, res) => {
       passwordHash,
       role: "ADMIN",
       collegeId,
-      departmentId: departmentId || null,
+      departmentId,
+      accessProfile,
+      permissions: resolvePermissionsFromProfile(accessProfile),
       isActive: true,
-    },
-    include: {
-      college: true,
-      department: true,
     },
   });
 
@@ -128,6 +176,7 @@ const createAdmin = asyncHandler(async (req, res) => {
       id: admin.id,
       email: admin.email,
       employeeId: admin.employeeId,
+      accessProfile: admin.accessProfile,
       isActive: admin.isActive,
     },
   });
@@ -137,10 +186,37 @@ const createAdmin = asyncHandler(async (req, res) => {
 
 const updateAdmin = asyncHandler(async (req, res) => {
   const { adminId } = req.params;
-  const existing = await prisma.admin.findUnique({ where: { id: adminId } });
+  const m = await models.init();
+  const Admin = m.dbClient.admin;
+  const College = m.dbClient.college;
+  const Department = m.dbClient.department;
+  const existing = await resolveAdminById(Admin, adminId);
 
   if (!existing) {
     throw new ApiError(404, "Admin not found");
+  }
+
+  const nextCollegeId = req.body.collegeId ?? existing.collegeId;
+  const nextDepartmentId = req.body.departmentId ?? existing.departmentId;
+
+  if (!nextCollegeId || !nextDepartmentId) {
+    throw new ApiError(422, "Admin must belong to a college and department", null, "ADMIN_SCOPE_REQUIRED");
+  }
+
+  if (req.body.collegeId && !req.body.departmentId) {
+    throw new ApiError(422, "Department is required when changing college", null, "MISSING_DEPARTMENT_ID");
+  }
+
+  const college = await College.findUnique({ where: { id: nextCollegeId } });
+  if (!college || !college.isActive) {
+    throw new ApiError(400, "Admin cannot be assigned to inactive or missing college");
+  }
+
+  const department = await Department.findFirst({
+    where: { id: nextDepartmentId, collegeId: nextCollegeId },
+  });
+  if (!department) {
+    throw new ApiError(400, "Department not found for selected college");
   }
 
   const data = {
@@ -148,16 +224,22 @@ const updateAdmin = asyncHandler(async (req, res) => {
     ...(req.body.collegeId !== undefined ? { collegeId: req.body.collegeId } : {}),
     ...(req.body.departmentId !== undefined ? { departmentId: req.body.departmentId } : {}),
     ...(req.body.isActive !== undefined ? { isActive: req.body.isActive } : {}),
+    ...(req.body.accessProfile !== undefined
+      ? {
+          accessProfile: req.body.accessProfile,
+          permissions: resolvePermissionsFromProfile(req.body.accessProfile),
+        }
+      : {}),
   };
 
-  const updated = await prisma.admin.update({
-    where: { id: adminId },
+  const updated = await Admin.update({
+    where: resolveAdminUpdateWhere(adminId, existing),
     data,
-    include: {
-      college: true,
-      department: true,
-    },
   });
+
+  if (!updated) {
+    throw new ApiError(404, "Admin not found");
+  }
 
   await createAuditLog({
     action: "SUPER_ADMIN_UPDATE_ADMIN",
@@ -174,15 +256,17 @@ const updateAdmin = asyncHandler(async (req, res) => {
 
 const resetAdminPassword = asyncHandler(async (req, res) => {
   const { adminId } = req.params;
-  const existing = await prisma.admin.findUnique({ where: { id: adminId } });
+  const m = await models.init();
+  const Admin = m.dbClient.admin;
+  const existing = await resolveAdminById(Admin, adminId);
 
   if (!existing) {
     throw new ApiError(404, "Admin not found");
   }
 
   const passwordHash = await bcrypt.hash(req.body.password, 10);
-  await prisma.admin.update({
-    where: { id: adminId },
+  await Admin.update({
+    where: resolveAdminUpdateWhere(adminId, existing),
     data: { passwordHash },
   });
 
@@ -200,11 +284,13 @@ const resetAdminPassword = asyncHandler(async (req, res) => {
 const deleteAdmin = asyncHandler(async (req, res) => {
   const { adminId } = req.params;
 
-  const existing = await prisma.admin.findUnique({
-    where: { id: adminId },
-    include: {
-      _count: { select: { createdTests: true } },
-    },
+  const m = await models.init();
+  const Admin = m.dbClient.admin;
+
+  const existing = await resolveAdminById(Admin, adminId);
+  const existingWithCount = await Admin.findUnique({
+    where: resolveAdminUpdateWhere(adminId, existing),
+    include: { _count: { select: { createdTests: true } } },
   });
 
   if (!existing) {
@@ -216,8 +302,8 @@ const deleteAdmin = asyncHandler(async (req, res) => {
     throw new ApiError(400, `Typed acknowledgment mismatch. Expected: ${expectedConfirmation}`);
   }
 
-  await prisma.admin.update({
-    where: { id: adminId },
+  await Admin.update({
+    where: resolveAdminUpdateWhere(adminId, existing),
     data: { isActive: false },
   });
 
@@ -229,14 +315,14 @@ const deleteAdmin = asyncHandler(async (req, res) => {
     superAdminId: req.superAdmin.id,
     beforeState: {
       isActive: existing.isActive,
-      createdTests: existing._count.createdTests,
+      createdTests: existingWithCount?._count?.createdTests || 0,
     },
     afterState: { isActive: false },
   });
 
   res.status(200).json({
     message: "Admin deactivated",
-    note: existing._count.createdTests > 0 ? "Reassign admin's tests if needed" : null,
+    note: existingWithCount?._count?.createdTests > 0 ? "Reassign admin's tests if needed" : null,
   });
 });
 
@@ -248,9 +334,13 @@ const bulkImportAdmins = asyncHandler(async (req, res) => {
     throw new ApiError(400, "No admin rows found in import file");
   }
 
-  const colleges = await prisma.college.findMany({
+  const m = await models.init();
+  const College = m.dbClient.college;
+  const Admin = m.dbClient.admin;
+  const Department = m.dbClient.department;
+
+  const colleges = await College.findMany({
     where: { isActive: true },
-    select: { id: true, name: true, code: true },
   });
 
   const byId = new Map(colleges.map((college) => [String(college.id), college]));
@@ -298,7 +388,13 @@ const bulkImportAdmins = asyncHandler(async (req, res) => {
       continue;
     }
 
-    const duplicate = await prisma.admin.findFirst({
+    if (!departmentInput) {
+      result.failed += 1;
+      result.errors.push({ row: row.__row, reason: "Missing required column: department" });
+      continue;
+    }
+
+    const duplicate = await Admin.findFirst({
       where: {
         collegeId: resolvedCollege.id,
         OR: [
@@ -306,7 +402,6 @@ const bulkImportAdmins = asyncHandler(async (req, res) => {
           { employeeId },
         ],
       },
-      select: { id: true },
     });
 
     if (duplicate) {
@@ -315,32 +410,27 @@ const bulkImportAdmins = asyncHandler(async (req, res) => {
       continue;
     }
 
-    let resolvedDepartment = null;
-    if (departmentInput) {
-      const byDepartmentId = await prisma.department.findFirst({
-        where: {
-          id: departmentInput,
-          collegeId: resolvedCollege.id,
-        },
-        select: { id: true },
-      });
+    const byDepartmentId = await Department.findFirst({
+      where: {
+        id: departmentInput,
+        collegeId: resolvedCollege.id,
+      },
+    });
 
-      resolvedDepartment = byDepartmentId || await prisma.department.findFirst({
-        where: {
-          collegeId: resolvedCollege.id,
-          name: {
-            equals: departmentInput,
-            mode: "insensitive",
-          },
+    const resolvedDepartment = byDepartmentId || await Department.findFirst({
+      where: {
+        collegeId: resolvedCollege.id,
+        name: {
+          equals: departmentInput,
+          mode: "insensitive",
         },
-        select: { id: true },
-      });
+      },
+    });
 
-      if (!resolvedDepartment) {
-        result.failed += 1;
-        result.errors.push({ row: row.__row, reason: "Department not found for selected college" });
-        continue;
-      }
+    if (!resolvedDepartment) {
+      result.failed += 1;
+      result.errors.push({ row: row.__row, reason: "Department not found for selected college" });
+      continue;
     }
 
     const plainPassword = passwordInput || "Admin@12345";
@@ -351,7 +441,7 @@ const bulkImportAdmins = asyncHandler(async (req, res) => {
     }
 
     const passwordHash = await bcrypt.hash(plainPassword, 10);
-    await prisma.admin.create({
+    await Admin.create({
       data: {
         fullName,
         email,
@@ -359,7 +449,7 @@ const bulkImportAdmins = asyncHandler(async (req, res) => {
         passwordHash,
         role: "ADMIN",
         collegeId: resolvedCollege.id,
-        departmentId: resolvedDepartment?.id || null,
+        departmentId: resolvedDepartment.id,
         isActive: true,
       },
     });

@@ -5,7 +5,7 @@ export function MCQSingleQuestion({ question, answer, onChange, disabled }) {
         <label
           key={String(option)}
           className={`flex cursor-pointer items-center gap-3 rounded-xl border px-4 py-3 transition ${
-            answer?.selected_option === option ? "border-blue-500 bg-blue-50" : "border-slate-200 bg-white"
+            answer?.selected_option === option ? "border-primary bg-primary/10" : "border-border bg-card"
           } ${disabled ? "cursor-not-allowed opacity-70" : ""}`}
         >
           <input
@@ -22,7 +22,7 @@ export function MCQSingleQuestion({ question, answer, onChange, disabled }) {
               })
             }
           />
-          <span className="text-slate-800">{option}</span>
+          <span className="text-text-primary">{option}</span>
         </label>
       ))}
     </div>

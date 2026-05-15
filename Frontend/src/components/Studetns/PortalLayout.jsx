@@ -4,7 +4,7 @@ import Header from "@/components/Studetns/Header";
 
 export default function PortalLayout() {
   return (
-    <div className="min-h-screen bg-[#f2f5fb] lg:flex">
+    <div className="min-h-screen bg-linear-to-b from-background via-background to-primary/5 lg:flex">
       <Sidebar />
       <main className="flex-1">
         <Header />

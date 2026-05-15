@@ -7,9 +7,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
 
 const healthTone = {
-  ok: "text-emerald-700 bg-emerald-50 border-emerald-200",
-  degraded: "text-amber-700 bg-amber-50 border-amber-200",
-  down: "text-red-700 bg-red-50 border-red-200",
+  ok: "text-success bg-success/10 border-success/30",
+  degraded: "text-warning bg-warning/10 border-warning/30",
+  down: "text-danger bg-danger/10 border-danger/30",
 };
 
 export default function SuperAdminDashboardPage() {
@@ -20,9 +20,11 @@ export default function SuperAdminDashboardPage() {
     dispatch(fetchSuperAdminDashboard());
     dispatch(fetchSuperAdminHealth());
 
+    // Poll health every 60s — frequent enough for monitoring,
+    // light enough to avoid unnecessary server load.
     const timer = setInterval(() => {
       dispatch(fetchSuperAdminHealth());
-    }, 30000);
+    }, 60_000);
 
     return () => clearInterval(timer);
   }, [dispatch]);
@@ -78,7 +80,7 @@ export default function SuperAdminDashboardPage() {
         <Card className="rounded-2xl">
           <CardHeader><CardTitle>Daily Active Users</CardTitle></CardHeader>
           <CardContent>
-            <ChartContainer config={{ users: { label: "Users", color: "#d97706" } }} className="h-72 w-full">
+            <ChartContainer config={{ users: { label: "Users", color: "var(--warning)" } }} className="h-72 w-full">
               <LineChart data={daily}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="day" hide />
@@ -93,7 +95,7 @@ export default function SuperAdminDashboardPage() {
         <Card className="rounded-2xl">
           <CardHeader><CardTitle>Test Participation Trends</CardTitle></CardHeader>
           <CardContent>
-            <ChartContainer config={{ count: { label: "Count", color: "#92400e" } }} className="h-72 w-full">
+            <ChartContainer config={{ count: { label: "Count", color: "var(--warning)" } }} className="h-72 w-full">
               <LineChart data={participation}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="day" hide />
@@ -109,8 +111,8 @@ export default function SuperAdminDashboardPage() {
       <Card className="rounded-2xl">
         <CardHeader><CardTitle>College-wise Performance</CardTitle></CardHeader>
         <CardContent>
-          {loading ? <p className="text-sm text-slate-500">Loading dashboard...</p> : null}
-          <ChartContainer config={{ avgScore: { label: "Avg Score", color: "#f59e0b" } }} className="h-72 w-full">
+          {loading ? <p className="text-sm text-text-secondary">Loading dashboard...</p> : null}
+          <ChartContainer config={{ avgScore: { label: "Avg Score", color: "var(--warning)" } }} className="h-72 w-full">
             <BarChart data={performance}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="collegeName" hide />
@@ -127,21 +129,21 @@ export default function SuperAdminDashboardPage() {
           <CardTitle>System Health</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          {healthError ? <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">Health check unavailable. This may indicate a server connectivity issue.</p> : null}
+          {healthError ? <p className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">Health check unavailable. This may indicate a server connectivity issue.</p> : null}
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {healthCards.map((item) => (
-              <div key={item.label} className="rounded-xl border border-slate-200 px-3 py-2">
+              <div key={item.label} className="rounded-xl border border-border px-3 py-2">
                 <div className="mb-1 flex items-center justify-between">
-                  <p className="text-sm font-semibold text-slate-800">{item.label}</p>
+                  <p className="text-sm font-semibold text-text-primary">{item.label}</p>
                   <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase ${healthTone[item.status] || healthTone.down}`}>
                     {item.status}
                   </span>
                 </div>
-                <p className="text-xs text-slate-500">{item.detail}</p>
+                <p className="text-xs text-text-secondary">{item.detail}</p>
               </div>
             ))}
           </div>
-          <p className="text-xs text-slate-500">Last checked: {health?.checked_at ? new Date(health.checked_at).toLocaleString() : "-"}</p>
+          <p className="text-xs text-text-secondary">Last checked: {health?.checked_at ? new Date(health.checked_at).toLocaleString() : "-"}</p>
         </CardContent>
       </Card>
     </div>

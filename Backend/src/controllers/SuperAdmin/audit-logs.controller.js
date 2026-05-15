@@ -1,4 +1,4 @@
-const prisma = require("../../config/db");
+const models = require("../../models");
 const { asyncHandler } = require("../../utils/http");
 
 const getAuditLogs = asyncHandler(async (req, res) => {
@@ -12,22 +12,17 @@ const getAuditLogs = asyncHandler(async (req, res) => {
     ...(targetType ? { targetType } : {}),
   };
 
+  const m = await models.init();
+  const AuditLog = m.dbClient.auditLog;
+
   const [items, total] = await Promise.all([
-    prisma.auditLog.findMany({
+    AuditLog.findMany({
       where,
-      include: {
-        admin: {
-          select: { id: true, fullName: true, email: true },
-        },
-        superAdmin: {
-          select: { id: true, fullName: true, email: true },
-        },
-      },
       orderBy: { createdAt: "desc" },
       skip: (page - 1) * limit,
       take: limit,
     }),
-    prisma.auditLog.count({ where }),
+    AuditLog.count({ where }),
   ]);
 
   res.status(200).json({

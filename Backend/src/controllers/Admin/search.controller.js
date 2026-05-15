@@ -1,4 +1,4 @@
-const prisma = require("../../config/db");
+const models = require("../../models");
 const { asyncHandler } = require("../../utils/http");
 
 const mapResults = (type, items) =>
@@ -25,6 +25,8 @@ const mapResults = (type, items) =>
   }));
 
 const adminSearch = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const q = String(req.query.q || "").trim();
 
   if (q.length < 2) {
@@ -34,7 +36,7 @@ const adminSearch = asyncHandler(async (req, res) => {
   const whereCollege = req.collegeFilter || { collegeId: req.collegeId };
 
   const [tests, students, batches, events] = await Promise.all([
-    prisma.test.findMany({
+    db.test.findMany({
       where: {
         ...whereCollege,
         OR: [{ title: { contains: q, mode: "insensitive" } }, { subject: { contains: q, mode: "insensitive" } }],
@@ -43,7 +45,7 @@ const adminSearch = asyncHandler(async (req, res) => {
       take: 8,
       orderBy: { updatedAt: "desc" },
     }),
-    prisma.student.findMany({
+    db.student.findMany({
       where: {
         ...whereCollege,
         OR: [
@@ -56,7 +58,7 @@ const adminSearch = asyncHandler(async (req, res) => {
       take: 8,
       orderBy: { updatedAt: "desc" },
     }),
-    prisma.batch.findMany({
+    db.batch.findMany({
       where: {
         ...whereCollege,
         name: { contains: q, mode: "insensitive" },
@@ -65,7 +67,7 @@ const adminSearch = asyncHandler(async (req, res) => {
       take: 8,
       orderBy: { updatedAt: "desc" },
     }),
-    prisma.event.findMany({
+    db.event.findMany({
       where: {
         ...whereCollege,
         OR: [{ name: { contains: q, mode: "insensitive" } }, { description: { contains: q, mode: "insensitive" } }],

@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import TypedConfirmDialog from "@/components/SuperAdmin/TypedConfirmDialog";
+import SkeletonBlock from "@/components/common/SkeletonBlock";
 
 export default function BatchesPage() {
   const [filters, setFilters] = useState({ search: "", collegeId: "" });
@@ -18,6 +19,10 @@ export default function BatchesPage() {
   const [editCollegeId, setEditCollegeId] = useState("");
   const [editForm, setEditForm] = useState({ name: "", year: new Date().getFullYear(), departmentId: "" });
   const [pendingDelete, setPendingDelete] = useState(null);
+  const [selectedStudentId, setSelectedStudentId] = useState("");
+  const [search, setSearch] = useState("");
+  const [studentPage, setStudentPage] = useState(1);
+  const [batchIdInput, setBatchIdInput] = useState("");
 
   const collegesQuery = useQuery({
     queryKey: ["super-colleges-for-batches"],
@@ -70,6 +75,24 @@ export default function BatchesPage() {
     },
   });
 
+  const studentsQuery = useQuery({
+    queryKey: ["super-students-for-batches", studentPage, search, filters.collegeId],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      params.set("page", String(studentPage));
+      params.set("limit", "20");
+      if (search.trim()) params.set("search", search.trim());
+      if (filters.collegeId) params.set("collegeId", filters.collegeId);
+      return superAdminApi.getStudents(`?${params.toString()}`);
+    },
+  });
+
+  const studentProfileQuery = useQuery({
+    queryKey: ["super-student-profile", selectedStudentId],
+    queryFn: () => superAdminApi.getStudents(`?studentId=${selectedStudentId}`),
+    enabled: Boolean(selectedStudentId),
+  });
+
   const createBatchMutation = useMutation({
     mutationFn: (payload) => superAdminApi.createBatch(payload),
     onSuccess: () => {
@@ -108,6 +131,19 @@ export default function BatchesPage() {
     },
     onError: (error) => {
       toast.error(error?.message || "Failed to delete batch.");
+    },
+  });
+
+  const assignBatchMutation = useMutation({
+    mutationFn: ({ studentId, batchId }) => superAdminApi.updateStudent(studentId, { batchId }),
+    onSuccess: () => {
+      toast.success("Student batch updated successfully");
+      setBatchIdInput("");
+      studentsQuery.refetch();
+      studentProfileQuery.refetch();
+    },
+    onError: (error) => {
+      toast.error(error?.message || "Failed to assign batch to student.");
     },
   });
 
@@ -153,6 +189,9 @@ export default function BatchesPage() {
   const batches = batchesQuery.data?.data || [];
   const assignBatches = assignBatchesQuery.data?.data || [];
   const pagination = batchesQuery.data?.pagination;
+  const students = studentsQuery.data?.data || [];
+  const studentPagination = studentsQuery.data?.pagination;
+  const selectedStudent = selectedStudentId ? students.find((s) => s.id === selectedStudentId) || studentProfileQuery.data : null;
 
   const finalBatchIds = useMemo(() => [...new Set(selectedBatchIds)], [selectedBatchIds]);
 
@@ -179,6 +218,13 @@ export default function BatchesPage() {
   useEffect(() => {
     setSelectedBatchIds([]);
     setAssignBatchSearch("");
+  }, [filters.collegeId]);
+
+  useEffect(() => {
+    setSelectedStudentId("");
+    setBatchIdInput("");
+    setSearch("");
+    setStudentPage(1);
   }, [filters.collegeId]);
 
   const toggleAssignBatchSelection = (batchId) => {
@@ -243,7 +289,7 @@ export default function BatchesPage() {
 
   return (
     <div className="space-y-6">
-      <Card className="rounded-2xl border-slate-200">
+      <Card className="rounded-2xl border-border">
         <CardHeader>
           <CardTitle>Create Batch</CardTitle>
           <CardDescription>Super Admin can create and manage batches across colleges.</CardDescription>
@@ -263,7 +309,7 @@ export default function BatchesPage() {
             onChange={(e) => setBatchForm((prev) => ({ ...prev, year: Number(e.target.value) || "" }))}
           />
           <select
-            className="h-10 rounded-lg border border-slate-200 px-2"
+            className="h-10 rounded-lg border border-border px-2"
             value={batchForm.collegeId}
             onChange={(e) => setBatchForm((prev) => ({ ...prev, collegeId: e.target.value, departmentId: "" }))}
           >
@@ -273,7 +319,7 @@ export default function BatchesPage() {
             ))}
           </select>
           <select
-            className="h-10 rounded-lg border border-slate-200 px-2"
+            className="h-10 rounded-lg border border-border px-2"
             value={batchForm.departmentId}
             onChange={(e) => setBatchForm((prev) => ({ ...prev, departmentId: e.target.value }))}
           >
@@ -282,13 +328,118 @@ export default function BatchesPage() {
               <option key={department.id} value={department.id}>{department.name}</option>
             ))}
           </select>
-          <Button className="bg-blue-500 hover:bg-blue-600" onClick={createBatch} disabled={createBatchMutation.isPending}>
+          <Button className="bg-primary/100 hover:bg-primary" onClick={createBatch} disabled={createBatchMutation.isPending}>
             {createBatchMutation.isPending ? "Creating..." : "Create"}
           </Button>
         </CardContent>
       </Card>
+            <Card className="rounded-2xl border-border">
+                    <CardHeader>
+                      <CardTitle>Student Directory</CardTitle>
+                      <CardDescription>Search/filter, inspect profile, reassign batch, and monitor bulk-import jobs.</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="mb-4 flex gap-2">
+                        <Input placeholder="Search by name/email" value={search} onChange={(event) => { setSearch(event.target.value); setStudentPage(1); }} />
+                        <Button variant="outline" onClick={() => studentsQuery.refetch()}>Search</Button>
+                      </div>
+                      <div className="grid gap-6 xl:grid-cols-[1fr_1.2fr]">
+                        <div className="space-y-2">
+                          {studentsQuery.isLoading ? (
+                            <div className="space-y-2">
+                              <SkeletonBlock className="h-16" />
+                              <SkeletonBlock className="h-16" />
+                              <SkeletonBlock className="h-16" />
+                            </div>
+                          ) : null}
+                          {!studentsQuery.isLoading && students.length === 0 ? <p className="text-sm text-text-secondary">No students found for current filters.</p> : null}
+                          {students.map((student) => (
+                            <button
+                              key={student.id}
+                              type="button"
+                              onClick={() => {
+                                setSelectedStudentId(student.id);
+                                setBatchIdInput("");
+                              }}
+                              className={`flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left ${selectedStudentId === student.id ? "border-primary/40 bg-primary/10" : "border-border"}`}
+                            >
+                              <div>
+                                <p className="font-medium text-text-primary">{student.fullName}</p>
+                                <p className="text-xs text-text-secondary">{student.email} • {student.studentId}</p>
+                              </div>
+                              <div className="text-right text-xs text-text-secondary">
+                                <p>{student.department?.name || "-"}</p>
+                                <p>{Array.isArray(student.batchIds) && student.batchIds.length > 0 ? `${student.batchIds.length} batch(es)` : "No batches"}</p>
+                              </div>
+                            </button>
+                          ))}
+                          {(studentPagination?.totalPages || 1) > 1 ? (
+                            <div className="flex items-center justify-between border-t border-border pt-2 text-xs text-text-secondary">
+                              <p>Page {studentPagination?.page || studentPage} of {studentPagination?.totalPages || 1}</p>
+                              <div className="flex items-center gap-2">
+                                <Button variant="outline" size="sm" disabled={(studentPagination?.page || studentPage) <= 1} onClick={() => setStudentPage((prev) => Math.max(prev - 1, 1))}>Previous</Button>
+                                <Button variant="outline" size="sm" disabled={(studentPagination?.page || 1) >= (studentPagination?.totalPages || 1)} onClick={() => setStudentPage((prev) => prev + 1)}>Next</Button>
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+            
+                        <div className="space-y-3 rounded-xl border border-border p-3">
+                          {studentProfileQuery.isLoading ? (
+                            <div className="space-y-2">
+                              <SkeletonBlock className="h-6" />
+                              <SkeletonBlock className="h-6" />
+                              <SkeletonBlock className="h-10" />
+                            </div>
+                          ) : null}
+                          {!selectedStudent ? <p className="text-sm text-text-secondary">Select a student for profile details.</p> : null}
+                          {selectedStudent ? (
+                            <>
+                              <p className="text-base font-semibold text-text-primary">{selectedStudent.fullName}</p>
+                              <p className="text-xs text-text-secondary">{selectedStudent.email} • {selectedStudent.studentId}</p>
+                              <p className="text-xs text-text-secondary">Department: {selectedStudent.department?.name || "-"}</p>
+                              <p className="text-xs text-text-secondary">Total submissions: {selectedStudent._count?.submissions || 0}</p>
+                              
+                              {Array.isArray(selectedStudent.batchIds) && selectedStudent.batchIds.length > 0 ? (
+                                <div className="border-t border-border pt-2">
+                                  <p className="text-xs font-medium text-text-primary mb-2">Assigned Batches:</p>
+                                  <div className="space-y-1">
+                                    {selectedStudent.batchIds.map((batchId) => {
+                                      const batch = batches.find(b => b.id === batchId);
+                                      return batch ? (
+                                        <div key={batchId} className="flex items-center justify-between rounded-md bg-primary/5 px-2 py-1 text-xs">
+                                          <span className="text-text-primary">{batch.name}</span>
+                                        </div>
+                                      ) : null;
+                                    })}
+                                  </div>
+                                </div>
+                              ) : (
+                                <p className="text-xs text-text-secondary italic">No batches assigned yet</p>
+                              )}
+            
+                              <div className="grid gap-2 sm:grid-cols-3 border-t border-border pt-2">
+                                <select className="h-10 rounded-md border border-border px-3 text-sm sm:col-span-2" value={batchIdInput} onChange={(event) => setBatchIdInput(event.target.value)}>
+                                  <option value="">Select batch to add</option>
+                                  {batches.map((batch) => (
+                                    <option key={batch.id} value={batch.id}>{batch.name} ({batch.department?.name || "-"})</option>
+                                  ))}
+                                </select>
+                                <Button
+                                  onClick={() => assignBatchMutation.mutate({ studentId: selectedStudent.id, batchId: batchIdInput })}
+                                  disabled={assignBatchMutation.isPending || !batchIdInput}
+                                >
+                                  Add Batch
+                                </Button>
+                              </div>
+                            </>
+                          ) : null}
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
 
-      <Card className="rounded-2xl border-slate-200">
+      <Card className="rounded-2xl border-border">
         <CardHeader>
           <CardTitle>Assign Tests Globally</CardTitle>
           <CardDescription>Select a test from live database results and choose batches from live backend data.</CardDescription>
@@ -296,7 +447,7 @@ export default function BatchesPage() {
         <CardContent className="space-y-3">
 
           <div className="grid gap-3 sm:grid-cols-2">
-          <select className="h-10 rounded-lg border border-slate-200 px-2" value={form.testId} onChange={(e) => setForm({ ...form, testId: e.target.value })}>
+          <select className="h-10 rounded-lg border border-border px-2" value={form.testId} onChange={(e) => setForm({ ...form, testId: e.target.value })}>
             <option value="">Select test</option>
             {tests.map((test) => (
               <option key={test.id} value={test.id}>{test.title} ({test.status || "-"}) • {test.college?.name || "-"} • #{String(test.id).slice(0, 8)}</option>
@@ -309,7 +460,7 @@ export default function BatchesPage() {
           />
           </div>
 
-          <div className="max-h-52 space-y-2 overflow-y-auto rounded-lg border border-slate-200 p-2">
+          <div className="max-h-52 space-y-2 overflow-y-auto rounded-lg border border-border p-2">
             <div className="flex items-center justify-end gap-2">
               <Button
                 type="button"
@@ -328,12 +479,12 @@ export default function BatchesPage() {
                 Clear Visible
               </Button>
             </div>
-            {filteredAssignBatches.length === 0 ? <p className="text-xs text-slate-500">No batches found for assignment.</p> : null}
+            {filteredAssignBatches.length === 0 ? <p className="text-xs text-text-secondary">No batches found for assignment.</p> : null}
             {filteredAssignBatches.map((batch) => (
-              <label key={batch.id} className="flex cursor-pointer items-center justify-between gap-3 rounded-md border border-slate-200 px-3 py-2">
+              <label key={batch.id} className="flex cursor-pointer items-center justify-between gap-3 rounded-md border border-border px-3 py-2">
                 <div>
-                  <p className="text-sm font-medium text-slate-800">{batch.name} ({batch.year})</p>
-                  <p className="text-xs text-slate-500">{batch.college?.name || "-"} • {batch.department?.name || "-"} • Students: {batch._count?.students || 0}</p>
+                  <p className="text-sm font-medium text-text-primary">{batch.name} ({batch.year})</p>
+                  <p className="text-xs text-text-secondary">{batch.college?.name || "-"} • {batch.department?.name || "-"} • Students: {batch._count?.students || 0}</p>
                 </div>
                 <input
                   type="checkbox"
@@ -346,34 +497,34 @@ export default function BatchesPage() {
           </div>
 
           <div className="flex items-center justify-end">
-          <Button className="bg-blue-500 hover:bg-blue-600" onClick={assign} disabled={assignMutation.isPending || testsQuery.isLoading}>
+          <Button className="bg-primary/100 hover:bg-primary" onClick={assign} disabled={assignMutation.isPending || testsQuery.isLoading}>
             {assignMutation.isPending ? "Assigning..." : "Assign"}
           </Button>
           </div>
 
-          <p className="text-xs text-slate-500 sm:col-span-2">
+          <p className="text-xs text-text-secondary sm:col-span-2">
             Selected batch IDs: {finalBatchIds.length}
           </p>
           {selectedBatchDetails.length > 0 ? (
             <div className="grid gap-2 sm:grid-cols-2">
               {selectedBatchDetails.map((batch) => (
-                <div key={batch.id} className="rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-600">
-                  <p className="font-medium text-slate-800">{batch.name} ({batch.year})</p>
+                <div key={batch.id} className="rounded-lg border border-border px-3 py-2 text-xs text-text-secondary">
+                  <p className="font-medium text-text-primary">{batch.name} ({batch.year})</p>
                   <p>{batch.college?.name || "-"} • {batch.department?.name || "-"}</p>
                   <p>Students: {batch._count?.students || 0} • Tests: {batch._count?.tests || 0}</p>
                 </div>
               ))}
             </div>
           ) : null}
-          {testsQuery.isLoading ? <p className="text-xs text-slate-500 sm:col-span-2">Loading tests from database...</p> : null}
-          {testsQuery.isError ? <p className="text-xs text-red-600 sm:col-span-2">{testsQuery.error?.message || "Failed to load tests from backend."}</p> : null}
-          {!testsQuery.isLoading && !testsQuery.isError && tests.length === 0 ? <p className="text-xs text-slate-500 sm:col-span-2">No tests found in database for the selected filters.</p> : null}
-          {assignBatchesQuery.isLoading ? <p className="text-xs text-slate-500 sm:col-span-2">Loading batches for dropdown...</p> : null}
-          {assignBatchesQuery.isError ? <p className="text-xs text-red-600 sm:col-span-2">{assignBatchesQuery.error?.message || "Failed to load batch dropdown options."}</p> : null}
+          {testsQuery.isLoading ? <p className="text-xs text-text-secondary sm:col-span-2">Loading tests from database...</p> : null}
+          {testsQuery.isError ? <p className="text-xs text-danger sm:col-span-2">{testsQuery.error?.message || "Failed to load tests from backend."}</p> : null}
+          {!testsQuery.isLoading && !testsQuery.isError && tests.length === 0 ? <p className="text-xs text-text-secondary sm:col-span-2">No tests found in database for the selected filters.</p> : null}
+          {assignBatchesQuery.isLoading ? <p className="text-xs text-text-secondary sm:col-span-2">Loading batches for dropdown...</p> : null}
+          {assignBatchesQuery.isError ? <p className="text-xs text-danger sm:col-span-2">{assignBatchesQuery.error?.message || "Failed to load batch dropdown options."}</p> : null}
         </CardContent>
       </Card>
 
-      <Card className="rounded-2xl border-slate-200">
+      <Card className="rounded-2xl border-border">
         <CardHeader><CardTitle>Filter Batches</CardTitle></CardHeader>
         <CardContent className="grid gap-2 sm:grid-cols-4">
           <Input
@@ -385,7 +536,7 @@ export default function BatchesPage() {
             }}
           />
           <select
-            className="h-10 rounded-lg border border-slate-200 px-2"
+            className="h-10 rounded-lg border border-border px-2"
             value={filters.collegeId}
             onChange={(e) => {
               setFilters((prev) => ({ ...prev, collegeId: e.target.value }));
@@ -404,20 +555,20 @@ export default function BatchesPage() {
         </CardContent>
       </Card>
 
-      <Card className="rounded-2xl border-slate-200">
+      <Card className="rounded-2xl border-border">
         <CardHeader><CardTitle>All Batches</CardTitle></CardHeader>
         <CardContent className="space-y-2">
-          {batchesQuery.isLoading ? <p className="text-sm text-slate-500">Loading batches from backend...</p> : null}
-          {batchesQuery.isError ? <p className="text-sm text-red-600">{batchesQuery.error?.message || "Failed to load batches."}</p> : null}
+          {batchesQuery.isLoading ? <p className="text-sm text-text-secondary">Loading batches from backend...</p> : null}
+          {batchesQuery.isError ? <p className="text-sm text-danger">{batchesQuery.error?.message || "Failed to load batches."}</p> : null}
           {!batchesQuery.isLoading && !batchesQuery.isError && batches.length === 0 ? (
-            <p className="text-sm text-slate-500">No batches found for selected filters.</p>
+            <p className="text-sm text-text-secondary">No batches found for selected filters.</p>
           ) : null}
 
           {batches.map((batch) => {
             const isEditing = editBatchId === batch.id;
 
             return (
-              <div key={batch.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 px-3 py-2">
+              <div key={batch.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border px-3 py-2">
                 <div className="min-w-70 flex-1">
                   {isEditing ? (
                     <div className="grid gap-2 sm:grid-cols-3">
@@ -435,7 +586,7 @@ export default function BatchesPage() {
                         placeholder="Year"
                       />
                       <select
-                        className="h-10 rounded-lg border border-slate-200 px-2"
+                        className="h-10 rounded-lg border border-border px-2"
                         value={editForm.departmentId}
                         onChange={(e) => setEditForm((prev) => ({ ...prev, departmentId: e.target.value }))}
                       >
@@ -447,8 +598,8 @@ export default function BatchesPage() {
                     </div>
                   ) : (
                     <>
-                      <p className="font-medium text-slate-800">{batch.name} ({batch.year})</p>
-                      <p className="text-xs text-slate-500">
+                      <p className="font-medium text-text-primary">{batch.name} ({batch.year})</p>
+                      <p className="text-xs text-text-secondary">
                         {batch.college?.name || "-"} • {batch.department?.name || "-"} • Students: {batch._count?.students || 0} • Tests: {batch._count?.tests || 0}
                       </p>
                     </>
@@ -473,7 +624,7 @@ export default function BatchesPage() {
           })}
 
           {(pagination?.pages || 1) > 1 ? (
-            <div className="flex items-center justify-between border-t border-slate-100 pt-2 text-xs text-slate-500">
+            <div className="flex items-center justify-between border-t border-border pt-2 text-xs text-text-secondary">
               <p>Page {pagination?.page || page} of {pagination?.pages || 1}</p>
               <div className="flex items-center gap-2">
                 <Button

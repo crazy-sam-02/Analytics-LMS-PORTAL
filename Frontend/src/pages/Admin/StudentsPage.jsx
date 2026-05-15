@@ -40,6 +40,7 @@ const IMPORT_SAMPLE = [
 export default function StudentsPage() {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
+  const [directoryFilters, setDirectoryFilters] = useState({ departmentId: "", batchId: "" });
   const [page, setPage] = useState(1);
   const [selectedStudentId, setSelectedStudentId] = useState("");
   const [batchIdInput, setBatchIdInput] = useState("");
@@ -52,6 +53,7 @@ export default function StudentsPage() {
     email: "",
     department: "",
     enrollNumber: "",
+    batch: "",
   });
   const [createdCredentials, setCreatedCredentials] = useState(null);
 
@@ -118,8 +120,16 @@ export default function StudentsPage() {
   };
 
   const studentsQuery = useQuery({
-    queryKey: ["admin-students", search, page],
-    queryFn: () => adminApi.getStudents(search.trim() ? `?search=${encodeURIComponent(search.trim())}&limit=20&page=${page}` : `?limit=20&page=${page}`),
+    queryKey: ["admin-students", search, page, directoryFilters.departmentId, directoryFilters.batchId],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      params.set("limit", "20");
+      params.set("page", String(page));
+      if (search.trim()) params.set("search", search.trim());
+      if (directoryFilters.departmentId) params.set("departmentId", directoryFilters.departmentId);
+      if (directoryFilters.batchId) params.set("batchId", directoryFilters.batchId);
+      return adminApi.getStudents(`?${params.toString()}`);
+    },
   });
 
   const studentProfileQuery = useQuery({
@@ -170,7 +180,7 @@ export default function StudentsPage() {
     onSuccess: (payload) => {
       toast.success("Student account created");
       setCreatedCredentials(payload.credentials || null);
-      setStudentForm({ fullName: "", email: "", department: "", enrollNumber: "" });
+      setStudentForm({ fullName: "", email: "", department: "", enrollNumber: "", batch: "" });
       setBanner({ type: "success", title: "Student created", message: "Student can login directly using email and generated password." });
       queryClient.invalidateQueries({ queryKey: ["admin-students"] });
     },
@@ -192,8 +202,8 @@ export default function StudentsPage() {
 
   const students = useMemo(() => studentsQuery.data?.data || [], [studentsQuery.data]);
   const studentPagination = studentsQuery.data?.pagination;
-  const batches = useMemo(() => batchesQuery.data || [], [batchesQuery.data]);
-  const departments = useMemo(() => departmentsQuery.data || [], [departmentsQuery.data]);
+  const batches = useMemo(() => Array.isArray(batchesQuery.data) ? batchesQuery.data : batchesQuery.data?.data || [], [batchesQuery.data]);
+  const departments = useMemo(() => Array.isArray(departmentsQuery.data) ? departmentsQuery.data : departmentsQuery.data?.data || [], [departmentsQuery.data]);
   const selectedStudent = studentProfileQuery.data;
 
   useEffect(() => {
@@ -221,13 +231,13 @@ export default function StudentsPage() {
   return (
     <div className="space-y-6">
       {banner.type ? (
-        <Alert variant={banner.type === "error" ? "destructive" : "default"} className={banner.type === "warning" ? "border-amber-300 bg-amber-50 text-amber-800" : ""}>
+        <Alert variant={banner.type === "error" ? "destructive" : "default"} className={banner.type === "warning" ? "border-warning/30 bg-warning/10 text-warning" : ""}>
           <AlertTitle>{banner.title}</AlertTitle>
           <AlertDescription>{banner.message}</AlertDescription>
         </Alert>
       ) : null}
 
-      <Card className="rounded-2xl border-slate-200">
+      <Card className="rounded-2xl border-border">
         <CardHeader>
           <CardTitle>Create Student Account</CardTitle>
           <CardDescription>No student registration is needed. Admin creates credentials directly.</CardDescription>
@@ -246,14 +256,28 @@ export default function StudentsPage() {
               onChange={(event) => setStudentForm((prev) => ({ ...prev, email: event.target.value }))}
             />
             <select
-              className="h-10 rounded-md border border-slate-200 px-3 text-sm"
+              className="h-10 rounded-md border border-border px-3 text-sm"
               value={studentForm.department}
               onChange={(event) => setStudentForm((prev) => ({ ...prev, department: event.target.value }))}
             >
               <option value="">Select department</option>
-              {departments.map((department) => (
+              {Array.isArray(departments) && departments.map((department) => (
                 <option key={department.id} value={department.name}>{department.name}</option>
               ))}
+            </select>
+            <select
+              className="h-10 rounded-md border border-border px-3 text-sm"
+              value={studentForm.batch}
+              onChange={(event) => setStudentForm((prev) => ({ ...prev, batch: event.target.value }))}
+            >
+              <option value="">Select batch (optional)</option>
+              {Array.isArray(batches)
+                ? batches
+                    .filter((batch) => !studentForm.department || String(batch.departmentId) === String(studentForm.department) || String(batch.department?.id) === String(studentForm.department))
+                    .map((batch) => (
+                      <option key={batch.id} value={batch.id}>{batch.name}</option>
+                    ))
+                : null}
             </select>
             <Input
               placeholder="Enroll number"
@@ -261,7 +285,7 @@ export default function StudentsPage() {
               onChange={(event) => setStudentForm((prev) => ({ ...prev, enrollNumber: event.target.value }))}
             />
           </div>
-          <p className="text-xs text-slate-500">Student ID is auto-generated by the system. Password rule: First 3 letters of full name (first letter capitalized) + @ + last 3 digits of enroll number.</p>
+          <p className="text-xs text-text-secondary">Student ID is auto-generated by the system. Password rule: First 3 letters of full name (first letter capitalized) + @ + last 3 digits of enroll number.</p>
           <Button
             onClick={() => createStudentMutation.mutate(studentForm)}
             disabled={
@@ -275,7 +299,7 @@ export default function StudentsPage() {
             {createStudentMutation.isPending ? "Creating..." : "Create Student"}
           </Button>
           {createdCredentials ? (
-            <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
+            <div className="rounded-lg border border-success/30 bg-success/10 p-3 text-sm text-success">
               <p className="font-semibold">Student credentials</p>
               <p>Email: {createdCredentials.identifier}</p>
               <p>Student ID: {createdCredentials.studentId}</p>
@@ -284,15 +308,82 @@ export default function StudentsPage() {
           ) : null}
         </CardContent>
       </Card>
+      <Card className="rounded-2xl border-border">
+        <CardHeader>
+          <CardTitle>Bulk Import (Excel/CSV)</CardTitle>
+          <CardDescription>Upload .xlsx/.xls/.csv file or paste CSV. Runs as async job and supports large imports.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="rounded-lg border border-border bg-background p-3 text-xs text-text-secondary">
+            <p className="font-semibold text-text-secondary">Excel format (first row headers):</p>
+            <p className="mt-1">fullName, email, enrollNumber, department, batch</p>
+            <p className="mt-1">Optional: studentId (if omitted, system auto-generates it)</p>
+            <p className="mt-1">Example: Alice Doe, alice@example.com, 20261001, Computer Science, CSE-2027-A</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <Input type="file" accept=".xlsx,.xls,.csv" onChange={handleImportFile} className="max-w-md" />
+            {importFileName ? <p className="text-xs text-text-secondary">Loaded: {importFileName}</p> : null}
+          </div>
+          <Textarea rows={8} value={csvData} onChange={(event) => setCsvData(event.target.value)} />
+          <div className="flex items-center gap-2">
+            <Button onClick={() => importMutation.mutate({ csvData })} disabled={importMutation.isPending}>
+              {importMutation.isPending ? "Queueing..." : "Start Import"}
+            </Button>
+            {activeImportJobId ? <p className="text-xs text-text-secondary">Job: {activeImportJobId}</p> : null}
+          </div>
 
-      <Card className="rounded-2xl border-slate-200">
+          {importJobQuery.data ? (
+            <div className="rounded-lg border border-border p-3 text-sm">
+              <p className="font-medium text-text-primary">Status: {String(importJobQuery.data.status || "unknown").toUpperCase()}</p>
+              {importJobQuery.data.result ? (
+                <p className="mt-1 text-text-secondary">
+                  Created: {importJobQuery.data.result.created || 0} • Failed: {importJobQuery.data.result.failed || 0} • Duplicates: {importJobQuery.data.result.duplicates || 0}
+                </p>
+              ) : null}
+              {importJobQuery.data.error ? <p className="mt-1 text-danger">Error: {importJobQuery.data.error}</p> : null}
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      <Card className="rounded-2xl border-border">
         <CardHeader>
           <CardTitle>Student Directory</CardTitle>
           <CardDescription>Search/filter, inspect profile, reassign batch, and monitor bulk-import jobs.</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="mb-4 flex gap-2">
+          <div className="mb-4 grid gap-2 md:grid-cols-4">
             <Input placeholder="Search by name/email" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} />
+            <select
+              className="h-10 rounded-md border border-border px-3 text-sm"
+              value={directoryFilters.departmentId}
+              onChange={(event) => {
+                setDirectoryFilters((prev) => ({ ...prev, departmentId: event.target.value }));
+                setPage(1);
+              }}
+            >
+              <option value="">All departments</option>
+              {Array.isArray(departments) && departments.map((department) => (
+                <option key={department.id} value={department.id}>{department.name}</option>
+              ))}
+            </select>
+            <select
+              className="h-10 rounded-md border border-border px-3 text-sm"
+              value={directoryFilters.batchId}
+              onChange={(event) => {
+                setDirectoryFilters((prev) => ({ ...prev, batchId: event.target.value }));
+                setPage(1);
+              }}
+            >
+              <option value="">All batches</option>
+              {Array.isArray(batches)
+                ? batches
+                    .filter((batch) => !directoryFilters.departmentId || String(batch.departmentId) === String(directoryFilters.departmentId))
+                    .map((batch) => (
+                      <option key={batch.id} value={batch.id}>{batch.name}</option>
+                    ))
+                : null}
+            </select>
             <Button variant="outline" onClick={() => studentsQuery.refetch()}>Search</Button>
           </div>
           <div className="grid gap-6 xl:grid-cols-[1fr_1.2fr]">
@@ -304,8 +395,8 @@ export default function StudentsPage() {
                   <SkeletonBlock className="h-16" />
                 </div>
               ) : null}
-              {!studentsQuery.isLoading && students.length === 0 ? <p className="text-sm text-slate-500">No students found for current filters.</p> : null}
-              {students.map((student) => (
+              {!studentsQuery.isLoading && students.length === 0 ? <p className="text-sm text-text-secondary">No students found for current filters.</p> : null}
+              {Array.isArray(students) && students.map((student) => (
                 <button
                   key={student.id}
                   type="button"
@@ -313,20 +404,20 @@ export default function StudentsPage() {
                     setSelectedStudentId(student.id);
                     setBatchIdInput(student.batchId || "");
                   }}
-                  className={`flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left ${selectedStudentId === student.id ? "border-blue-300 bg-blue-50" : "border-slate-200"}`}
+                  className={`flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left ${selectedStudentId === student.id ? "border-primary/40 bg-primary/10" : "border-border"}`}
                 >
                   <div>
-                    <p className="font-medium text-slate-800">{student.fullName}</p>
-                    <p className="text-xs text-slate-500">{student.email} • {student.studentId}</p>
+                    <p className="font-medium text-text-primary">{student.fullName}</p>
+                    <p className="text-xs text-text-secondary">{student.email} • {student.studentId}</p>
                   </div>
-                  <div className="text-right text-xs text-slate-500">
+                  <div className="text-right text-xs text-text-secondary">
                     <p>{student.department?.name || "-"}</p>
                     <p>{student.batch?.name || "-"}</p>
                   </div>
                 </button>
               ))}
               {(studentPagination?.totalPages || 1) > 1 ? (
-                <div className="flex items-center justify-between border-t border-slate-100 pt-2 text-xs text-slate-500">
+                <div className="flex items-center justify-between border-t border-border pt-2 text-xs text-text-secondary">
                   <p>Page {studentPagination?.page || page} of {studentPagination?.totalPages || 1}</p>
                   <div className="flex items-center gap-2">
                     <Button variant="outline" size="sm" disabled={(studentPagination?.page || page) <= 1} onClick={() => setPage((prev) => Math.max(prev - 1, 1))}>Previous</Button>
@@ -336,7 +427,7 @@ export default function StudentsPage() {
               ) : null}
             </div>
 
-            <div className="space-y-3 rounded-xl border border-slate-200 p-3">
+            <div className="space-y-3 rounded-xl border border-border p-3">
               {studentProfileQuery.isLoading ? (
                 <div className="space-y-2">
                   <SkeletonBlock className="h-6" />
@@ -344,18 +435,18 @@ export default function StudentsPage() {
                   <SkeletonBlock className="h-10" />
                 </div>
               ) : null}
-              {!selectedStudent ? <p className="text-sm text-slate-500">Select a student for profile details.</p> : null}
+              {!selectedStudent ? <p className="text-sm text-text-secondary">Select a student for profile details.</p> : null}
               {selectedStudent ? (
                 <>
-                  <p className="text-base font-semibold text-slate-900">{selectedStudent.fullName}</p>
-                  <p className="text-xs text-slate-500">{selectedStudent.email} • {selectedStudent.studentId}</p>
-                  <p className="text-xs text-slate-500">Department: {selectedStudent.department?.name || "-"} • Batch: {selectedStudent.batch?.name || "-"}</p>
-                  <p className="text-xs text-slate-500">Total submissions: {selectedStudent._count?.submissions || 0}</p>
+                  <p className="text-base font-semibold text-text-primary">{selectedStudent.fullName}</p>
+                  <p className="text-xs text-text-secondary">{selectedStudent.email} • {selectedStudent.studentId}</p>
+                  <p className="text-xs text-text-secondary">Department: {selectedStudent.department?.name || "-"} • Batch: {selectedStudent.batch?.name || "-"}</p>
+                  <p className="text-xs text-text-secondary">Total submissions: {selectedStudent._count?.submissions || 0}</p>
 
                   <div className="grid gap-2 sm:grid-cols-3">
-                    <select className="h-10 rounded-md border border-slate-200 px-3 text-sm sm:col-span-2" value={batchIdInput} onChange={(event) => setBatchIdInput(event.target.value)}>
+                    <select className="h-10 rounded-md border border-border px-3 text-sm sm:col-span-2" value={batchIdInput} onChange={(event) => setBatchIdInput(event.target.value)}>
                       <option value="">Select batch</option>
-                      {batches.map((batch) => (
+                      {Array.isArray(batches) && batches.map((batch) => (
                         <option key={batch.id} value={batch.id}>{batch.name} ({batch.department?.name || "-"})</option>
                       ))}
                     </select>
@@ -373,43 +464,7 @@ export default function StudentsPage() {
         </CardContent>
       </Card>
 
-      <Card className="rounded-2xl border-slate-200">
-        <CardHeader>
-          <CardTitle>Bulk Import (Excel/CSV)</CardTitle>
-          <CardDescription>Upload .xlsx/.xls/.csv file or paste CSV. Runs as async job and supports large imports.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
-            <p className="font-semibold text-slate-700">Excel format (first row headers):</p>
-            <p className="mt-1">fullName, email, enrollNumber, department, batch</p>
-            <p className="mt-1">Optional: studentId (if omitted, system auto-generates it)</p>
-            <p className="mt-1">Example: Alice Doe, alice@example.com, 20261001, Computer Science, CSE-2027-A</p>
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <Input type="file" accept=".xlsx,.xls,.csv" onChange={handleImportFile} className="max-w-md" />
-            {importFileName ? <p className="text-xs text-slate-500">Loaded: {importFileName}</p> : null}
-          </div>
-          <Textarea rows={8} value={csvData} onChange={(event) => setCsvData(event.target.value)} />
-          <div className="flex items-center gap-2">
-            <Button onClick={() => importMutation.mutate({ csvData })} disabled={importMutation.isPending}>
-              {importMutation.isPending ? "Queueing..." : "Start Import"}
-            </Button>
-            {activeImportJobId ? <p className="text-xs text-slate-500">Job: {activeImportJobId}</p> : null}
-          </div>
-
-          {importJobQuery.data ? (
-            <div className="rounded-lg border border-slate-200 p-3 text-sm">
-              <p className="font-medium text-slate-800">Status: {String(importJobQuery.data.status || "unknown").toUpperCase()}</p>
-              {importJobQuery.data.result ? (
-                <p className="mt-1 text-slate-600">
-                  Created: {importJobQuery.data.result.created || 0} • Failed: {importJobQuery.data.result.failed || 0} • Duplicates: {importJobQuery.data.result.duplicates || 0}
-                </p>
-              ) : null}
-              {importJobQuery.data.error ? <p className="mt-1 text-red-600">Error: {importJobQuery.data.error}</p> : null}
-            </div>
-          ) : null}
-        </CardContent>
-      </Card>
+      
     </div>
   );
 }

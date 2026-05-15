@@ -1,8 +1,21 @@
 const { z } = require("zod");
+const {
+  TEST_TYPES,
+  PROCTORING_PRESETS,
+  DEFAULT_TEST_CONFIGURATION,
+} = require("../../services/test-config.service");
 
 const idSchema = z.string().trim().refine(
-  (value) => z.string().cuid().safeParse(value).success || z.string().uuid().safeParse(value).success,
+  (value) =>
+    z.string().cuid().safeParse(value).success ||
+    z.string().uuid().safeParse(value).success ||
+    /^[a-fA-F0-9]{24}$/.test(value),
   "Invalid identifier"
+);
+
+const optionalNullableIdSchema = z.preprocess(
+  (value) => (value === "" ? null : value),
+  idSchema.optional().nullable()
 );
 
 const paginationQuerySchema = z.object({
@@ -34,7 +47,7 @@ const updateCollegeSchema = z.object({
     isActive: z.boolean().optional(),
     confirmationText: z.string().trim().optional(),
   }),
-  params: z.object({ collegeId: z.string().cuid() }),
+  params: z.object({ collegeId: idSchema }),
   query: z.object({}).optional().default({}),
 });
 
@@ -83,7 +96,8 @@ const createAdminSchema = z.object({
     employeeId: z.string().trim().min(3),
     password: z.string().min(8),
     collegeId: idSchema,
-    departmentId: idSchema.optional().nullable(),
+    departmentId: idSchema,
+    accessProfile: z.enum(["VIEW_ONLY", "EDITOR"]).default("EDITOR"),
   }),
   params: z.object({}).optional().default({}),
   query: z.object({}).optional().default({}),
@@ -93,8 +107,9 @@ const updateAdminSchema = z.object({
   body: z.object({
     fullName: z.string().trim().min(2).optional(),
     collegeId: idSchema.optional(),
-    departmentId: idSchema.optional().nullable(),
+    departmentId: idSchema.optional(),
     isActive: z.boolean().optional(),
+    accessProfile: z.enum(["VIEW_ONLY", "EDITOR"]).optional(),
   }),
   params: z.object({ adminId: idSchema }),
   query: z.object({}).optional().default({}),
@@ -133,7 +148,7 @@ const createStudentGlobalSchema = z.object({
     collegeId: idSchema,
     departmentId: idSchema.optional(),
     department: z.string().trim().min(2).optional(),
-    batchId: idSchema.optional().nullable(),
+    batchId: optionalNullableIdSchema,
   }).superRefine((payload, ctx) => {
     if (!payload.departmentId && !payload.department) {
       ctx.addIssue({
@@ -216,6 +231,32 @@ const toggleStudentStatusSchema = z.object({
   query: z.object({}).optional().default({}),
 });
 
+const superAdminTestQuestionSchema = z.object({
+  prompt: z.string().trim().min(1),
+  type: z.enum(["MCQ", "TRUE_FALSE", "FILL_BLANK", "PARAGRAPH"]),
+  options: z.array(z.string()).optional().default([]),
+  correctOption: z.string().optional().nullable(),
+  correctBoolean: z.boolean().optional().nullable(),
+  correctText: z.string().optional().nullable(),
+  marks: z.number().int().min(1).default(1),
+});
+
+const standardProctoringDefaults = DEFAULT_TEST_CONFIGURATION.proctoringConfig;
+
+const superAdminRestrictionsSchema = z.object({
+  enabled: z.boolean().default(standardProctoringDefaults.enabled),
+  tabSwitch: z.union([z.boolean(), z.enum(["allowed", "monitored"])]).default(standardProctoringDefaults.tabSwitch),
+  copyPaste: z.union([z.boolean(), z.enum(["allowed", "monitored"])]).default(standardProctoringDefaults.copyPaste),
+  fullscreenRequired: z.boolean().default(standardProctoringDefaults.fullscreenRequired),
+  windowBlur: z.boolean().default(standardProctoringDefaults.windowBlur),
+  screenshotDetection: z.boolean().default(standardProctoringDefaults.screenshotDetection),
+  rightClickDisabled: z.boolean().default(standardProctoringDefaults.rightClickDisabled),
+  devtoolsDetection: z.boolean().default(standardProctoringDefaults.devtoolsDetection),
+  violationThreshold: z.number().int().min(1).max(20).default(standardProctoringDefaults.violationThreshold),
+  autoNextSingle: z.boolean().default(standardProctoringDefaults.autoNextSingle),
+  paragraphWordLimit: z.number().int().min(10).max(5000).default(standardProctoringDefaults.paragraphWordLimit),
+});
+
 const createGlobalTestSchema = z.object({
   body: z.object({
     title: z.string().trim().min(3),
@@ -228,21 +269,18 @@ const createGlobalTestSchema = z.object({
     startsAt: z.string().datetime(),
     endsAt: z.string().datetime(),
     allColleges: z.boolean().default(false),
-    collegeIds: z.array(z.string().cuid()).optional().default([]),
+    collegeIds: z.array(idSchema).optional().default([]),
     assignmentMethod: z.enum(["department_wise", "batch_wise"]).default("department_wise"),
-    departmentIds: z.array(z.string().cuid()).optional().default([]),
-    batchIds: z.array(z.string().cuid()).optional().default([]),
-    questions: z.array(
-      z.object({
-        prompt: z.string().trim().min(1),
-        type: z.enum(["MCQ", "TRUE_FALSE", "FILL_BLANK", "PARAGRAPH"]),
-        options: z.array(z.string()).optional().default([]),
-        correctOption: z.string().optional().nullable(),
-        correctBoolean: z.boolean().optional().nullable(),
-        correctText: z.string().optional().nullable(),
-        marks: z.number().int().min(1).default(1),
-      })
-    ).min(1),
+    departmentIds: z.array(idSchema).optional().default([]),
+    batchIds: z.array(idSchema).optional().default([]),
+    testType: z.enum([TEST_TYPES.STRICT, TEST_TYPES.STANDARD, TEST_TYPES.OPEN]).default(DEFAULT_TEST_CONFIGURATION.testType),
+    proctoringPreset: z.enum([
+      PROCTORING_PRESETS.STRICT_EXAM,
+      PROCTORING_PRESETS.STANDARD_TEST,
+      PROCTORING_PRESETS.OPEN_TEST,
+    ]).default(DEFAULT_TEST_CONFIGURATION.proctoringPreset),
+    restrictions: superAdminRestrictionsSchema.default({}),
+    questions: z.array(superAdminTestQuestionSchema).min(1),
   }),
   params: z.object({}).optional().default({}),
   query: z.object({}).optional().default({}),
@@ -254,16 +292,81 @@ const createGlobalTestSchema = z.object({
   if (input.body.assignmentMethod === "batch_wise" && (!Array.isArray(input.body.batchIds) || input.body.batchIds.length === 0)) {
     ctx.addIssue({ code: "custom", message: "At least one batch must be selected for batch-wise assignment" });
   }
+
+  if (Number(input.body?.restrictions?.paragraphWordLimit || 0) < 10) {
+    ctx.addIssue({ code: "custom", message: "Paragraph word limit must be at least 10" });
+  }
+});
+
+const testIdParamSchema = z.object({
+  body: z.object({}).optional().default({}),
+  params: z.object({
+    testId: idSchema,
+  }),
+  query: z.object({}).optional().default({}),
+});
+
+const updateGlobalTestSchema = z.object({
+  body: z.object({
+    title: z.string().trim().min(3),
+    subject: z.string().trim().min(2),
+    description: z.string().trim().optional(),
+    durationMins: z.number().int().min(5).max(480),
+    totalMarks: z.number().int().min(1),
+    attemptsAllowed: z.number().int().min(1).max(10).default(1),
+    evaluationRule: z.enum(["LAST_ATTEMPT", "BEST_ATTEMPT"]).default("BEST_ATTEMPT"),
+    startsAt: z.string().datetime(),
+    endsAt: z.string().datetime(),
+    allColleges: z.boolean().default(false),
+    collegeIds: z.array(idSchema).optional().default([]),
+    assignmentMethod: z.enum(["department_wise", "batch_wise"]).default("batch_wise"),
+    departmentIds: z.array(idSchema).optional().default([]),
+    batchIds: z.array(idSchema).optional().default([]),
+    testType: z.enum([TEST_TYPES.STRICT, TEST_TYPES.STANDARD, TEST_TYPES.OPEN]).default(DEFAULT_TEST_CONFIGURATION.testType),
+    proctoringPreset: z.enum([
+      PROCTORING_PRESETS.STRICT_EXAM,
+      PROCTORING_PRESETS.STANDARD_TEST,
+      PROCTORING_PRESETS.OPEN_TEST,
+    ]).default(DEFAULT_TEST_CONFIGURATION.proctoringPreset),
+    restrictions: superAdminRestrictionsSchema.default({}),
+    questions: z.array(superAdminTestQuestionSchema).min(1),
+  }),
+  params: z.object({
+    testId: idSchema,
+  }),
+  query: z.object({}).optional().default({}),
+}).superRefine((input, ctx) => {
+  if (input.body.assignmentMethod === "department_wise" && (!Array.isArray(input.body.departmentIds) || input.body.departmentIds.length === 0)) {
+    ctx.addIssue({ code: "custom", message: "At least one department must be selected for department-wise assignment" });
+  }
+
+  if (input.body.assignmentMethod === "batch_wise" && (!Array.isArray(input.body.batchIds) || input.body.batchIds.length === 0)) {
+    ctx.addIssue({ code: "custom", message: "At least one batch must be selected for batch-wise assignment" });
+  }
+
+  if (Number(input.body?.restrictions?.paragraphWordLimit || 0) < 10) {
+    ctx.addIssue({ code: "custom", message: "Paragraph word limit must be at least 10" });
+  }
+});
+
+const transitionGlobalTestStatusSchema = z.object({
+  body: z.object({
+    action: z.enum(["SCHEDULE", "GO_LIVE", "COMPLETE", "ARCHIVE"]),
+  }),
+  params: z.object({
+    testId: idSchema,
+  }),
+  query: z.object({}).optional().default({}),
 });
 
 const cloneTestSchema = z.object({
   body: z.object({
-    destinationCollegeId: z.string().cuid(),
+    destinationCollegeId: idSchema,
     assignmentMethod: z.enum(["department_wise", "batch_wise"]).default("batch_wise"),
-    departmentIds: z.array(z.string().cuid()).optional().default([]),
-    batchIds: z.array(z.string().cuid()).optional().default([]),
+    departmentIds: z.array(idSchema).optional().default([]),
+    batchIds: z.array(idSchema).optional().default([]),
   }),
-  params: z.object({ testId: z.string().cuid() }),
+  params: z.object({ testId: idSchema }),
   query: z.object({}).optional().default({}),
 }).superRefine((input, ctx) => {
   if (input.body.assignmentMethod === "department_wise" && (!Array.isArray(input.body.departmentIds) || input.body.departmentIds.length === 0)) {
@@ -275,34 +378,36 @@ const cloneTestSchema = z.object({
   }
 });
 
+const globalEventBodySchema = z.object({
+  title: z.string().trim().min(3),
+  description: z.string().trim().min(5),
+  eventType: z.enum(["Hackathon", "Symposium", "Workshop", "Other"]),
+  startsAt: z.string().datetime(),
+  endsAt: z.string().datetime().optional().nullable(),
+  eventDate: z.string().datetime().optional().nullable(),
+  registrationDeadline: z.string().datetime().optional().nullable(),
+  location: z.string().trim().optional().nullable(),
+  registrationLimit: z.number().int().min(1).max(10000).optional().nullable(),
+  maxParticipants: z.number().int().min(1).max(10000).optional().nullable(),
+  registrationUrl: z.string().url().optional().nullable(),
+  feeType: z.enum(["free", "paid"]).optional(),
+  registrationFee: z.number().min(0).optional(),
+  registrationFields: z.array(
+    z.object({
+      key: z.string().trim().min(1),
+      label: z.string().trim().min(1),
+      type: z.enum(["text", "email", "number", "select", "textarea"]),
+      required: z.boolean().default(false),
+      options: z.array(z.string().trim()).optional().default([]),
+      meta: z.record(z.any()).optional(),
+    })
+  ).optional().default([]),
+  allColleges: z.boolean().default(false),
+  collegeIds: z.array(idSchema).optional().default([]),
+});
+
 const createGlobalEventSchema = z.object({
-  body: z.object({
-    title: z.string().trim().min(3),
-    description: z.string().trim().min(5),
-    eventType: z.enum(["Hackathon", "Symposium", "Workshop", "Other"]),
-    startsAt: z.string().datetime(),
-    endsAt: z.string().datetime().optional().nullable(),
-    eventDate: z.string().datetime().optional().nullable(),
-    registrationDeadline: z.string().datetime().optional().nullable(),
-    location: z.string().trim().optional().nullable(),
-    registrationLimit: z.number().int().min(1).max(10000).optional().nullable(),
-    maxParticipants: z.number().int().min(1).max(10000).optional().nullable(),
-    registrationUrl: z.string().url().optional().nullable(),
-    feeType: z.enum(["free", "paid"]).optional(),
-    registrationFee: z.number().min(0).optional(),
-    registrationFields: z.array(
-      z.object({
-        key: z.string().trim().min(1),
-        label: z.string().trim().min(1),
-        type: z.enum(["text", "email", "number", "select", "textarea"]),
-        required: z.boolean().default(false),
-        options: z.array(z.string().trim()).optional().default([]),
-        meta: z.record(z.any()).optional(),
-      })
-    ).optional().default([]),
-    allColleges: z.boolean().default(false),
-    collegeIds: z.array(z.string().cuid()).optional().default([]),
-  }),
+  body: globalEventBodySchema,
   params: z.object({}).optional().default({}),
   query: z.object({}).optional().default({}),
 }).superRefine((input, ctx) => {
@@ -324,6 +429,41 @@ const createGlobalEventSchema = z.object({
   }
 });
 
+const updateGlobalEventSchema = z.object({
+  body: globalEventBodySchema.omit({ allColleges: true, collegeIds: true }).partial().refine((body) => Object.keys(body).length > 0, {
+    message: "At least one event field must be provided",
+  }),
+  params: z.object({
+    eventId: idSchema,
+  }),
+  query: z.object({}).optional().default({}),
+}).superRefine((input, ctx) => {
+  const startsAt = input.body.startsAt ? new Date(input.body.startsAt) : null;
+  const eventDate = input.body.eventDate ? new Date(input.body.eventDate) : startsAt;
+  const deadline = input.body.registrationDeadline ? new Date(input.body.registrationDeadline) : null;
+
+  if (deadline && eventDate && deadline > eventDate) {
+    ctx.addIssue({ code: "custom", message: "registration_deadline must be less than or equal to event_date" });
+  }
+
+  const maxParticipants = Number(input.body.maxParticipants ?? input.body.registrationLimit ?? 1);
+  if ((input.body.maxParticipants != null || input.body.registrationLimit != null) && (!Number.isFinite(maxParticipants) || maxParticipants < 1)) {
+    ctx.addIssue({ code: "custom", message: "max_participants must be at least 1" });
+  }
+
+  if (input.body.feeType === "paid" && Number(input.body.registrationFee || 0) <= 0) {
+    ctx.addIssue({ code: "custom", message: "registration_fee must be greater than 0 for paid events" });
+  }
+});
+
+const globalEventIdParamSchema = z.object({
+  body: z.object({}).optional().default({}),
+  params: z.object({
+    eventId: idSchema,
+  }),
+  query: z.object({}).optional().default({}),
+});
+
 const createSuperReportSchema = z.object({
   body: z.object({
     type: z.enum(["STUDENT_WISE", "TEST_WISE", "DEPARTMENT_WISE", "BATCH_WISE"]),
@@ -335,7 +475,7 @@ const createSuperReportSchema = z.object({
 
 const reportJobParamSchema = z.object({
   body: z.object({}).optional().default({}),
-  params: z.object({ reportJobId: z.string().cuid() }),
+  params: z.object({ reportJobId: idSchema }),
   query: z.object({}).optional().default({}),
 });
 
@@ -371,8 +511,13 @@ module.exports = {
   deleteBatchGlobalSchema,
   toggleStudentStatusSchema,
   createGlobalTestSchema,
+  updateGlobalTestSchema,
   cloneTestSchema,
+  testIdParamSchema,
+  transitionGlobalTestStatusSchema,
   createGlobalEventSchema,
+  updateGlobalEventSchema,
+  globalEventIdParamSchema,
   createSuperReportSchema,
   reportJobParamSchema,
   updatePlatformSettingsSchema,

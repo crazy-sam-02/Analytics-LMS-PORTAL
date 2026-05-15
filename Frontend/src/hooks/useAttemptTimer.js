@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 export const useAttemptTimer = ({ serverEndTime, onExpired }) => {
   const [remainingMs, setRemainingMs] = useState(() => Math.max(0, Number(serverEndTime || 0) - Date.now()));
-  const frameRef = useRef(null);
+  const intervalRef = useRef(null);
   const expiryTriggeredRef = useRef(false);
 
   useEffect(() => {
@@ -25,20 +25,24 @@ export const useAttemptTimer = ({ serverEndTime, onExpired }) => {
           expiryTriggeredRef.current = true;
           onExpired?.();
         }
-        return;
+        if (intervalRef.current) {
+          clearInterval(intervalRef.current);
+          intervalRef.current = null;
+        }
       }
-
-      frameRef.current = requestAnimationFrame(tick);
     };
 
-    frameRef.current = requestAnimationFrame(tick);
+    // Run once immediately, then every second
+    tick();
+    intervalRef.current = setInterval(tick, 1000);
 
     return () => {
-      if (frameRef.current) {
-        cancelAnimationFrame(frameRef.current);
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
       }
     };
-  }, [serverEndTime, onExpired]);
+  }, [serverEndTime]);
 
   return {
     remainingMs,

@@ -26,13 +26,19 @@ import {
 } from "@/features/Admin/testCreationSlice";
 import { fetchAdminTests, fetchBatches, fetchDepartments, fetchStudents } from "@/features/Admin/adminPanelSlice";
 import { fetchSuperColleges } from "@/features/SuperAdmin/superAdminPanelSlice";
-import { superAdminApi } from "@/services/api";
+import { adminApi, superAdminApi } from "@/services/api";
 import {
   fetchQuestionBankQuestions,
   fetchQuestionSubjects,
   setQuestionBankFilters,
   toggleQuestionBankSelected,
 } from "@/features/Admin/questionBankSlice";
+import {
+  PRESET_CONFIGS,
+  PROCTORING_PRESETS,
+  deriveTestTypeFromPreset,
+  getDefaultFormPatchFromAdminSettings,
+} from "@/lib/testConfig";
 
 // Custom UI Components (Replacing Shadcn)
 import { Button } from "@/components/ui/button"; 
@@ -63,7 +69,7 @@ const EVALUATION_RULE_OPTIONS = [
 const PUBLISH_STATE_OPTIONS = [
   { value: "DRAFT", label: "Save as Draft" },
   { value: "UPCOMING", label: "Schedule as Upcoming" },
-  { value: "PUBLISH_NOW", label: "Publish Immediately" },
+  { value: "PUBLISH", label: "Publish Immediately" },
 ];
 const QUESTION_TYPE_OPTIONS = [
   { value: "mcq", label: "MCQ" },
@@ -74,57 +80,51 @@ const QUESTION_TYPE_OPTIONS = [
 const DIFFICULTY_OPTIONS = ["EASY", "MEDIUM", "HARD"];
 const ADMIN_STUDENTS_PAGE_LIMIT = 100;
 
-const PROCTORING_PRESETS = {
-  STRICT_EXAM: {
-    fullscreenRequired: true,
-    tabSwitch: "monitored",
-    copyPaste: "monitored",
-    windowBlur: true,
-    screenshotDetection: true,
-    rightClickDisabled: true,
-    devtoolsDetection: true,
-    violationThreshold: 2,
-  },
-  STANDARD_TEST: {
-    fullscreenRequired: true,
-    tabSwitch: "monitored",
-    copyPaste: "allowed",
-    windowBlur: true,
-    screenshotDetection: false,
-    rightClickDisabled: true,
-    devtoolsDetection: true,
-    violationThreshold: 4,
-  },
-  OPEN_ASSIGNMENT: {
-    fullscreenRequired: false,
-    tabSwitch: "allowed",
-    copyPaste: "allowed",
-    windowBlur: false,
-    screenshotDetection: false,
-    rightClickDisabled: false,
-    devtoolsDetection: false,
-    violationThreshold: 8,
-  },
+const resolveDepartmentId = (departmentRef) => {
+  if (!departmentRef) return null;
+  if (typeof departmentRef === "string" || typeof departmentRef === "number") {
+    return departmentRef;
+  }
+  return departmentRef.id || departmentRef._id || departmentRef.departmentId || null;
 };
+
 export default function TestCreationDialog({ context = "admin", onCreated }) {
   const dispatch = useDispatch();
+  const isSuperAdminContext = context === "super_admin";
   const testCreation = useSelector((state) => state.testCreation);
   const departments = useSelector((state) => state.adminPanel.departments.data);
   const batches = useSelector((state) => state.adminPanel.batches.data);
   const students = useSelector((state) => state.adminPanel.students.data);
+  const studentUser = useSelector((state) => state.auth.user);
+  const adminUser = useSelector((state) => state.adminAuth.admin);
+  const superAdminUser = useSelector((state) => state.superAdminAuth.superAdmin);
+  const scopedUser = isSuperAdminContext ? superAdminUser : (adminUser || studentUser);
+  const currentUserDeptId = resolveDepartmentId(scopedUser?.departmentId || scopedUser?.department);
   const colleges = useSelector((state) => state.superAdminPanel.colleges);
   const qb = useSelector((state) => state.questionBank);
-  const { form, open, step, stepTitles, errors, isSubmitting, questionRenderLimit } = testCreation;
-  const isSuperAdminContext = context === "super_admin";
+  const { form, open, step, stepTitles, errors, isSubmitting, questionRenderLimit, mode } = testCreation;
+  const isEditMode = mode === "edit";
   const draftKey = isSuperAdminContext ? SUPER_ADMIN_DRAFT_KEY : ADMIN_DRAFT_KEY;
+  const visibleDepartments = isSuperAdminContext
+    ? departments
+    : Array.isArray(departments)
+    ? departments.filter((d) => String(d.id) === String(currentUserDeptId))
+    : departments;
+  const visibleStudents = isSuperAdminContext
+    ? students
+    : Array.isArray(students)
+    ? students.filter((s) => String(s.departmentId) === String(currentUserDeptId))
+    : students;
   const [bulkJson, setBulkJson] = useState("");
   const [quickEditIndex, setQuickEditIndex] = useState(null);
-  const [publishDialog, setPublishDialog] = useState({ open: false, publishState: "PUBLISH_NOW" });
+  const [publishDialog, setPublishDialog] = useState({ open: false, publishState: "PUBLISH" });
   const [isConfirmPublishing, setIsConfirmPublishing] = useState(false);
   const [externalDraftWarning, setExternalDraftWarning] = useState(false);
   const [qbPage, setQbPage] = useState(1);
   const [superDepartments, setSuperDepartments] = useState([]);
   const [superBatches, setSuperBatches] = useState([]);
+  const [superDepartmentsLoaded, setSuperDepartmentsLoaded] = useState(false);
+  const [superBatchesLoaded, setSuperBatchesLoaded] = useState(false);
 
   const resetBodyInteractionLock = () => {
     document.body.style.pointerEvents = "";
@@ -133,13 +133,52 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
   // Persistence and Fetching
   useEffect(() => {
     dispatch(setTestCreationContext(context));
-    const raw = localStorage.getItem(draftKey);
-    if (raw) {
-      try { dispatch(hydrateTestCreationDraft(JSON.parse(raw))); } catch { localStorage.removeItem(draftKey); }
+    if (!open || isEditMode) {
+      return undefined;
     }
-  }, [context, dispatch, draftKey]);
 
-  useEffect(() => { localStorage.setItem(draftKey, JSON.stringify(form)); }, [draftKey, form]);
+    let cancelled = false;
+
+    const hydrateCreateDefaults = async () => {
+      const raw = localStorage.getItem(draftKey);
+      if (raw) {
+        try {
+          if (!cancelled) {
+            dispatch(hydrateTestCreationDraft(JSON.parse(raw)));
+          }
+          return;
+        } catch {
+          localStorage.removeItem(draftKey);
+        }
+      }
+
+      if (isSuperAdminContext) {
+        return;
+      }
+
+      try {
+        const response = await adminApi.getSettings();
+        if (!cancelled) {
+          dispatch(hydrateTestCreationDraft(getDefaultFormPatchFromAdminSettings(response?.settings)));
+        }
+      } catch {
+        // Keep local defaults if settings fetch fails.
+      }
+    };
+
+    hydrateCreateDefaults();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [context, dispatch, draftKey, isEditMode, isSuperAdminContext, open]);
+
+  useEffect(() => {
+    if (!open || isEditMode) {
+      return;
+    }
+    localStorage.setItem(draftKey, JSON.stringify(form));
+  }, [draftKey, form, isEditMode, open]);
 
   useEffect(() => {
     if (open) {
@@ -158,6 +197,17 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
   }, [dispatch, isSuperAdminContext, open]);
 
   useEffect(() => {
+    if (!open || isSuperAdminContext) return;
+    if (!currentUserDeptId) return;
+    if (form.assignmentMethod === "everyone") {
+      dispatch(updateTestCreationField({ key: "assignmentMethod", value: "department_wise" }));
+    }
+    if (String(form.departmentId || "") !== String(currentUserDeptId)) {
+      dispatch(updateTestCreationField({ key: "departmentId", value: currentUserDeptId }));
+    }
+  }, [currentUserDeptId, dispatch, form.assignmentMethod, form.departmentId, isSuperAdminContext, open]);
+
+  useEffect(() => {
     return () => {
       document.body.style.overflow = "unset";
       resetBodyInteractionLock();
@@ -166,12 +216,15 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
 
   useEffect(() => {
     if (!isSuperAdminContext || !open) {
+      setSuperDepartments([]);
+      setSuperDepartmentsLoaded(false);
       return;
     }
 
     let cancelled = false;
 
     const loadSuperDepartments = async () => {
+      setSuperDepartmentsLoaded(false);
       try {
         const firstPage = await superAdminApi.getDepartments("?page=1&limit=100");
         const firstItems = Array.isArray(firstPage?.data) ? firstPage.data : [];
@@ -180,6 +233,7 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
         if (totalPages <= 1) {
           if (!cancelled) {
             setSuperDepartments(firstItems);
+            setSuperDepartmentsLoaded(true);
           }
           return;
         }
@@ -197,10 +251,12 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
         const deduped = Array.from(new Map(merged.map((item) => [item.id, item])).values());
         if (!cancelled) {
           setSuperDepartments(deduped);
+          setSuperDepartmentsLoaded(true);
         }
       } catch {
         if (!cancelled) {
           setSuperDepartments([]);
+          setSuperDepartmentsLoaded(true);
         }
       }
     };
@@ -214,12 +270,36 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
 
   useEffect(() => {
     if (!isSuperAdminContext || !open) {
+      setSuperBatches([]);
+      setSuperBatchesLoaded(false);
       return;
     }
 
     let cancelled = false;
 
+    const loadCollegeBatches = async (collegeId) => {
+      const firstPage = await superAdminApi.getBatches(`?page=1&limit=100&collegeId=${collegeId}`);
+      const firstItems = Array.isArray(firstPage?.data) ? firstPage.data : [];
+      const totalPages = Number(firstPage?.pagination?.pages || 1);
+
+      if (totalPages <= 1) {
+        return firstItems;
+      }
+
+      const pageRequests = [];
+      for (let page = 2; page <= totalPages; page += 1) {
+        pageRequests.push(superAdminApi.getBatches(`?page=${page}&limit=100&collegeId=${collegeId}`));
+      }
+
+      const restPages = await Promise.all(pageRequests);
+      return [
+        ...firstItems,
+        ...restPages.flatMap((result) => (Array.isArray(result?.data) ? result.data : [])),
+      ];
+    };
+
     const loadSuperBatches = async () => {
+      setSuperBatchesLoaded(false);
       const scopedCollegeIds = form.allColleges
         ? (colleges || []).map((item) => item.id)
         : (Array.isArray(form.collegeIds) ? form.collegeIds : []);
@@ -227,22 +307,25 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
       if (!scopedCollegeIds.length) {
         if (!cancelled) {
           setSuperBatches([]);
+          setSuperBatchesLoaded(true);
         }
         return;
       }
 
       try {
         const responses = await Promise.all(
-          scopedCollegeIds.map((collegeId) => superAdminApi.getBatches(`?page=1&limit=100&collegeId=${collegeId}`))
+          scopedCollegeIds.map((collegeId) => loadCollegeBatches(collegeId))
         );
-        const merged = responses.flatMap((result) => (Array.isArray(result?.data) ? result.data : []));
+        const merged = responses.flatMap((result) => (Array.isArray(result) ? result : []));
         const deduped = Array.from(new Map(merged.map((item) => [item.id, item])).values());
         if (!cancelled) {
           setSuperBatches(deduped);
+          setSuperBatchesLoaded(true);
         }
       } catch {
         if (!cancelled) {
           setSuperBatches([]);
+          setSuperBatchesLoaded(true);
         }
       }
     };
@@ -308,16 +391,91 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
 
   const visibleSuperBatches = useMemo(() => {
     if (form.assignmentMethod !== "batch_wise") return [];
-    return superBatches.filter((batch) => {
-      if (!form.allColleges && Array.isArray(form.collegeIds) && form.collegeIds.length > 0 && !form.collegeIds.includes(batch.collegeId)) {
-        return false;
+    // For batch-wise assignment, ONLY show batches from selected departments
+    // Do NOT show entire college batches
+    if (!Array.isArray(form.departmentIds) || form.departmentIds.length === 0) {
+      return [];
+    }
+    return superBatches.filter((batch) => form.departmentIds.includes(batch.departmentId));
+  }, [form.assignmentMethod, form.departmentIds, superBatches]);
+
+  useEffect(() => {
+    if (!isSuperAdminContext || !open) {
+      return;
+    }
+
+    const scopedCollegeIds = form.allColleges
+      ? (Array.isArray(colleges) ? colleges.map((college) => college.id) : [])
+      : (Array.isArray(form.collegeIds) ? form.collegeIds : []);
+
+    const scopedCollegeSet = new Set(scopedCollegeIds);
+    const currentDepartmentIds = Array.isArray(form.departmentIds) ? form.departmentIds : [];
+
+    if (superDepartmentsLoaded) {
+      const scopedDepartments = superDepartments.filter((department) => {
+        if (form.allColleges) return true;
+        if (!scopedCollegeSet.size) return false;
+        return scopedCollegeSet.has(department.collegeId);
+      });
+      const allowedDepartmentIds = new Set(scopedDepartments.map((department) => department.id));
+      const nextDepartmentIds = currentDepartmentIds.filter((id) => allowedDepartmentIds.has(id));
+
+      if (
+        nextDepartmentIds.length !== currentDepartmentIds.length
+        || nextDepartmentIds.some((id, index) => id !== currentDepartmentIds[index])
+      ) {
+        dispatch(updateTestCreationField({ key: "departmentIds", value: nextDepartmentIds }));
+        return;
       }
-      if (Array.isArray(form.departmentIds) && form.departmentIds.length > 0) {
-        return form.departmentIds.includes(batch.departmentId);
+    }
+
+    const currentBatchIds = Array.isArray(form.batchIds) ? form.batchIds : [];
+
+    if (form.assignmentMethod === "department_wise") {
+      if (currentBatchIds.length > 0) {
+        dispatch(updateTestCreationField({ key: "batchIds", value: [] }));
       }
-      return true;
-    });
-  }, [form.allColleges, form.assignmentMethod, form.collegeIds, form.departmentIds, superBatches]);
+      return;
+    }
+
+    if (!superBatchesLoaded) {
+      return;
+    }
+
+    // For batch-wise assignment, only allow batches from selected departments
+    const allowedBatchIds = new Set(
+      superBatches
+        .filter((batch) => {
+          if (!Array.isArray(form.departmentIds) || form.departmentIds.length === 0) {
+            return false; // No batches allowed if no departments selected
+          }
+          return form.departmentIds.includes(batch.departmentId);
+        })
+        .map((batch) => batch.id)
+    );
+
+    const nextBatchIds = currentBatchIds.filter((id) => allowedBatchIds.has(id));
+    if (
+      nextBatchIds.length !== currentBatchIds.length
+      || nextBatchIds.some((id, index) => id !== currentBatchIds[index])
+    ) {
+      dispatch(updateTestCreationField({ key: "batchIds", value: nextBatchIds }));
+    }
+  }, [
+    colleges,
+    dispatch,
+    form.allColleges,
+    form.assignmentMethod,
+    form.batchIds,
+    form.collegeIds,
+    form.departmentIds,
+    isSuperAdminContext,
+    open,
+    superBatches,
+    superBatchesLoaded,
+    superDepartments,
+    superDepartmentsLoaded,
+  ]);
 
   const groupedDepartmentsByCollege = useMemo(() => {
     return scopedSuperDepartments.reduce((acc, department) => {
@@ -403,8 +561,8 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
     if (timePerQuestion > 0 && timePerQuestion < 1) warnings.push("Too many questions for the configured duration.");
     if (normalizedQuestions.some((item) => !item.topic)) warnings.push("Some questions are missing topic tags.");
     if (form.shuffleQuestions && normalizedQuestions.some((item) => item.type === "true_false")) warnings.push("True/False with question shuffle can increase accidental mismatches.");
-    if (Number(form.restrictions.violationThreshold || 0) > 8) warnings.push("High violation threshold may allow repeated cheating behavior.");
-    if (form.restrictions.devtoolsDetection && /code|programming|algorithm/i.test(String(form.subject || ""))) {
+    if (form.restrictions.enabled && Number(form.restrictions.violationThreshold || 0) > 8) warnings.push("High violation threshold may allow repeated cheating behavior.");
+    if (form.restrictions.enabled && form.restrictions.devtoolsDetection && /code|programming|algorithm/i.test(String(form.subject || ""))) {
       warnings.push("Devtools detection enabled for coding-oriented test. Verify policy intent.");
     }
 
@@ -419,18 +577,19 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
       invalidIndexes,
       warnings,
     };
-  }, [normalizedQuestions, form.durationMins, form.shuffleQuestions, form.restrictions.devtoolsDetection, form.restrictions.violationThreshold, form.subject]);
+  }, [normalizedQuestions, form.durationMins, form.shuffleQuestions, form.restrictions.devtoolsDetection, form.restrictions.enabled, form.restrictions.violationThreshold, form.subject]);
 
   const assignedStudentsCount = useMemo(() => {
-    if (!Array.isArray(students) || students.length === 0) return 0;
+    const pool = isSuperAdminContext ? students : visibleStudents;
+    if (!Array.isArray(pool) || pool.length === 0) return 0;
     if (form.assignmentMethod === "batch_wise") {
-      return students.filter((student) => form.batchIds.includes(student.batchId)).length;
+      return pool.filter((student) => form.batchIds.includes(student.batchId)).length;
     }
     if (form.departmentId) {
-      return students.filter((student) => student.departmentId === form.departmentId).length;
+      return pool.filter((student) => student.departmentId === form.departmentId).length;
     }
-    return students.length;
-  }, [students, form.assignmentMethod, form.batchIds, form.departmentId]);
+    return pool.length;
+  }, [students, visibleStudents, isSuperAdminContext, form.assignmentMethod, form.batchIds, form.departmentId]);
 
   const publishChecklist = useMemo(() => {
     const scheduleValid = Boolean(form.startsAt && form.endsAt && new Date(form.endsAt).getTime() > new Date(form.startsAt).getTime());
@@ -542,7 +701,7 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
     }
   };
 
-  const handleSubmit = async (formOverrides = {}) => {
+  const handleSubmit = async (formOverrides = {}, options = { allowAutoOverlapRetry: true }) => {
     const nextForm = { ...form, ...formOverrides };
     const nextState = { ...testCreation, form: nextForm };
 
@@ -572,11 +731,20 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
       } else {
         dispatch(fetchAdminTests());
       }
-      localStorage.removeItem(draftKey);
-      toast.success("Test created successfully");
+      if (!isEditMode) {
+        localStorage.removeItem(draftKey);
+      }
+      toast.success(isEditMode ? "Test updated successfully" : "Test created successfully");
     } catch (error) {
-      const message = String(error || "Failed to create test");
+      const message = String(error || (isEditMode ? "Failed to update test" : "Failed to create test"));
       if (message.includes("Overlapping active test detected")) {
+        if (!nextForm.skipOverlapCheck && nextForm.publishState !== "DRAFT" && options.allowAutoOverlapRetry) {
+          dispatch(updateTestCreationField({ key: "skipOverlapCheck", value: true }));
+          toast.info("Overlapping active test detected. Retrying publish with overlap mode enabled...");
+          await handleSubmit({ ...formOverrides, skipOverlapCheck: true }, { allowAutoOverlapRetry: false });
+          return;
+        }
+
         if (!nextForm.skipOverlapCheck) {
           dispatch(updateTestCreationField({ key: "skipOverlapCheck", value: true }));
         }
@@ -680,56 +848,56 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
 
   const resolvedPrimaryPublishState = form.publishState && form.publishState !== "DRAFT"
     ? form.publishState
-    : "PUBLISH_NOW";
+    : "PUBLISH";
 
   if (!open) return (
-    <Button onClick={() => dispatch(openTestCreationDialog())} className="bg-blue-600 hover:bg-blue-700">
+    <Button onClick={() => dispatch(openTestCreationDialog())} className="bg-primary hover:bg-primary-dark">
       Create Test
     </Button>
   );
 
   return (
     // --- OVERLAY WRAPPER ---
-    <div className="fixed inset-0 z-100 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-100 bg-primary-dark/40 backdrop-blur-sm animate-in fade-in duration-200">
       
       {/* --- MODAL CONTAINER (The Overlay Box) --- */}
-      <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-slate-100">
+      <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-muted">
         
         {/* Close Button */}
         <button 
           onClick={handleClose}
-          className="absolute right-4 top-4 z-50 rounded-full p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 lg:right-6 lg:top-6"
+          className="absolute right-4 top-4 z-50 rounded-full p-2 text-text-secondary hover:bg-muted hover:text-text-secondary lg:right-6 lg:top-6"
         >
           <X size={20} />
         </button>
 
-        <header className="border-b border-slate-200 bg-white px-5 py-5 sm:px-6 lg:px-8">
+        <header className="border-b border-border bg-card px-5 py-5 sm:px-6 lg:px-8">
           <div className="pr-12">
             <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
               <div className="space-y-2">
-                <h2 className="text-2xl font-semibold tracking-tight text-slate-900">Create Test</h2>
-                <p className="max-w-3xl text-sm text-slate-500">
+                <h2 className="text-2xl font-semibold tracking-tight text-text-primary">{isEditMode ? "Edit Test" : "Create Test"}</h2>
+                <p className="max-w-3xl text-sm text-text-secondary">
                   Build, review, and publish assessments from a full-page workspace with guided steps and live preview.
                 </p>
               </div>
 
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:min-w-95">
-                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 shadow-sm transition-all duration-200 hover:shadow-md">
-                  <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Current Step</p>
-                  <p className="mt-1 text-sm font-semibold text-slate-900">
+                <div className="rounded-xl border border-border bg-background px-4 py-3 shadow-sm transition-all duration-200 hover:shadow-md">
+                  <p className="text-xs font-medium uppercase tracking-wide text-text-secondary">Current Step</p>
+                  <p className="mt-1 text-sm font-semibold text-text-primary">
                     {step + 1} / {stepTitles.length}
                   </p>
-                  <p className="mt-1 text-xs text-slate-500">{stepTitles[step]}</p>
+                  <p className="mt-1 text-xs text-text-secondary">{stepTitles[step]}</p>
                 </div>
-                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 shadow-sm transition-all duration-200 hover:shadow-md">
-                  <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Questions</p>
-                  <p className="mt-1 text-sm font-semibold text-slate-900">{form.questions.length}</p>
-                  <p className="mt-1 text-xs text-slate-500">Ready for assessment flow</p>
+                <div className="rounded-xl border border-border bg-background px-4 py-3 shadow-sm transition-all duration-200 hover:shadow-md">
+                  <p className="text-xs font-medium uppercase tracking-wide text-text-secondary">Questions</p>
+                  <p className="mt-1 text-sm font-semibold text-text-primary">{form.questions.length}</p>
+                  <p className="mt-1 text-xs text-text-secondary">Ready for assessment flow</p>
                 </div>
-                <div className="col-span-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 shadow-sm transition-all duration-200 hover:shadow-md sm:col-span-1">
-                  <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Assigned Batches</p>
-                  <p className="mt-1 text-sm font-semibold text-slate-900">{form.batchIds.length}</p>
-                  <p className="mt-1 text-xs text-slate-500">Audience currently selected</p>
+                <div className="col-span-2 rounded-xl border border-border bg-background px-4 py-3 shadow-sm transition-all duration-200 hover:shadow-md sm:col-span-1">
+                  <p className="text-xs font-medium uppercase tracking-wide text-text-secondary">Assigned Batches</p>
+                  <p className="mt-1 text-sm font-semibold text-text-primary">{form.batchIds.length}</p>
+                  <p className="mt-1 text-xs text-text-secondary">Audience currently selected</p>
                 </div>
               </div>
             </div>
@@ -737,7 +905,7 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
         </header>
 
         <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-12">
-          <aside className="order-1 hidden border-r border-slate-200 bg-white px-4 py-6 lg:col-span-2 lg:block">
+          <aside className="order-1 hidden border-r border-border bg-card px-4 py-6 lg:col-span-2 lg:block">
             <div className="space-y-3">
               {stepTitles.map((title, index) => {
                 const isActive = step === index;
@@ -751,22 +919,22 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                     onClick={() => handleStepJump(index)}
                     className={`flex w-full items-start gap-3 rounded-xl border px-3 py-2.5 text-left transition-all ${
                       isActive
-                        ? "border-blue-600 bg-blue-50"
-                        : "border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white"
+                        ? "border-primary bg-primary/10"
+                        : "border-border bg-background hover:border-border hover:bg-card"
                     }`}
                   >
                     <span
                       className={`mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
                         isActive
-                          ? "bg-blue-600 text-white"
+                          ? "bg-primary text-primary-foreground"
                           : isCompleted
-                            ? "bg-emerald-600 text-white"
-                            : "bg-white text-slate-500"
+                            ? "bg-success text-primary-foreground"
+                            : "bg-card text-text-secondary"
                       }`}
                     >
                       {index + 1}
                     </span>
-                    <span className="text-sm font-medium text-slate-700">{title}</span>
+                    <span className="text-sm font-medium text-text-secondary">{title}</span>
                   </button>
                 );
               })}
@@ -774,52 +942,52 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
           </aside>
 
           {/* --- RIGHT PREVIEW PANEL --- */}
-          <aside className="order-3 border-t border-slate-200 bg-slate-50/70 p-4 sm:p-6 lg:col-span-3 lg:order-3 lg:border-l lg:border-t-0 lg:p-6">
+          <aside className="order-3 border-t border-border bg-background/70 p-4 sm:p-6 lg:col-span-3 lg:order-3 lg:border-l lg:border-t-0 lg:p-6">
             <div className="lg:sticky lg:top-6">
-              <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition-all duration-200 hover:shadow-md">
+              <div className="rounded-2xl border border-border bg-card p-6 shadow-sm transition-all duration-200 hover:shadow-md">
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <h2 className="text-lg font-semibold text-slate-900">Live Preview</h2>
-                    <p className="mt-1 text-sm text-slate-500">A running summary of the test you are shaping.</p>
+                    <h2 className="text-lg font-semibold text-text-primary">Live Preview</h2>
+                    <p className="mt-1 text-sm text-text-secondary">A running summary of the test you are shaping.</p>
                   </div>
-                  <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
+                  <span className="rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
                     {stepTitles[step]}
                   </span>
                 </div>
 
                 <div className="mt-6 space-y-4">
                   <div className="space-y-1">
-                    <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Test Name</p>
-                    <p className="wrap-break-word text-base font-semibold text-slate-900">{form.name || "Untitled Test"}</p>
+                    <p className="text-xs font-medium uppercase tracking-wide text-text-secondary">Test Name</p>
+                    <p className="wrap-break-word text-base font-semibold text-text-primary">{form.name || "Untitled Test"}</p>
                   </div>
 
                   <div className="space-y-1">
-                    <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Subject</p>
-                    <p className="wrap-break-word text-sm text-slate-700">{form.subject || "No subject selected"}</p>
+                    <p className="text-xs font-medium uppercase tracking-wide text-text-secondary">Subject</p>
+                    <p className="wrap-break-word text-sm text-text-secondary">{form.subject || "No subject selected"}</p>
                   </div>
 
                   <div className="grid grid-cols-2 gap-3">
-                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 shadow-sm transition-all duration-200 hover:bg-white">
-                      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Duration</p>
-                      <p className="mt-1 text-base font-semibold text-slate-900">{form.durationMins || 0} mins</p>
+                    <div className="rounded-xl border border-border bg-background p-4 shadow-sm transition-all duration-200 hover:bg-card">
+                      <p className="text-xs font-medium uppercase tracking-wide text-text-secondary">Duration</p>
+                      <p className="mt-1 text-base font-semibold text-text-primary">{form.durationMins || 0} mins</p>
                     </div>
-                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 shadow-sm transition-all duration-200 hover:bg-white">
-                      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Total Questions</p>
-                      <p className="mt-1 text-base font-semibold text-slate-900">{form.questions.length}</p>
+                    <div className="rounded-xl border border-border bg-background p-4 shadow-sm transition-all duration-200 hover:bg-card">
+                      <p className="text-xs font-medium uppercase tracking-wide text-text-secondary">Total Questions</p>
+                      <p className="mt-1 text-base font-semibold text-text-primary">{form.questions.length}</p>
                     </div>
-                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 shadow-sm transition-all duration-200 hover:bg-white">
-                      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Assigned Batches</p>
-                      <p className="mt-1 text-base font-semibold text-slate-900">{form.batchIds.length}</p>
+                    <div className="rounded-xl border border-border bg-background p-4 shadow-sm transition-all duration-200 hover:bg-card">
+                      <p className="text-xs font-medium uppercase tracking-wide text-text-secondary">Assigned Batches</p>
+                      <p className="mt-1 text-base font-semibold text-text-primary">{form.batchIds.length}</p>
                     </div>
-                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 shadow-sm transition-all duration-200 hover:bg-white">
-                      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Publish Mode</p>
-                      <p className="mt-1 text-base font-semibold text-slate-900">{form.publishState}</p>
+                    <div className="rounded-xl border border-border bg-background p-4 shadow-sm transition-all duration-200 hover:bg-card">
+                      <p className="text-xs font-medium uppercase tracking-wide text-text-secondary">Publish Mode</p>
+                      <p className="mt-1 text-base font-semibold text-text-primary">{form.publishState}</p>
                     </div>
                   </div>
 
-                  <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3">
-                    <p className="text-xs font-medium uppercase tracking-wide text-blue-700">Auto-save enabled</p>
-                    <p className="mt-1 text-xs text-blue-600">Your progress is saved locally in this browser.</p>
+                  <div className="rounded-xl border border-primary/20 bg-primary/10 px-4 py-3">
+                    <p className="text-xs font-medium uppercase tracking-wide text-primary">Auto-save enabled</p>
+                    <p className="mt-1 text-xs text-primary">Your progress is saved locally in this browser.</p>
                   </div>
                 </div>
               </div>
@@ -828,8 +996,8 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
 
           {/* --- RIGHT CONTENT AREA --- */}
           <main className="order-2 flex min-w-0 flex-1 flex-col overflow-hidden lg:col-span-7 lg:order-2">
-            <header className="border-b border-slate-200 bg-white px-4 py-4 lg:hidden">
-              <h3 className="text-lg font-semibold text-slate-900">{stepTitles[step]}</h3>
+            <header className="border-b border-border bg-card px-4 py-4 lg:hidden">
+              <h3 className="text-lg font-semibold text-text-primary">{stepTitles[step]}</h3>
             </header>
 
           {/* Scrollable Form Body */}
@@ -838,24 +1006,24 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
               
               {/* Step 0: Basic Info */}
               {step === 0 && (
-                <section className="space-y-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition-all duration-200 animate-in slide-in-from-bottom-2 hover:shadow-md lg:p-6">
+                <section className="space-y-6 rounded-2xl border border-border bg-card p-5 shadow-sm transition-all duration-200 animate-in slide-in-from-bottom-2 hover:shadow-md lg:p-6">
                   <header className="space-y-2">
-                    <h1 className="text-lg font-semibold text-slate-900">Basic Information</h1>
-                    <p className="text-sm text-slate-500">Define the core identity of your test.</p>
+                    <h1 className="text-lg font-semibold text-text-primary">Basic Information</h1>
+                    <p className="text-sm text-text-secondary">Define the core identity of your test.</p>
                   </header>
                   <div className="grid gap-6">
                     <div className="grid space-y-2">
-                      <label className="text-sm text-gray-600">Test Title</label>
+                      <label className="text-sm text-text-secondary">Test Title</label>
                       <Input 
                         className="max-w-lg"
                         placeholder="e.g. End Semester Theory" 
                         value={form.name} 
                         onChange={(e) => dispatch(updateTestCreationField({ key: "name", value: e.target.value }))}
                       />
-                      {errors.name ? <p className="text-xs text-red-600">{errors.name}</p> : null}
+                      {errors.name ? <p className="text-xs text-danger">{errors.name}</p> : null}
                     </div>
                     <div className="space-y-2">
-                      <label className="text-sm text-gray-600">Description</label>
+                      <label className="text-sm text-text-secondary">Description</label>
                       <Textarea
                         className="max-w-2xl"
                         rows={4}
@@ -865,25 +1033,25 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                       />
                     </div>
                     <div className="space-y-2">
-                      <label className="text-sm text-gray-600">Subject Category</label>
+                      <label className="text-sm text-text-secondary">Subject Category</label>
                       <Select value={form.subject} onValueChange={(v) => dispatch(updateTestCreationField({ key: "subject", value: v }))}>
                         <SelectTrigger className="max-w-md"><SelectValue placeholder="Select a subject" /></SelectTrigger>
                         <SelectContent>
                           {SUBJECT_OPTIONS.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
                         </SelectContent>
                       </Select>
-                      {errors.subject ? <p className="text-xs text-red-600">{errors.subject}</p> : null}
+                      {errors.subject ? <p className="text-xs text-danger">{errors.subject}</p> : null}
                     </div>
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-2">
-                        <label className="text-sm text-gray-600">Total Marks</label>
+                        <label className="text-sm text-text-secondary">Total Marks</label>
                         <Input className="max-w-md" type="text" value={form.totalMarks} onChange={(e) => dispatch(updateTestCreationField({ key: "totalMarks", value: Number(e.target.value) }))} />
-                        {errors.totalMarks ? <p className="text-xs text-red-600">{errors.totalMarks}</p> : null}
+                        {errors.totalMarks ? <p className="text-xs text-danger">{errors.totalMarks}</p> : null}
                       </div>
                       <div className="space-y-2">
-                        <label className="text-sm text-gray-600">Duration (Mins)</label>
+                        <label className="text-sm text-text-secondary">Duration (Mins)</label>
                         <Input className="max-w-md" type="number" value={form.durationMins} onChange={(e) => dispatch(updateTestCreationField({ key: "durationMins", value: Number(e.target.value) }))} />
-                        {errors.durationMins ? <p className="text-xs text-red-600">{errors.durationMins}</p> : null}
+                        {errors.durationMins ? <p className="text-xs text-danger">{errors.durationMins}</p> : null}
                       </div>
                     </div>
                   </div>
@@ -891,39 +1059,39 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
               )}
 
               {step === 1 && (
-                <section className="space-y-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition-all duration-200 animate-in slide-in-from-bottom-2 hover:shadow-md lg:p-6">
+                <section className="space-y-6 rounded-2xl border border-border bg-card p-5 shadow-sm transition-all duration-200 animate-in slide-in-from-bottom-2 hover:shadow-md lg:p-6">
                   <header className="space-y-2">
-                    <h1 className="flex items-center gap-2 text-lg font-semibold text-slate-900"><Clock className="h-5 w-5 text-blue-600" /> Timing & Attempts</h1>
-                    <p className="text-sm text-slate-500">Set schedule and attempt evaluation rules.</p>
+                    <h1 className="flex items-center gap-2 text-lg font-semibold text-text-primary"><Clock className="h-5 w-5 text-primary" /> Timing & Attempts</h1>
+                    <p className="text-sm text-text-secondary">Set schedule and attempt evaluation rules.</p>
                   </header>
 
                   <div className="grid gap-6">
                     <div className="grid gap-4 md:grid-cols-2">
                       <div className="space-y-2">
-                        <label className="text-sm text-gray-600">Starts At</label>
+                        <label className="text-sm text-text-secondary">Starts At</label>
                         <Input
                           className="max-w-md"
                           type="datetime-local"
                           value={form.startsAt}
                           onChange={(e) => dispatch(updateTestCreationField({ key: "startsAt", value: e.target.value }))}
                         />
-                        {errors.startsAt ? <p className="text-xs text-red-600">{errors.startsAt}</p> : null}
+                        {errors.startsAt ? <p className="text-xs text-danger">{errors.startsAt}</p> : null}
                       </div>
                       <div className="space-y-2">
-                        <label className="text-sm text-gray-600">Ends At</label>
+                        <label className="text-sm text-text-secondary">Ends At</label>
                         <Input
                           className="max-w-md"
                           type="datetime-local"
                           value={form.endsAt}
                           onChange={(e) => dispatch(updateTestCreationField({ key: "endsAt", value: e.target.value }))}
                         />
-                        {errors.endsAt ? <p className="text-xs text-red-600">{errors.endsAt}</p> : null}
+                        {errors.endsAt ? <p className="text-xs text-danger">{errors.endsAt}</p> : null}
                       </div>
                     </div>
 
                     <div className="grid gap-4 md:grid-cols-2">
                       <div className="space-y-2">
-                        <label className="text-sm text-gray-600">Attempts Allowed</label>
+                        <label className="text-sm text-text-secondary">Attempts Allowed</label>
                         <Input
                           className="max-w-md"
                           type="number"
@@ -932,10 +1100,10 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                           value={form.attemptsAllowed}
                           onChange={(e) => dispatch(updateTestCreationField({ key: "attemptsAllowed", value: Number(e.target.value) }))}
                         />
-                        {errors.attemptsAllowed ? <p className="text-xs text-red-600">{errors.attemptsAllowed}</p> : null}
+                        {errors.attemptsAllowed ? <p className="text-xs text-danger">{errors.attemptsAllowed}</p> : null}
                       </div>
                       <div className="space-y-2">
-                        <label className="text-sm text-gray-600">Evaluation Rule</label>
+                        <label className="text-sm text-text-secondary">Evaluation Rule</label>
                         <Select
                           value={form.evaluationRule}
                           onValueChange={(value) => dispatch(updateTestCreationField({ key: "evaluationRule", value }))}
@@ -951,11 +1119,11 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                     </div>
 
                     <div className="space-y-2">
-                      <label className="text-sm text-gray-600">Overlap Policy</label>
-                      <label className="flex max-w-md items-center justify-between rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-sm text-slate-700">
+                      <label className="text-sm text-text-secondary">Overlap Policy</label>
+                      <label className="flex max-w-md items-center justify-between rounded-xl border border-warning/30 bg-warning/10/70 px-4 py-3 text-sm text-text-secondary">
                         <span>
                           Allow overlapping active tests
-                          <span className="mt-1 block text-xs text-slate-500">Use only if overlapping schedules are intentionally required.</span>
+                          <span className="mt-1 block text-xs text-text-secondary">Use only if overlapping schedules are intentionally required.</span>
                         </span>
                         <Checkbox
                           checked={Boolean(form.skipOverlapCheck)}
@@ -968,44 +1136,50 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
               )}
 
               {step === 2 && (
-                <section className="space-y-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition-all duration-200 animate-in slide-in-from-bottom-2 hover:shadow-md lg:p-6">
+                <section className="space-y-6 rounded-2xl border border-border bg-card p-5 shadow-sm transition-all duration-200 animate-in slide-in-from-bottom-2 hover:shadow-md lg:p-6">
                   <header className="space-y-2">
-                    <h1 className="flex items-center gap-2 text-lg font-semibold text-slate-900"><Users className="h-5 w-5 text-blue-600" /> Assignment</h1>
-                    <p className="text-sm text-slate-500">Choose one audience method: department-wise or batch-wise.</p>
+                    <h1 className="flex items-center gap-2 text-lg font-semibold text-text-primary"><Users className="h-5 w-5 text-primary" /> Assignment</h1>
+                    <p className="text-sm text-text-secondary">Choose one audience method: all students in your department or batch-wise assignment.</p>
                   </header>
 
                   <div className="space-y-6">
                     {isSuperAdminContext ? (
-                      <div className="space-y-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3">
-                        <p className="text-sm font-semibold text-blue-900">Super Admin Targeting</p>
+                      <div className="space-y-3 rounded-xl border border-primary/30 bg-primary/10 px-4 py-3">
+                        <p className="text-sm font-semibold text-primary-dark">Super Admin Targeting</p>
                         <div className="grid gap-2 md:grid-cols-2">
                           <button
                             type="button"
-                            onClick={() => dispatch(updateTestCreationField({ key: "assignmentMethod", value: "department_wise" }))}
+                            onClick={() => {
+                              dispatch(updateTestCreationField({ key: "assignmentMethod", value: "department_wise" }));
+                              dispatch(updateTestCreationField({ key: "batchIds", value: [] }));
+                            }}
                             className={`rounded-xl border px-4 py-3 text-left transition-all ${
                               form.assignmentMethod === "department_wise"
-                                ? "border-blue-500 bg-blue-100"
-                                : "border-slate-200 bg-white hover:border-slate-300"
+                                ? "border-primary bg-primary/15"
+                                : "border-border bg-card hover:border-border"
                             }`}
                           >
-                            <p className="text-sm font-semibold text-slate-900">Department-wise</p>
-                            <p className="mt-1 text-xs text-slate-500">Assign by department across selected colleges.</p>
+                            <p className="text-sm font-semibold text-text-primary">Department-wise</p>
+                            <p className="mt-1 text-xs text-text-secondary">Assign by department across selected colleges.</p>
                           </button>
                           <button
                             type="button"
-                            onClick={() => dispatch(updateTestCreationField({ key: "assignmentMethod", value: "batch_wise" }))}
+                            onClick={() => {
+                              dispatch(updateTestCreationField({ key: "assignmentMethod", value: "batch_wise" }));
+                              dispatch(updateTestCreationField({ key: "departmentIds", value: [] }));
+                            }}
                             className={`rounded-xl border px-4 py-3 text-left transition-all ${
                               form.assignmentMethod === "batch_wise"
-                                ? "border-blue-500 bg-blue-100"
-                                : "border-slate-200 bg-white hover:border-slate-300"
+                                ? "border-primary bg-primary/15"
+                                : "border-border bg-card hover:border-border"
                             }`}
                           >
-                            <p className="text-sm font-semibold text-slate-900">Batch-wise</p>
-                            <p className="mt-1 text-xs text-slate-500">Assign to specific batches in selected colleges.</p>
+                            <p className="text-sm font-semibold text-text-primary">Batch-wise</p>
+                            <p className="mt-1 text-xs text-text-secondary">Assign to specific batches in selected colleges.</p>
                           </button>
                         </div>
 
-                        <label className="flex items-center gap-2 text-sm text-blue-900">
+                        <label className="flex items-center gap-2 text-sm text-primary-dark">
                           <input
                             type="checkbox"
                             checked={Boolean(form.allColleges)}
@@ -1015,10 +1189,10 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                         </label>
                         {!form.allColleges ? (
                           <div className="space-y-2">
-                            <label className="text-sm text-blue-900">Select colleges</label>
-                            <div className="max-h-56 space-y-2 overflow-y-auto rounded-xl border border-blue-200 bg-white p-3">
+                            <label className="text-sm text-primary-dark">Select colleges</label>
+                            <div className="max-h-56 space-y-2 overflow-y-auto rounded-xl border border-primary/30 bg-card p-3">
                               {colleges.map((college) => (
-                                <label key={college.id} className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700">
+                                <label key={college.id} className="flex items-center justify-between rounded-lg border border-border px-3 py-2 text-sm text-text-secondary">
                                   <span>{college.name}</span>
                                   <Checkbox
                                     checked={Array.isArray(form.collegeIds) && form.collegeIds.includes(college.id)}
@@ -1033,64 +1207,67 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                                 </label>
                               ))}
                             </div>
-                            {errors.collegeIds ? <p className="text-xs text-red-600">{errors.collegeIds}</p> : null}
+                            {errors.collegeIds ? <p className="text-xs text-danger">{errors.collegeIds}</p> : null}
                           </div>
                         ) : null}
 
-                        <div className="space-y-2">
-                          <label className="text-sm text-blue-900">Departments (checkbox)</label>
-                          <div className="max-h-60 space-y-3 overflow-y-auto rounded-xl border border-blue-200 bg-white p-3">
-                            {Object.values(groupedDepartmentsByCollege).map((group) => (
-                              <div key={group.collegeId} className="space-y-2">
-                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{group.collegeName}</p>
-                                {group.items.map((department) => (
-                                  <label key={department.id} className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700">
-                                    <span>{department.name} <span className="text-xs text-slate-500">(Students: {department?._count?.students || 0})</span></span>
-                                    <Checkbox
-                                      checked={Array.isArray(form.departmentIds) && form.departmentIds.includes(department.id)}
-                                      onCheckedChange={(checked) => {
-                                        const existing = Array.isArray(form.departmentIds) ? form.departmentIds : [];
-                                        const next = checked === true
-                                          ? [...new Set([...existing, department.id])]
-                                          : existing.filter((id) => id !== department.id);
-                                        dispatch(updateTestCreationField({ key: "departmentIds", value: next }));
-                                      }}
-                                    />
-                                  </label>
-                                ))}
-                              </div>
-                            ))}
-                            {scopedSuperDepartments.length === 0 ? <p className="px-1 py-2 text-xs text-slate-500">No departments available for current college scope.</p> : null}
-                          </div>
-                        </div>
-
-                        {form.assignmentMethod === "batch_wise" ? (
+                        {form.assignmentMethod === "department_wise" ? (
                           <div className="space-y-2">
-                            <label className="text-sm text-blue-900">Batches (checkbox)</label>
-                            <div className="max-h-64 space-y-3 overflow-y-auto rounded-xl border border-blue-200 bg-white p-3">
-                              {Object.values(groupedBatchesByCollege).map((group) => (
+                            <label className="text-sm text-primary-dark">Departments (checkbox)</label>
+                            <div className="max-h-60 space-y-3 overflow-y-auto rounded-xl border border-primary/30 bg-card p-3">
+                              {Object.values(groupedDepartmentsByCollege).map((group) => (
                                 <div key={group.collegeId} className="space-y-2">
-                                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{group.collegeName}</p>
-                                  {group.items.map((batch) => (
-                                    <label key={batch.id} className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700">
-                                      <span>{batch.name} <span className="text-xs text-slate-500">({batch.department?.name || "-"} / Students: {batch?._count?.students || 0})</span></span>
+                                  <p className="text-xs font-semibold uppercase tracking-wide text-text-secondary">{group.collegeName}</p>
+                                  {group.items.map((department) => (
+                                    <label key={department.id} className="flex items-center justify-between rounded-lg border border-border px-3 py-2 text-sm text-text-secondary">
+                                      <span>{department.name} <span className="text-xs text-text-secondary">(Students: {department?._count?.students || 0})</span></span>
                                       <Checkbox
-                                        checked={Array.isArray(form.batchIds) && form.batchIds.includes(batch.id)}
+                                        checked={Array.isArray(form.departmentIds) && form.departmentIds.includes(department.id)}
                                         onCheckedChange={(checked) => {
-                                          const existing = Array.isArray(form.batchIds) ? form.batchIds : [];
+                                          const existing = Array.isArray(form.departmentIds) ? form.departmentIds : [];
                                           const next = checked === true
-                                            ? [...new Set([...existing, batch.id])]
-                                            : existing.filter((id) => id !== batch.id);
-                                          dispatch(updateTestCreationField({ key: "batchIds", value: next }));
+                                            ? [...new Set([...existing, department.id])]
+                                            : existing.filter((id) => id !== department.id);
+                                          dispatch(updateTestCreationField({ key: "departmentIds", value: next }));
                                         }}
                                       />
                                     </label>
                                   ))}
                                 </div>
                               ))}
-                              {visibleSuperBatches.length === 0 ? <p className="px-1 py-2 text-xs text-slate-500">No batches found for selected scope.</p> : null}
+                              {scopedSuperDepartments.length === 0 ? <p className="px-1 py-2 text-xs text-text-secondary">No departments available for current college scope.</p> : null}
                             </div>
-                            {errors.batchIds ? <p className="text-xs text-red-600">{errors.batchIds}</p> : null}
+                          </div>
+                        ) : null}
+
+                        {form.assignmentMethod === "batch_wise" ? (
+                          <div className="space-y-2">
+                            <label className="text-sm text-primary-dark">Batches (checkbox)</label>
+                            {Array.isArray(form.departmentIds) && form.departmentIds.length === 0 ? (
+                              <div className="rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
+                                Select at least one department above to choose batches.
+                              </div>
+                            ) : (
+                              <div className="max-h-64 space-y-3 overflow-y-auto rounded-xl border border-primary/30 bg-card p-3">
+                                {visibleSuperBatches.map((batch) => (
+                                  <label key={batch.id} className="flex items-center justify-between rounded-lg border border-border px-3 py-2 text-sm text-text-secondary">
+                                    <span>{batch.name} <span className="text-xs text-text-secondary">({batch.department?.name || "-"} / Students: {batch?._count?.students || 0})</span></span>
+                                    <Checkbox
+                                      checked={Array.isArray(form.batchIds) && form.batchIds.includes(batch.id)}
+                                      onCheckedChange={(checked) => {
+                                        const existing = Array.isArray(form.batchIds) ? form.batchIds : [];
+                                        const next = checked === true
+                                          ? [...new Set([...existing, batch.id])]
+                                          : existing.filter((id) => id !== batch.id);
+                                        dispatch(updateTestCreationField({ key: "batchIds", value: next }));
+                                      }}
+                                    />
+                                  </label>
+                                ))}
+                                {visibleSuperBatches.length === 0 ? <p className="px-1 py-2 text-xs text-text-secondary">No batches found for selected departments.</p> : null}
+                              </div>
+                            )}
+                            {errors.batchIds ? <p className="text-xs text-danger">{errors.batchIds}</p> : null}
                           </div>
                         ) : null}
                       </div>
@@ -1104,66 +1281,60 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                             onClick={() => {
                               dispatch(updateTestCreationField({ key: "assignmentMethod", value: "department_wise" }));
                               dispatch(updateTestCreationField({ key: "batchIds", value: [] }));
+                              if (currentUserDeptId) {
+                                dispatch(updateTestCreationField({ key: "departmentId", value: currentUserDeptId }));
+                              }
                             }}
                             className={`rounded-xl border px-4 py-3 text-left transition-all ${
                               form.assignmentMethod === "department_wise"
-                                ? "border-blue-500 bg-blue-50"
-                                : "border-slate-200 bg-white hover:border-slate-300"
+                                ? "border-primary bg-primary/10"
+                                : "border-border bg-card hover:border-border"
                             }`}
                           >
-                            <p className="text-sm font-semibold text-slate-900">Department-wise</p>
-                            <p className="mt-1 text-xs text-slate-500">Assign to all batches in selected department (or all departments).</p>
+                            <p className="text-sm font-semibold text-text-primary">All students in your department</p>
+                            <p className="mt-1 text-xs text-text-secondary">Assign to every student within your department.</p>
                           </button>
 
                           <button
                             type="button"
-                            onClick={() => dispatch(updateTestCreationField({ key: "assignmentMethod", value: "batch_wise" }))}
+                            onClick={() => {
+                              dispatch(updateTestCreationField({ key: "assignmentMethod", value: "batch_wise" }));
+                              if (currentUserDeptId) {
+                                dispatch(updateTestCreationField({ key: "departmentId", value: currentUserDeptId }));
+                              }
+                            }}
                             className={`rounded-xl border px-4 py-3 text-left transition-all ${
                               form.assignmentMethod === "batch_wise"
-                                ? "border-blue-500 bg-blue-50"
-                                : "border-slate-200 bg-white hover:border-slate-300"
+                                ? "border-primary bg-primary/10"
+                                : "border-border bg-card hover:border-border"
                             }`}
                           >
-                            <p className="text-sm font-semibold text-slate-900">Batch-wise</p>
-                            <p className="mt-1 text-xs text-slate-500">Manually choose one or more batches.</p>
+                            <p className="text-sm font-semibold text-text-primary">Batch-wise assignment</p>
+                            <p className="mt-1 text-xs text-text-secondary">Select specific batches in your department.</p>
                           </button>
                         </div>
 
-                        <div className="space-y-2">
-                          <label className="text-sm text-gray-600">Department Scope</label>
-                          <Select
-                            value={form.departmentId || "all"}
-                            onValueChange={(value) => dispatch(updateTestCreationField({ key: "departmentId", value: value === "all" ? "" : value }))}
-                          >
-                            <SelectTrigger className="max-w-md"><SelectValue placeholder="Select department" /></SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="all">All Departments</SelectItem>
-                              {departments.map((department) => (
-                                <SelectItem key={department.id} value={department.id}>{department.name}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
+
 
                         {form.assignmentMethod === "department_wise" ? (
-                          <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-                            This test will be assigned department-wise to all batches under <strong>{departments.find((department) => department.id === form.departmentId)?.name || "all departments"}</strong>.
+                          <div className="rounded-xl border border-success/30 bg-success/10 px-4 py-3 text-sm text-success">
+                            This test will be assigned to all students in <strong>{visibleDepartments.find((department) => department.id === form.departmentId)?.name || "your department"}</strong>.
                           </div>
                         ) : null}
 
                         {form.assignmentMethod === "batch_wise" ? (
                           <div className="space-y-3">
                             <div className="flex items-center justify-between">
-                              <label className="text-sm text-gray-600">Batches</label>
-                              <span className="text-xs font-medium text-slate-500">{form.batchIds.length} selected</span>
+                              <label className="text-sm text-text-secondary">Batches</label>
+                              <span className="text-xs font-medium text-text-secondary">{form.batchIds.length} selected</span>
                             </div>
 
-                            <div className="max-h-72 space-y-3 overflow-y-auto rounded-2xl border border-slate-200 bg-slate-50/60 p-3">
+                            <div className="max-h-72 space-y-3 overflow-y-auto rounded-2xl border border-border bg-background/60 p-3">
                               {filteredBatches.length ? filteredBatches.map((batch) => (
-                                <label key={batch.id} className="flex cursor-pointer items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md">
+                                <label key={batch.id} className="flex cursor-pointer items-center justify-between rounded-xl border border-border bg-card px-4 py-3 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-border hover:shadow-md">
                                   <div>
-                                    <p className="text-sm font-medium text-slate-800">{batch.name}</p>
-                                    <p className="text-xs text-slate-500">Year {batch.year || "-"}</p>
+                                    <p className="text-sm font-medium text-text-primary">{batch.name}</p>
+                                    <p className="text-xs text-text-secondary">Year {batch.year || "-"}</p>
                                   </div>
                                   <Checkbox
                                     checked={form.batchIds.includes(batch.id)}
@@ -1171,10 +1342,10 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                                   />
                                 </label>
                               )) : (
-                                <p className="py-10 text-center text-sm text-slate-500">No batches found for selected department.</p>
+                                <p className="py-10 text-center text-sm text-text-secondary">No batches found for selected department.</p>
                               )}
                             </div>
-                            {errors.batchIds ? <p className="text-xs text-red-600">{errors.batchIds}</p> : null}
+                            {errors.batchIds ? <p className="text-xs text-danger">{errors.batchIds}</p> : null}
                           </div>
                         ) : null}
                       </>
@@ -1184,31 +1355,31 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
               )}
 
               {step === 3 && (
-                    <section className="space-y-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition-all duration-200 animate-in slide-in-from-bottom-2 hover:shadow-md lg:p-6">
+                    <section className="space-y-6 rounded-2xl border border-border bg-card p-5 shadow-sm transition-all duration-200 animate-in slide-in-from-bottom-2 hover:shadow-md lg:p-6">
                       <header className="flex items-center justify-between">
                         <div>
-                          <h1 className="text-lg font-semibold text-slate-900">Question Bank</h1>
-                          <p className="text-sm text-slate-500">Add questions manually or via JSON upload.</p>
+                          <h1 className="text-lg font-semibold text-text-primary">Question Bank</h1>
+                          <p className="text-sm text-text-secondary">Add questions manually or via JSON upload.</p>
                         </div>
-                        <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">
+                        <span className="rounded-full bg-muted px-3 py-1 text-xs font-bold text-text-secondary">
                           {form.questions.length} Added
                         </span>
                       </header>
-                      {errors.questions ? <p className="text-sm font-medium text-red-600">{errors.questions}</p> : null}
+                      {errors.questions ? <p className="text-sm font-medium text-danger">{errors.questions}</p> : null}
 
                       <Tabs value={form.questionInputMode} onValueChange={handleQuestionInputModeChange}>
-                        <TabsList className="h-auto w-full justify-start gap-2 rounded-xl bg-slate-100 p-1">
-                          <TabsTrigger className="h-10 flex-none rounded-lg px-4 data-active:bg-white data-active:text-slate-900 data-active:shadow-sm" value="manual">Manual Entry</TabsTrigger>
-                          <TabsTrigger className="h-10 flex-none rounded-lg px-4 data-active:bg-white data-active:text-slate-900 data-active:shadow-sm" value="bulk_json">Bulk JSON</TabsTrigger>
-                          {!isSuperAdminContext ? <TabsTrigger className="h-10 flex-none rounded-lg px-4 data-active:bg-white data-active:text-slate-900 data-active:shadow-sm" value="question_bank">Question Bank</TabsTrigger> : null}
+                        <TabsList className="h-auto w-full justify-start gap-2 rounded-xl bg-muted p-1">
+                          <TabsTrigger className="h-10 flex-none rounded-lg px-4 data-active:bg-card data-active:text-text-primary data-active:shadow-sm" value="manual">Manual Entry</TabsTrigger>
+                          <TabsTrigger className="h-10 flex-none rounded-lg px-4 data-active:bg-card data-active:text-text-primary data-active:shadow-sm" value="bulk_json">Bulk JSON</TabsTrigger>
+                          {!isSuperAdminContext ? <TabsTrigger className="h-10 flex-none rounded-lg px-4 data-active:bg-card data-active:text-text-primary data-active:shadow-sm" value="question_bank">Question Bank</TabsTrigger> : null}
                         </TabsList>
 
                         <TabsContent value="manual" className="mt-6 space-y-4">
                           {form.questions.slice(0, questionRenderLimit).map((q, idx) => (
-                            <div key={idx} className="group relative rounded-2xl border border-slate-200 bg-white p-6 transition-all hover:border-blue-200 hover:shadow-md">
+                            <div key={idx} className="group relative rounded-2xl border border-border bg-card p-6 transition-all hover:border-primary/30 hover:shadow-md">
                               <div className="mb-4 flex items-center justify-between">
-                                <span className="text-xs font-bold uppercase tracking-widest text-blue-600">Question {idx + 1}</span>
-                                <button onClick={() => dispatch(removeQuestionRow(idx))} className="text-slate-400 hover:text-red-500">
+                                <span className="text-xs font-bold uppercase tracking-widest text-primary">Question {idx + 1}</span>
+                                <button onClick={() => dispatch(removeQuestionRow(idx))} className="text-text-secondary hover:text-danger">
                                   <X size={16} />
                                 </button>
                               </div>
@@ -1221,7 +1392,7 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
 
                               <div className="grid gap-4 md:grid-cols-3">
                                 <div className="space-y-2 md:col-span-2">
-                                  <label className="text-sm text-gray-600">Question Type</label>
+                                  <label className="text-sm text-text-secondary">Question Type</label>
                                   <Select
                                     value={q.type}
                                     onValueChange={(value) => dispatch(updateQuestionRow({ index: idx, patch: { type: value, options: value === "mcq" ? (q.options?.length ? q.options : ["", ""]) : [], correctAnswer: value === "true_false" ? false : "" } }))}
@@ -1236,7 +1407,7 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                                 </div>
 
                                 <div className="space-y-2">
-                                  <label className="text-sm text-gray-600">Marks</label>
+                                  <label className="text-sm text-text-secondary">Marks</label>
                                   <Input
                                     type="number"
                                     min={1}
@@ -1248,7 +1419,7 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
 
                               <div className="mt-4 grid gap-4 md:grid-cols-2">
                                 <div className="space-y-2">
-                                  <label className="text-sm text-gray-600">Difficulty</label>
+                                  <label className="text-sm text-text-secondary">Difficulty</label>
                                   <Select
                                     value={String(q.difficulty || "MEDIUM")}
                                     onValueChange={(value) => dispatch(updateQuestionRow({ index: idx, patch: { difficulty: value } }))}
@@ -1262,7 +1433,7 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                                   </Select>
                                 </div>
                                 <div className="space-y-2">
-                                  <label className="text-sm text-gray-600">Topic Tag</label>
+                                  <label className="text-sm text-text-secondary">Topic Tag</label>
                                   <Input
                                     value={String(q.topic || "")}
                                     placeholder="e.g. Arrays"
@@ -1273,7 +1444,7 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
 
                               {q.type === "mcq" && (
                                 <div className="space-y-3">
-                                  <p className="text-sm text-gray-600">Options</p>
+                                  <p className="text-sm text-text-secondary">Options</p>
                                   <div className="space-y-2">
                                     {(q.options || []).map((option, optionIndex) => (
                                       <div key={`${idx}-${optionIndex}`} className="flex gap-2">
@@ -1296,7 +1467,7 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                                   <Button type="button" variant="outline" onClick={() => addQuestionOption(idx)}>+ Add Option</Button>
 
                                   <div className="space-y-2">
-                                    <label className="text-sm text-gray-600">Correct Answer</label>
+                                    <label className="text-sm text-text-secondary">Correct Answer</label>
                                     <Select
                                       value={String(q.correctAnswer || "")}
                                       onValueChange={(value) => dispatch(updateQuestionRow({ index: idx, patch: { correctAnswer: value } }))}
@@ -1314,7 +1485,7 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
 
                               {q.type === "true_false" && (
                                 <div className="space-y-2">
-                                  <label className="text-sm text-gray-600">Correct Answer</label>
+                                  <label className="text-sm text-text-secondary">Correct Answer</label>
                                   <Select
                                     value={String(Boolean(q.correctAnswer))}
                                     onValueChange={(value) => dispatch(updateQuestionRow({ index: idx, patch: { correctAnswer: value === "true" } }))}
@@ -1330,7 +1501,7 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
 
                               {(q.type === "fill_blank" || q.type === "paragraph") && (
                                 <div className="space-y-2">
-                                  <label className="text-sm text-gray-600">Correct Answer</label>
+                                  <label className="text-sm text-text-secondary">Correct Answer</label>
                                   <Textarea
                                     rows={q.type === "paragraph" ? 4 : 2}
                                     placeholder="Add the expected answer"
@@ -1356,7 +1527,7 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                         </TabsContent>
 
                         <TabsContent value="bulk_json" className="mt-6 space-y-4">
-                          <p className="rounded-xl bg-slate-50 p-3 text-xs text-slate-600">
+                          <p className="rounded-xl bg-background p-3 text-xs text-text-secondary">
                             Paste an array of questions. Each item should include: type, question, options (for mcq), correctAnswer, marks.
                           </p>
                           <Textarea
@@ -1416,14 +1587,14 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                             </Button>
                           </div>
 
-                          <div className="max-h-96 space-y-2 overflow-y-auto rounded-xl border border-slate-200 p-3">
-                            {qb.loading ? <p className="text-sm text-slate-500">Loading question bank...</p> : null}
+                          <div className="max-h-96 space-y-2 overflow-y-auto rounded-xl border border-border p-3">
+                            {qb.loading ? <p className="text-sm text-text-secondary">Loading question bank...</p> : null}
                             {qb.questions.map((item) => (
-                              <label key={item.id} className="flex items-start gap-3 rounded-lg border border-slate-200 p-3 hover:bg-slate-50">
+                              <label key={item.id} className="flex items-start gap-3 rounded-lg border border-border p-3 hover:bg-background">
                                 <Checkbox checked={qb.selected.includes(item.id)} onCheckedChange={() => dispatch(toggleQuestionBankSelected(item.id))} />
                                 <div className="min-w-0">
-                                  <p className="text-sm font-medium text-slate-900">{item.prompt}</p>
-                                  <p className="mt-1 text-xs text-slate-500">
+                                  <p className="text-sm font-medium text-text-primary">{item.prompt}</p>
+                                  <p className="mt-1 text-xs text-text-secondary">
                                     {String(item.type || "").toLowerCase()} | {item.difficulty} | {item.marks} marks
                                   </p>
                                 </div>
@@ -1432,7 +1603,7 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                           </div>
 
                           <div className="flex flex-wrap items-center justify-between gap-2">
-                            <p className="text-xs text-slate-500">Selected: {qb.selected.length}</p>
+                            <p className="text-xs text-text-secondary">Selected: {qb.selected.length}</p>
                             <div className="flex items-center gap-2">
                               <Button
                                 variant="outline"
@@ -1447,7 +1618,7 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                               >
                                 Prev
                               </Button>
-                              <span className="text-xs text-slate-500">{qb.pagination.page} / {qb.pagination.totalPages}</span>
+                              <span className="text-xs text-text-secondary">{qb.pagination.page} / {qb.pagination.totalPages}</span>
                               <Button
                                 variant="outline"
                                 disabled={qb.pagination.page >= qb.pagination.totalPages}
@@ -1483,51 +1654,51 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                   )}
 
               {step === 4 && (
-                <section className="space-y-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition-all duration-200 animate-in slide-in-from-bottom-2 hover:shadow-md lg:p-6">
+                <section className="space-y-6 rounded-2xl border border-border bg-card p-5 shadow-sm transition-all duration-200 animate-in slide-in-from-bottom-2 hover:shadow-md lg:p-6">
                   <header className="space-y-2">
-                    <h1 className="flex items-center gap-2 text-lg font-semibold text-slate-900"><Eye className="h-5 w-5 text-blue-600" /> Review & Validation</h1>
-                    <p className="text-sm text-slate-500">Audit distribution, detect blockers, and quick-edit question metadata before proctoring setup.</p>
+                    <h1 className="flex items-center gap-2 text-lg font-semibold text-text-primary"><Eye className="h-5 w-5 text-primary" /> Review & Validation</h1>
+                    <p className="text-sm text-text-secondary">Audit distribution, detect blockers, and quick-edit question metadata before proctoring setup.</p>
                   </header>
 
                   <div className="grid gap-3 md:grid-cols-3">
-                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                      <p className="text-xs uppercase tracking-wide text-slate-500">Total Questions</p>
-                      <p className="mt-1 text-xl font-semibold text-slate-900">{reviewSummary.totalQuestions}</p>
+                    <div className="rounded-xl border border-border bg-background p-4">
+                      <p className="text-xs uppercase tracking-wide text-text-secondary">Total Questions</p>
+                      <p className="mt-1 text-xl font-semibold text-text-primary">{reviewSummary.totalQuestions}</p>
                     </div>
-                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                      <p className="text-xs uppercase tracking-wide text-slate-500">Total Marks</p>
-                      <p className="mt-1 text-xl font-semibold text-slate-900">{reviewSummary.totalMarks}</p>
+                    <div className="rounded-xl border border-border bg-background p-4">
+                      <p className="text-xs uppercase tracking-wide text-text-secondary">Total Marks</p>
+                      <p className="mt-1 text-xl font-semibold text-text-primary">{reviewSummary.totalMarks}</p>
                     </div>
-                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                      <p className="text-xs uppercase tracking-wide text-slate-500">Avg Marks / Question</p>
-                      <p className="mt-1 text-xl font-semibold text-slate-900">{reviewSummary.avgMarks}</p>
+                    <div className="rounded-xl border border-border bg-background p-4">
+                      <p className="text-xs uppercase tracking-wide text-text-secondary">Avg Marks / Question</p>
+                      <p className="mt-1 text-xl font-semibold text-text-primary">{reviewSummary.avgMarks}</p>
                     </div>
-                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                      <p className="text-xs uppercase tracking-wide text-slate-500">Time Per Question</p>
-                      <p className="mt-1 text-xl font-semibold text-slate-900">{reviewSummary.timePerQuestion} min</p>
+                    <div className="rounded-xl border border-border bg-background p-4">
+                      <p className="text-xs uppercase tracking-wide text-text-secondary">Time Per Question</p>
+                      <p className="mt-1 text-xl font-semibold text-text-primary">{reviewSummary.timePerQuestion} min</p>
                     </div>
-                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 md:col-span-2">
-                      <p className="text-xs uppercase tracking-wide text-slate-500">Question Type Mix</p>
+                    <div className="rounded-xl border border-border bg-background p-4 md:col-span-2">
+                      <p className="text-xs uppercase tracking-wide text-text-secondary">Question Type Mix</p>
                       <div className="mt-2 flex flex-wrap gap-2 text-xs">
                         {Object.entries(reviewSummary.byType).map(([type, count]) => (
-                          <span key={`type-${type}`} className="rounded-full border border-slate-200 bg-white px-2 py-1 text-slate-700">{type.toUpperCase()}: {count}</span>
+                          <span key={`type-${type}`} className="rounded-full border border-border bg-card px-2 py-1 text-text-secondary">{type.toUpperCase()}: {count}</span>
                         ))}
                       </div>
                     </div>
                   </div>
 
                   <div className="grid gap-4 md:grid-cols-2">
-                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                      <p className="mb-2 text-sm font-semibold text-slate-800">Difficulty Distribution</p>
-                      <div className="space-y-1 text-sm text-slate-700">
+                    <div className="rounded-xl border border-border bg-background p-4">
+                      <p className="mb-2 text-sm font-semibold text-text-primary">Difficulty Distribution</p>
+                      <div className="space-y-1 text-sm text-text-secondary">
                         {Object.entries(reviewSummary.difficulty).map(([key, value]) => (
                           <p key={`diff-${key}`}>{key}: <span className="font-medium">{value}</span></p>
                         ))}
                       </div>
                     </div>
-                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                      <p className="mb-2 text-sm font-semibold text-slate-800">Topic Grouping</p>
-                      <div className="max-h-32 space-y-1 overflow-y-auto text-sm text-slate-700">
+                    <div className="rounded-xl border border-border bg-background p-4">
+                      <p className="mb-2 text-sm font-semibold text-text-primary">Topic Grouping</p>
+                      <div className="max-h-32 space-y-1 overflow-y-auto text-sm text-text-secondary">
                         {Object.entries(reviewSummary.topic).map(([key, value]) => (
                           <p key={`topic-${key}`}>{key}: <span className="font-medium">{value}</span></p>
                         ))}
@@ -1536,7 +1707,7 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                   </div>
 
                   {reviewSummary.invalidIndexes.length > 0 || reviewSummary.totalQuestions === 0 || reviewSummary.totalMarks === 0 ? (
-                    <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                    <div className="rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">
                       <p className="font-semibold">Blocking conditions found</p>
                       <ul className="mt-1 list-disc pl-5">
                         {reviewSummary.totalQuestions === 0 ? <li>No questions added.</li> : null}
@@ -1545,10 +1716,10 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                       </ul>
                     </div>
                   ) : null}
-                  {errors.review ? <p className="text-xs text-red-600">{errors.review}</p> : null}
+                  {errors.review ? <p className="text-xs text-danger">{errors.review}</p> : null}
 
                   {reviewSummary.warnings.length > 0 ? (
-                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                    <div className="rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
                       <p className="font-semibold">Warnings (non-blocking)</p>
                       <ul className="mt-1 list-disc pl-5">
                         {reviewSummary.warnings.map((item) => (<li key={item}>{item}</li>))}
@@ -1558,8 +1729,8 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
 
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
-                      <h3 className="text-sm font-semibold text-slate-800">Inline Edit Questions</h3>
-                      <span className="text-xs text-slate-500">Click any question to quick edit marks, difficulty, topic, and answer.</span>
+                      <h3 className="text-sm font-semibold text-text-primary">Inline Edit Questions</h3>
+                      <span className="text-xs text-text-secondary">Click any question to quick edit marks, difficulty, topic, and answer.</span>
                     </div>
                     <div className="max-h-96 space-y-2 overflow-y-auto">
                       {form.questions.map((question, index) => (
@@ -1567,11 +1738,11 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                           key={`review-inline-${index}`}
                           type="button"
                           onClick={() => setQuickEditIndex(index)}
-                          className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-left hover:border-blue-300 hover:bg-white"
+                          className="w-full rounded-xl border border-border bg-background px-4 py-3 text-left hover:border-primary/40 hover:bg-card"
                         >
                           <div className="flex items-center justify-between gap-3">
-                            <p className="text-sm font-medium text-slate-900">Q{index + 1}. {question.question || "Untitled question"}</p>
-                            <span className="text-xs text-slate-500">{String(question.type || "mcq").toUpperCase()} • {question.marks || 0} marks</span>
+                            <p className="text-sm font-medium text-text-primary">Q{index + 1}. {question.question || "Untitled question"}</p>
+                            <span className="text-xs text-text-secondary">{String(question.type || "mcq").toUpperCase()} • {question.marks || 0} marks</span>
                           </div>
                         </button>
                       ))}
@@ -1579,30 +1750,30 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                   </div>
 
                   {quickEditIndex != null && form.questions[quickEditIndex] ? (
-                    <div className="fixed inset-y-0 right-0 z-50 w-full max-w-lg border-l border-slate-200 bg-white p-6 shadow-2xl">
+                    <div className="fixed inset-y-0 right-0 z-50 w-full max-w-lg border-l border-border bg-card p-6 shadow-2xl">
                       <div className="mb-4 flex items-center justify-between">
-                        <h4 className="text-base font-semibold text-slate-900">Quick Edit Question {quickEditIndex + 1}</h4>
+                        <h4 className="text-base font-semibold text-text-primary">Quick Edit Question {quickEditIndex + 1}</h4>
                         <Button variant="ghost" size="sm" onClick={() => setQuickEditIndex(null)}>Close</Button>
                       </div>
                       <div className="space-y-4">
                         <div className="space-y-2">
-                          <label className="text-sm text-slate-600">Marks</label>
+                          <label className="text-sm text-text-secondary">Marks</label>
                           <Input type="number" min={1} value={form.questions[quickEditIndex].marks || 1} onChange={(e) => dispatch(updateQuestionRow({ index: quickEditIndex, patch: { marks: Number(e.target.value) } }))} />
                         </div>
                         <div className="space-y-2">
-                          <label className="text-sm text-slate-600">Difficulty</label>
+                          <label className="text-sm text-text-secondary">Difficulty</label>
                           <Select value={String(form.questions[quickEditIndex].difficulty || "MEDIUM")} onValueChange={(value) => dispatch(updateQuestionRow({ index: quickEditIndex, patch: { difficulty: value } }))}>
                             <SelectTrigger><SelectValue /></SelectTrigger>
                             <SelectContent>{DIFFICULTY_OPTIONS.map((item) => <SelectItem key={`drawer-${item}`} value={item}>{item}</SelectItem>)}</SelectContent>
                           </Select>
                         </div>
                         <div className="space-y-2">
-                          <label className="text-sm text-slate-600">Topic</label>
+                          <label className="text-sm text-text-secondary">Topic</label>
                           <Input value={String(form.questions[quickEditIndex].topic || "")} onChange={(e) => dispatch(updateQuestionRow({ index: quickEditIndex, patch: { topic: e.target.value } }))} />
                         </div>
                         {form.questions[quickEditIndex].type === "true_false" ? (
                           <div className="space-y-2">
-                            <label className="text-sm text-slate-600">Correct Answer</label>
+                            <label className="text-sm text-text-secondary">Correct Answer</label>
                             <Select value={String(Boolean(form.questions[quickEditIndex].correctAnswer))} onValueChange={(value) => dispatch(updateQuestionRow({ index: quickEditIndex, patch: { correctAnswer: value === "true" } }))}>
                               <SelectTrigger><SelectValue /></SelectTrigger>
                               <SelectContent>
@@ -1613,7 +1784,7 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                           </div>
                         ) : (
                           <div className="space-y-2">
-                            <label className="text-sm text-slate-600">Correct Answer</label>
+                            <label className="text-sm text-text-secondary">Correct Answer</label>
                             <Input value={String(form.questions[quickEditIndex].correctAnswer ?? "")} onChange={(e) => dispatch(updateQuestionRow({ index: quickEditIndex, patch: { correctAnswer: e.target.value } }))} />
                           </div>
                         )}
@@ -1624,65 +1795,79 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
               )}
 
               {step === 5 && (
-                <section className="space-y-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition-all duration-200 animate-in slide-in-from-bottom-2 hover:shadow-md lg:p-6">
+                <section className="space-y-6 rounded-2xl border border-border bg-card p-5 shadow-sm transition-all duration-200 animate-in slide-in-from-bottom-2 hover:shadow-md lg:p-6">
                   <header className="space-y-2">
-                    <h1 className="flex items-center gap-2 text-lg font-semibold text-slate-900"><ShieldCheck className="h-5 w-5 text-blue-600" /> Proctoring Config</h1>
-                    <p className="text-sm text-slate-500">Choose a preset and customize tracking behavior.</p>
+                    <h1 className="flex items-center gap-2 text-lg font-semibold text-text-primary"><ShieldCheck className="h-5 w-5 text-primary" /> Proctoring Config</h1>
+                    <p className="text-sm text-text-secondary">Choose a persisted test type and fine-tune the exact student runtime behavior.</p>
                   </header>
+
+                  <div className="rounded-xl border border-border bg-background px-4 py-3">
+                    <p className="text-xs font-medium uppercase tracking-wide text-text-secondary">Selected Test Type</p>
+                    <p className="mt-1 text-sm font-semibold text-text-primary">{String(form.testType || "STANDARD").replaceAll("_", " ")}</p>
+                    <p className="mt-1 text-xs text-text-secondary">This value is saved with the test and returned back to students during the attempt.</p>
+                  </div>
 
                   <div className="grid gap-3 md:grid-cols-3">
                     {[
-                      ["STRICT_EXAM", "Strict Exam"],
-                      ["STANDARD_TEST", "Standard Test"],
-                      ["OPEN_ASSIGNMENT", "Open Assignment"],
+                      [PROCTORING_PRESETS.STRICT_EXAM, "Strict Exam"],
+                      [PROCTORING_PRESETS.STANDARD_TEST, "Standard Test"],
+                      [PROCTORING_PRESETS.OPEN_TEST, "Open Test"],
                     ].map(([value, label]) => (
                       <button
                         key={value}
                         type="button"
                         onClick={() => {
                           dispatch(updateTestCreationField({ key: "proctoringPreset", value }));
-                          Object.entries(PROCTORING_PRESETS[value]).forEach(([key, presetValue]) => {
+                          Object.entries(PRESET_CONFIGS[value]).forEach(([key, presetValue]) => {
                             dispatch(updateRestrictionsField({ key, value: presetValue }));
                           });
                         }}
-                        className={`rounded-xl border px-4 py-3 text-left ${form.proctoringPreset === value ? "border-blue-500 bg-blue-50" : "border-slate-200 bg-white hover:border-slate-300"}`}
+                        className={`rounded-xl border px-4 py-3 text-left ${form.proctoringPreset === value ? "border-primary bg-primary/10" : "border-border bg-card hover:border-border"}`}
                       >
-                        <p className="text-sm font-semibold text-slate-900">{label}</p>
-                        <p className="mt-1 text-xs text-slate-500">Apply and then fine-tune controls below.</p>
+                        <p className="text-sm font-semibold text-text-primary">{label}</p>
+                        <p className="mt-1 text-xs text-text-secondary">Apply and then fine-tune controls below.</p>
                       </button>
                     ))}
                   </div>
 
                   <div className="grid gap-4 md:grid-cols-2">
-                    <label className="flex items-center justify-between rounded-lg bg-gray-50 px-4 py-3">
-                      <span className="text-sm text-slate-700">Fullscreen Required</span>
+                    <label className="flex items-center justify-between rounded-lg bg-muted px-4 py-3">
+                      <span className="text-sm text-text-secondary">Proctoring Enabled</span>
+                      <Switch checked={Boolean(form.restrictions.enabled)} onCheckedChange={(value) => dispatch(updateRestrictionsField({ key: "enabled", value }))} />
+                    </label>
+                    <label className="flex items-center justify-between rounded-lg bg-muted px-4 py-3">
+                      <span className="text-sm text-text-secondary">Fullscreen Required</span>
                       <Switch checked={Boolean(form.restrictions.fullscreenRequired)} onCheckedChange={(value) => dispatch(updateRestrictionsField({ key: "fullscreenRequired", value }))} />
                     </label>
-                    <label className="flex items-center justify-between rounded-lg bg-gray-50 px-4 py-3">
-                      <span className="text-sm text-slate-700">Window Blur Detection</span>
+                    <label className="flex items-center justify-between rounded-lg bg-muted px-4 py-3">
+                      <span className="text-sm text-text-secondary">Window Blur Detection</span>
                       <Switch checked={Boolean(form.restrictions.windowBlur)} onCheckedChange={(value) => dispatch(updateRestrictionsField({ key: "windowBlur", value }))} />
                     </label>
-                    <label className="flex items-center justify-between rounded-lg bg-gray-50 px-4 py-3">
-                      <span className="text-sm text-slate-700">Screenshot Detection</span>
+                    <label className="flex items-center justify-between rounded-lg bg-muted px-4 py-3">
+                      <span className="text-sm text-text-secondary">Screenshot Detection</span>
                       <Switch checked={Boolean(form.restrictions.screenshotDetection)} onCheckedChange={(value) => dispatch(updateRestrictionsField({ key: "screenshotDetection", value }))} />
                     </label>
-                    <label className="flex items-center justify-between rounded-lg bg-gray-50 px-4 py-3">
-                      <span className="text-sm text-slate-700">Right Click Disabled</span>
+                    <label className="flex items-center justify-between rounded-lg bg-muted px-4 py-3">
+                      <span className="text-sm text-text-secondary">Right Click Disabled</span>
                       <Switch checked={Boolean(form.restrictions.rightClickDisabled)} onCheckedChange={(value) => dispatch(updateRestrictionsField({ key: "rightClickDisabled", value }))} />
                     </label>
-                    <label className="flex items-center justify-between rounded-lg bg-gray-50 px-4 py-3">
-                      <span className="text-sm text-slate-700">Devtools Detection</span>
+                    <label className="flex items-center justify-between rounded-lg bg-muted px-4 py-3">
+                      <span className="text-sm text-text-secondary">Devtools Detection</span>
                       <Switch checked={Boolean(form.restrictions.devtoolsDetection)} onCheckedChange={(value) => dispatch(updateRestrictionsField({ key: "devtoolsDetection", value }))} />
                     </label>
-                    <label className="flex items-center justify-between rounded-lg bg-gray-50 px-4 py-3">
-                      <span className="text-sm text-slate-700">Shuffle Questions</span>
+                    <label className="flex items-center justify-between rounded-lg bg-muted px-4 py-3">
+                      <span className="text-sm text-text-secondary">Auto Next Single-Select</span>
+                      <Switch checked={Boolean(form.restrictions.autoNextSingle)} onCheckedChange={(value) => dispatch(updateRestrictionsField({ key: "autoNextSingle", value }))} />
+                    </label>
+                    <label className="flex items-center justify-between rounded-lg bg-muted px-4 py-3">
+                      <span className="text-sm text-text-secondary">Shuffle Questions</span>
                       <Switch checked={Boolean(form.shuffleQuestions)} onCheckedChange={(value) => dispatch(updateTestCreationField({ key: "shuffleQuestions", value }))} />
                     </label>
                   </div>
 
-                  <div className="grid gap-4 md:grid-cols-3">
+                  <div className="grid gap-4 md:grid-cols-4">
                     <div className="space-y-2">
-                      <label className="text-sm text-gray-600">Tab Switch</label>
+                      <label className="text-sm text-text-secondary">Tab Switch</label>
                       <Select value={String(form.restrictions.tabSwitch || "monitored")} onValueChange={(value) => dispatch(updateRestrictionsField({ key: "tabSwitch", value }))}>
                         <SelectTrigger><SelectValue /></SelectTrigger>
                         <SelectContent>
@@ -1692,7 +1877,7 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                       </Select>
                     </div>
                     <div className="space-y-2">
-                      <label className="text-sm text-gray-600">Copy/Paste</label>
+                      <label className="text-sm text-text-secondary">Copy/Paste</label>
                       <Select value={String(form.restrictions.copyPaste || "monitored")} onValueChange={(value) => dispatch(updateRestrictionsField({ key: "copyPaste", value }))}>
                         <SelectTrigger><SelectValue /></SelectTrigger>
                         <SelectContent>
@@ -1702,19 +1887,29 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                       </Select>
                     </div>
                     <div className="space-y-2">
-                      <label className="text-sm text-gray-600">Violation Threshold</label>
+                      <label className="text-sm text-text-secondary">Violation Threshold</label>
                       <Input type="number" min={1} max={20} value={form.restrictions.violationThreshold} onChange={(e) => dispatch(updateRestrictionsField({ key: "violationThreshold", value: Number(e.target.value) }))} />
-                      {errors.violationThreshold ? <p className="text-xs text-red-600">{errors.violationThreshold}</p> : null}
+                      {errors.violationThreshold ? <p className="text-xs text-danger">{errors.violationThreshold}</p> : null}
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm text-text-secondary">Paragraph Word Limit</label>
+                      <Input type="number" min={10} max={5000} value={form.restrictions.paragraphWordLimit} onChange={(e) => dispatch(updateRestrictionsField({ key: "paragraphWordLimit", value: Number(e.target.value) }))} />
+                      {errors.paragraphWordLimit ? <p className="text-xs text-danger">{errors.paragraphWordLimit}</p> : null}
                     </div>
                   </div>
 
-                  {Number(form.restrictions.violationThreshold || 0) > 8 ? (
-                    <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  {!form.restrictions.enabled ? (
+                    <p className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+                      Proctoring is disabled. Students will still take the test, but runtime monitoring rules will not be enforced.
+                    </p>
+                  ) : null}
+                  {form.restrictions.enabled && Number(form.restrictions.violationThreshold || 0) > 8 ? (
+                    <p className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
                       Warning: very high violation threshold may reduce proctoring effectiveness.
                     </p>
                   ) : null}
-                  {form.restrictions.devtoolsDetection && /code|programming|algorithm/i.test(String(form.subject || "")) ? (
-                    <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  {form.restrictions.enabled && form.restrictions.devtoolsDetection && /code|programming|algorithm/i.test(String(form.subject || "")) ? (
+                    <p className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
                       Warning: devtools detection is enabled for a coding-oriented test. Confirm expected behavior.
                     </p>
                   ) : null}
@@ -1722,22 +1917,22 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
               )}
 
               {step === 6 && (
-                <section className="space-y-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition-all duration-200 animate-in slide-in-from-bottom-2 hover:shadow-md lg:p-6">
+                <section className="space-y-6 rounded-2xl border border-border bg-card p-5 shadow-sm transition-all duration-200 animate-in slide-in-from-bottom-2 hover:shadow-md lg:p-6">
                   <header className="space-y-2">
-                    <h1 className="flex items-center gap-2 text-lg font-semibold text-slate-900"><Rocket className="h-5 w-5 text-blue-600" /> Publish Flow</h1>
-                    <p className="text-sm text-slate-500">Finalize status and verify readiness before publishing impact.</p>
+                    <h1 className="flex items-center gap-2 text-lg font-semibold text-text-primary"><Rocket className="h-5 w-5 text-primary" /> Publish Flow</h1>
+                    <p className="text-sm text-text-secondary">Finalize status and verify readiness before publishing impact.</p>
                   </header>
 
                   {externalDraftWarning ? (
-                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                    <div className="rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
                       Concurrent edit detected: this draft changed in another tab/session.
                     </div>
                   ) : null}
 
-                  <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-4">
-                    <label className="text-sm text-gray-600">Publish Option</label>
+                  <div className="space-y-2 rounded-xl border border-border bg-background p-4">
+                    <label className="text-sm text-text-secondary">Publish Option</label>
                     <Select value={form.publishState} onValueChange={(value) => dispatch(updateTestCreationField({ key: "publishState", value }))}>
-                      <SelectTrigger className="max-w-md bg-white"><SelectValue /></SelectTrigger>
+                      <SelectTrigger className="max-w-md bg-card"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         {PUBLISH_STATE_OPTIONS.map((item) => (
                           <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>
@@ -1746,18 +1941,18 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                     </Select>
                   </div>
 
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                    <p className="mb-2 text-sm font-semibold text-slate-800">Pre-publish checklist</p>
+                  <div className="rounded-xl border border-border bg-background p-4">
+                    <p className="mb-2 text-sm font-semibold text-text-primary">Pre-publish checklist</p>
                     <div className="space-y-2 text-sm">
                       {publishChecklist.map((item) => (
-                        <p key={item.label} className={item.done ? "text-emerald-700" : "text-red-700"}>
+                        <p key={item.label} className={item.done ? "text-success" : "text-danger"}>
                           {item.done ? "✓" : "✕"} {item.label}
                         </p>
                       ))}
                     </div>
                   </div>
 
-                  <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+                  <div className="rounded-xl border border-primary/30 bg-primary/10 px-4 py-3 text-sm text-primary-dark">
                     Publishing this test will affect <span className="font-semibold">{assignedStudentsCount}</span> students.
                   </div>
                 </section>
@@ -1767,7 +1962,7 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
           </div>
 
           {/* --- FOOTER ACTION BAR --- */}
-          <footer className="sticky bottom-0 border-t border-slate-200 bg-white/95 px-5 py-4 backdrop-blur sm:px-6 lg:px-8">
+          <footer className="sticky bottom-0 border-t border-border bg-card/95 px-5 py-4 backdrop-blur sm:px-6 lg:px-8">
             <div className="flex items-center justify-between gap-3">
               <Button 
                 variant="outline" 
@@ -1780,7 +1975,7 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
               <div className="flex flex-wrap items-center justify-end gap-3">
                 {step < stepTitles.length - 1 ? (
                   <Button 
-                    className="bg-blue-600 px-8 hover:bg-blue-700" 
+                    className="bg-primary px-8 hover:bg-primary-dark" 
                     onClick={onNext}
                     disabled={!canProceed || isSubmitting}
                   >
@@ -1797,7 +1992,7 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                     </Button>
 
                     <Button
-                      className="bg-green-600 px-8 hover:bg-green-700"
+                      className="bg-success px-8 hover:bg-success/90"
                       onClick={() => onSubmit(resolvedPrimaryPublishState)}
                       disabled={isSubmitting}
                     >
@@ -1839,4 +2034,3 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
     </div>
   );
 }
-

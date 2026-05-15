@@ -17,6 +17,7 @@ import ReportsPage from "@/pages/SuperAdmin/ReportsPage";
 import AnalyticsPage from "@/pages/SuperAdmin/AnalyticsPage";
 import AuditLogsPage from "@/pages/SuperAdmin/AuditLogsPage";
 import SettingsPage from "@/pages/SuperAdmin/SettingsPage";
+import QuestionBankPage from "@/pages/SuperAdmin/QuestionBankPage";
 
 function SuperAdminBootstrap() {
   const dispatch = useDispatch();
@@ -31,7 +32,7 @@ function SuperAdminBootstrap() {
   }, [dispatch]);
 
   if (!initialized) {
-    return <div className="grid min-h-screen place-items-center text-slate-500">Initializing super admin session...</div>;
+    return <div className="grid min-h-screen place-items-center text-text-secondary">Initializing super admin session...</div>;
   }
 
   return <Outlet />;
@@ -68,6 +69,7 @@ const router = createBrowserRouter([
               { path: "/super-admin/students", element: <StudentsPage /> },
               { path: "/super-admin/departments", element: <DepartmentsPage /> },
               { path: "/super-admin/tests", element: <TestsPage /> },
+              { path: "/super-admin/question-bank", element: <QuestionBankPage /> },
               { path: "/super-admin/batches", element: <BatchesPage /> },
               { path: "/super-admin/events", element: <EventsPage /> },
               { path: "/super-admin/reports", element: <ReportsPage /> },

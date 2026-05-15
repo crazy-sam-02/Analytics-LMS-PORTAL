@@ -1,8 +1,30 @@
 import axios from "axios";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:5000/api";
+const STUDENT_ACCESS_TOKEN_KEY = "student_access_token";
 
-let accessToken = null;
+const readStoredAccessToken = () => {
+  try {
+    return localStorage.getItem(STUDENT_ACCESS_TOKEN_KEY) || null;
+  } catch {
+    return null;
+  }
+};
+
+const persistStoredAccessToken = (token) => {
+  try {
+    if (token) {
+      localStorage.setItem(STUDENT_ACCESS_TOKEN_KEY, token);
+      return;
+    }
+
+    localStorage.removeItem(STUDENT_ACCESS_TOKEN_KEY);
+  } catch {
+    // Ignore storage failures.
+  }
+};
+
+let accessToken = readStoredAccessToken();
 let isRefreshing = false;
 let refreshWaitQueue = [];
 
@@ -37,9 +59,17 @@ const flushQueue = (error, token) => {
 
 export const setAccessToken = (token) => {
   accessToken = token || null;
+  persistStoredAccessToken(accessToken);
 };
 
 export const getAccessToken = () => accessToken;
+
+const shouldForceLogoutAfterRefresh = (error) => {
+  const status = error?.response?.status;
+  const code = error?.response?.data?.code;
+
+  return status === 400 || status === 401 || status === 403 || code === "INVALID_REFRESH_TOKEN";
+};
 
 export const registerAuthInterceptorHandlers = (handlers) => {
   authHandlers = {
@@ -70,13 +100,16 @@ httpClient.interceptors.response.use(
     const status = error?.response?.status;
     const code = error?.response?.data?.code;
     const originalRequest = error?.config;
+    const requestUrl = String(originalRequest?.url || "");
+    const isRefreshEndpoint = requestUrl.includes("/auth/refresh");
+    const isLoginEndpoint = requestUrl.includes("/auth/login");
 
     if (status === 403 && code === "ACCOUNT_INACTIVE") {
       authHandlers.onAccountInactive?.(error?.response?.data);
       return Promise.reject(error);
     }
 
-    if (!originalRequest || status !== 401 || originalRequest._retry || String(originalRequest.url || "").includes("/auth/refresh")) {
+    if (!originalRequest || status !== 401 || originalRequest._retry || isRefreshEndpoint || isLoginEndpoint) {
       return Promise.reject(error);
     }
 
@@ -114,8 +147,11 @@ httpClient.interceptors.response.use(
 
       return httpClient(originalRequest);
     } catch (refreshError) {
-      setAccessToken(null);
-      authHandlers.onRefreshFailure?.(refreshError);
+      const forceLogout = shouldForceLogoutAfterRefresh(refreshError);
+      if (forceLogout) {
+        setAccessToken(null);
+      }
+      authHandlers.onRefreshFailure?.(refreshError, { forceLogout });
       flushQueue(refreshError, null);
       return Promise.reject(refreshError);
     } finally {
@@ -128,11 +164,16 @@ export const toApiError = (error) => {
   const payload = error?.response?.data || {};
   const status = error?.response?.status || null;
   const mappedStatusMessage = mapHttpStatusMessage(status);
+  const retryAfterHeader = error?.response?.headers?.["retry-after"];
+  const retryAfterSeconds = Number.parseInt(String(retryAfterHeader || "0"), 10);
 
   const apiError = new Error(payload?.message || mappedStatusMessage || error?.message || "Request failed");
   apiError.code = payload?.code || "REQUEST_FAILED";
   apiError.status = status;
   apiError.details = payload?.details || null;
   apiError.retryable = status >= 500 || status === 429 || !status;
+  apiError.retryAfterSeconds = Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+    ? retryAfterSeconds
+    : Number(payload?.details?.retryAfterSeconds || 0) || null;
   return apiError;
 };

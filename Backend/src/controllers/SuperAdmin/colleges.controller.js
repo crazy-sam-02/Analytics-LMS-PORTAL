@@ -1,4 +1,4 @@
-const prisma = require("../../config/db");
+const models = require("../../models");
 const { createAuditLog } = require("../../services/audit.service");
 const { ApiError, asyncHandler } = require("../../utils/http");
 
@@ -19,15 +19,21 @@ const getColleges = asyncHandler(async (req, res) => {
       : {}),
   };
 
+  const m = await models.init();
+  const College = m.dbClient.college;
+
   const [items, total] = await Promise.all([
-    prisma.college.findMany({
+    College.findMany({
       where,
       include: {
         _count: {
           select: {
+            departments: true,
             admins: true,
             students: true,
             tests: true,
+            batches: true,
+            questionBankItems: true,
           },
         },
       },
@@ -35,7 +41,7 @@ const getColleges = asyncHandler(async (req, res) => {
       skip: (page - 1) * limit,
       take: limit,
     }),
-    prisma.college.count({ where }),
+    College.count({ where }),
   ]);
 
   res.status(200).json({
@@ -48,9 +54,40 @@ const getColleges = asyncHandler(async (req, res) => {
     },
   });
 });
+const getCollege = asyncHandler(async (req, res) => {
+  const { collegeId } = req.params;
+
+  const m = await models.init();
+  const College = m.dbClient.college;
+
+  const college = await College.findUnique({
+    where: { id: collegeId },
+    include: {
+      _count: {
+        select: {
+          departments: true,
+          admins: true,
+          students: true,
+          tests: true,
+          batches: true,
+          questionBankItems: true,
+        },
+      },
+    },
+  });
+
+  if (!college) {
+    throw new ApiError(404, "College not found");
+  }
+
+  res.status(200).json(college);
+});
 
 const createCollege = asyncHandler(async (req, res) => {
-  const college = await prisma.college.create({
+  const m = await models.init();
+  const College = m.dbClient.college;
+
+  const college = await College.create({
     data: {
       name: req.body.name,
       code: req.body.code,
@@ -73,7 +110,10 @@ const createCollege = asyncHandler(async (req, res) => {
 const updateCollege = asyncHandler(async (req, res) => {
   const { collegeId } = req.params;
 
-  const existing = await prisma.college.findUnique({ where: { id: collegeId } });
+  const m = await models.init();
+  const College = m.dbClient.college;
+
+  const existing = await College.findUnique({ where: { id: collegeId } });
   if (!existing) {
     throw new ApiError(404, "College not found");
   }
@@ -85,7 +125,7 @@ const updateCollege = asyncHandler(async (req, res) => {
     }
   }
 
-  const college = await prisma.college.update({
+  const college = await College.update({
     where: { id: collegeId },
     data: {
       ...(req.body.name !== undefined ? { name: req.body.name } : {}),
@@ -112,12 +152,15 @@ const updateCollege = asyncHandler(async (req, res) => {
 const deactivateCollege = asyncHandler(async (req, res) => {
   const { collegeId } = req.params;
 
-  const existing = await prisma.college.findUnique({ where: { id: collegeId } });
+  const m = await models.init();
+  const College = m.dbClient.college;
+
+  const existing = await College.findUnique({ where: { id: collegeId } });
   if (!existing) {
     throw new ApiError(404, "College not found");
   }
 
-  const college = await prisma.college.update({
+  const college = await College.update({
     where: { id: collegeId },
     data: {
       isActive: false,
@@ -139,6 +182,7 @@ const deactivateCollege = asyncHandler(async (req, res) => {
 
 module.exports = {
   getColleges,
+  getCollege,
   createCollege,
   updateCollege,
   deactivateCollege,

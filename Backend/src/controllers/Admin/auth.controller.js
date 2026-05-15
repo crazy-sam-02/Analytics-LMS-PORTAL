@@ -1,16 +1,28 @@
 const bcrypt = require("bcrypt");
-const prisma = require("../../config/db");
+const models = require("../../models");
 const { createAccessToken, createRefreshToken, verifyRefreshToken } = require("../../utils/token");
 const { ApiError, asyncHandler } = require("../../utils/http");
-const { ADMIN_PERMISSIONS } = require("../../constants/admin-permissions");
+const { resolveAdminPermissions } = require("../../constants/admin-access-profiles");
+const {
+  cacheRefreshToken,
+  getCachedRefreshToken,
+  invalidateRefreshToken,
+} = require("../../services/refresh-token-cache.service");
 
-const resolvePermissions = (admin) =>
-  Array.isArray(admin?.permissions) && admin.permissions.length > 0 ? admin.permissions : ADMIN_PERMISSIONS;
+const verifyRefreshPayloadOrThrow = (refreshToken) => {
+  try {
+    return verifyRefreshToken(refreshToken);
+  } catch {
+    throw new ApiError(401, "Invalid refresh token");
+  }
+};
 
 const adminLogin = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const { email, password } = req.body;
 
-  const admin = await prisma.admin.findFirst({
+  const admin = await db.admin.findFirst({
     where: {
       email,
       isActive: true,
@@ -30,18 +42,19 @@ const adminLogin = asyncHandler(async (req, res) => {
     throw new ApiError(401, "Invalid credentials");
   }
 
-  const permissions = resolvePermissions(admin);
+  const permissions = resolveAdminPermissions(admin);
   const accessToken = createAccessToken({ ...admin, permissions });
   const refreshToken = createRefreshToken(admin);
 
-  const refreshPayload = verifyRefreshToken(refreshToken);
-  await prisma.adminRefreshToken.create({
+  const refreshPayload = verifyRefreshPayloadOrThrow(refreshToken);
+  const refreshRecord = await db.adminRefreshToken.create({
     data: {
       token: refreshToken,
       adminId: admin.id,
       expiresAt: new Date(refreshPayload.exp * 1000),
     },
   });
+  await cacheRefreshToken("admin", refreshToken, refreshRecord);
 
   res.status(200).json({
     accessToken,
@@ -60,35 +73,46 @@ const adminLogin = asyncHandler(async (req, res) => {
 });
 
 const adminRefresh = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const { refreshToken } = req.body;
 
-  const dbToken = await prisma.adminRefreshToken.findUnique({ where: { token: refreshToken } });
-  if (!dbToken || dbToken.revokedAt || dbToken.expiresAt < new Date()) {
+  let dbToken = await getCachedRefreshToken("admin", refreshToken);
+  if (!dbToken) {
+    dbToken = await db.adminRefreshToken.findUnique({ where: { token: refreshToken } });
+    if (dbToken && !dbToken.revokedAt && dbToken.expiresAt >= new Date()) {
+      await cacheRefreshToken("admin", refreshToken, dbToken);
+    }
+  }
+  if (!dbToken || dbToken.revokedAt || new Date(dbToken.expiresAt) < new Date()) {
     throw new ApiError(401, "Invalid refresh token");
   }
 
-  const payload = verifyRefreshToken(refreshToken);
+  const payload = verifyRefreshPayloadOrThrow(refreshToken);
   if (payload.role !== "ADMIN") {
     throw new ApiError(401, "Invalid refresh token role");
   }
 
-  const admin = await prisma.admin.findUnique({ where: { id: payload.sub } });
+  const admin = await db.admin.findUnique({ where: { id: payload.sub } });
   if (!admin || !admin.isActive) {
     throw new ApiError(401, "Invalid refresh token");
   }
 
-  const newAccessToken = createAccessToken({ ...admin, permissions: resolvePermissions(admin) });
+  const newAccessToken = createAccessToken({ ...admin, permissions: resolveAdminPermissions(admin) });
   res.status(200).json({ accessToken: newAccessToken });
 });
 
 const adminLogout = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const { refreshToken } = req.body;
 
   if (refreshToken) {
-    await prisma.adminRefreshToken.updateMany({
+    await db.adminRefreshToken.updateMany({
       where: { token: refreshToken, revokedAt: null },
       data: { revokedAt: new Date() },
     });
+    await invalidateRefreshToken("admin", refreshToken);
   }
 
   res.status(200).json({ message: "Logged out" });

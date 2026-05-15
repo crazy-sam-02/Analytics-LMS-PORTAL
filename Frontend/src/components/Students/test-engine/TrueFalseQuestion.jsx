@@ -10,7 +10,7 @@ export function TrueFalseQuestion({ answer, onChange, disabled }) {
         <label
           key={choice.label}
           className={`flex cursor-pointer items-center gap-3 rounded-xl border px-4 py-3 transition ${
-            answer?.answer_boolean === choice.value ? "border-blue-500 bg-blue-50" : "border-slate-200 bg-white"
+            answer?.answer_boolean === choice.value ? "border-primary bg-primary/10" : "border-border bg-card"
           } ${disabled ? "cursor-not-allowed opacity-70" : ""}`}
         >
           <input
@@ -27,7 +27,7 @@ export function TrueFalseQuestion({ answer, onChange, disabled }) {
               })
             }
           />
-          <span className="text-slate-800">{choice.label}</span>
+          <span className="text-text-primary">{choice.label}</span>
         </label>
       ))}
     </div>

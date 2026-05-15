@@ -1,5 +1,5 @@
-const prisma = require("../config/db");
-const redisClient = require("../config/redis");
+const models = require("../models");
+const { redisClient, getRedisQueueConnection } = require("../config/redis");
 const { emitToRole } = require("../realtime/socket");
 
 let Queue = null;
@@ -13,9 +13,10 @@ try {
 
 let superReportQueue = null;
 let superReportWorker = null;
-if (Queue && redisClient) {
+const queueConnection = getRedisQueueConnection();
+if (Queue && redisClient && queueConnection) {
   superReportQueue = new Queue("super-admin-report-jobs", {
-    connection: redisClient,
+    connection: queueConnection,
   });
 
   superReportWorker = new Worker(
@@ -24,7 +25,7 @@ if (Queue && redisClient) {
       await processSuperReportSynchronously(job.data.reportJobId);
     },
     {
-      connection: redisClient,
+      connection: queueConnection,
       concurrency: 8,
     }
   );
@@ -42,7 +43,7 @@ const buildGlobalReportPayload = async (job) => {
   const filters = job.filters || {};
 
   if (job.type === "STUDENT_WISE") {
-    const rows = await prisma.submission.findMany({
+    const rows = await db.submission.findMany({
       where: {
         ...(filters.collegeId ? { collegeId: filters.collegeId } : {}),
       },
@@ -68,7 +69,7 @@ const buildGlobalReportPayload = async (job) => {
   }
 
   if (job.type === "TEST_WISE") {
-    const tests = await prisma.test.findMany({
+    const tests = await db.test.findMany({
       where: {
         ...(filters.collegeId ? { collegeId: filters.collegeId } : {}),
       },
@@ -92,7 +93,7 @@ const buildGlobalReportPayload = async (job) => {
   }
 
   if (job.type === "DEPARTMENT_WISE") {
-    const departments = await prisma.department.findMany({
+    const departments = await db.department.findMany({
       where: {
         ...(filters.collegeId ? { collegeId: filters.collegeId } : {}),
       },
@@ -118,7 +119,7 @@ const buildGlobalReportPayload = async (job) => {
     });
   }
 
-  const batches = await prisma.batch.findMany({
+  const batches = await db.batch.findMany({
     where: {
       ...(filters.collegeId ? { collegeId: filters.collegeId } : {}),
     },
@@ -145,7 +146,7 @@ const buildGlobalReportPayload = async (job) => {
 };
 
 const processSuperReportSynchronously = async (reportJobId) => {
-  await prisma.superReportJob.update({
+  await db.superReportJob.update({
     where: { id: reportJobId },
     data: { status: "PROCESSING" },
   });
@@ -156,12 +157,12 @@ const processSuperReportSynchronously = async (reportJobId) => {
   });
 
   try {
-    const reportJob = await prisma.superReportJob.findUnique({ where: { id: reportJobId } });
+    const reportJob = await db.superReportJob.findUnique({ where: { id: reportJobId } });
     const payload = await buildGlobalReportPayload(reportJob);
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
     const resultUrl = `/api/super-admin/reports/${reportJobId}/download?expires=${encodeURIComponent(expiresAt)}`;
 
-    await prisma.superReportJob.update({
+    await db.superReportJob.update({
       where: { id: reportJobId },
       data: {
         status: "COMPLETED",
@@ -179,7 +180,7 @@ const processSuperReportSynchronously = async (reportJobId) => {
       status: "COMPLETED",
     });
   } catch (error) {
-    await prisma.superReportJob.update({
+    await db.superReportJob.update({
       where: { id: reportJobId },
       data: {
         status: "FAILED",

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useDispatch, useSelector } from "react-redux";
@@ -9,6 +9,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { X } from "lucide-react";
 import TypedConfirmDialog from "@/components/SuperAdmin/TypedConfirmDialog";
 
 const loadXlsxBrowserLib = () =>
@@ -51,12 +52,21 @@ const getRowValue = (row, aliases = []) => {
   return "";
 };
 
+const unwrapItems = (response) => {
+  if (Array.isArray(response)) return response;
+  if (Array.isArray(response?.data)) return response.data;
+  return [];
+};
+
+const collegeScopedLimit = 50;
+
 export default function StudentsPage() {
   const dispatch = useDispatch();
   const students = useSelector((state) => state.superAdminPanel.students);
   const colleges = useSelector((state) => state.superAdminPanel.colleges);
   const [filters, setFilters] = useState({ search: "", collegeId: "", departmentId: "", batchId: "" });
-  const [pendingBlock, setPendingBlock] = useState(null);
+  const [pendingDelete, setPendingDelete] = useState(null);
+  const [editingStudent, setEditingStudent] = useState(null);
   const [banner, setBanner] = useState({ type: "", title: "", message: "" });
   const [activeImportJobId, setActiveImportJobId] = useState("");
   const [importFileName, setImportFileName] = useState("");
@@ -69,7 +79,16 @@ export default function StudentsPage() {
     departmentId: "",
     batchId: "",
   });
+  const [editFormData, setEditFormData] = useState({
+    fullName: "",
+    email: "",
+    enrollNumber: "",
+    collegeId: "",
+    departmentId: "",
+    batchId: "",
+  });
   const [createdCredentials, setCreatedCredentials] = useState(null);
+  const createCollegeId = studentForm.collegeId;
 
   useEffect(() => {
     dispatch(fetchSuperStudents());
@@ -77,21 +96,21 @@ export default function StudentsPage() {
   }, [dispatch]);
 
   const departmentsQuery = useQuery({
-    queryKey: ["super-student-departments", studentForm.collegeId || filters.collegeId],
+    queryKey: ["super-student-departments", createCollegeId],
     queryFn: () => {
-      const sourceCollegeId = studentForm.collegeId || filters.collegeId;
-      const params = sourceCollegeId ? `?collegeId=${encodeURIComponent(sourceCollegeId)}&limit=100` : "?limit=100";
+      const params = `?collegeId=${encodeURIComponent(createCollegeId)}&limit=${collegeScopedLimit}`;
       return superAdminApi.getDepartments(params);
     },
+    enabled: Boolean(createCollegeId),
   });
 
   const batchesQuery = useQuery({
-    queryKey: ["super-student-batches", studentForm.collegeId || filters.collegeId],
+    queryKey: ["super-student-batches", createCollegeId],
     queryFn: () => {
-      const sourceCollegeId = studentForm.collegeId || filters.collegeId;
-      const params = sourceCollegeId ? `?collegeId=${encodeURIComponent(sourceCollegeId)}&limit=100` : "?limit=100";
+      const params = `?collegeId=${encodeURIComponent(createCollegeId)}&limit=${collegeScopedLimit}`;
       return superAdminApi.getBatches(params);
     },
+    enabled: Boolean(createCollegeId),
   });
 
   const importJobQuery = useQuery({
@@ -102,6 +121,24 @@ export default function StudentsPage() {
       const status = query?.state?.data?.status;
       return status === "queued" || status === "processing" ? 2000 : false;
     },
+  });
+
+  const filterDepartmentsQuery = useQuery({
+    queryKey: ["super-student-filter-departments", filters.collegeId],
+    queryFn: () => {
+      const params = `?collegeId=${encodeURIComponent(filters.collegeId)}&limit=${collegeScopedLimit}`;
+      return superAdminApi.getDepartments(params);
+    },
+    enabled: Boolean(filters.collegeId),
+  });
+
+  const filterBatchesQuery = useQuery({
+    queryKey: ["super-student-filter-batches", filters.collegeId],
+    queryFn: () => {
+      const params = `?collegeId=${encodeURIComponent(filters.collegeId)}&limit=${collegeScopedLimit}`;
+      return superAdminApi.getBatches(params);
+    },
+    enabled: Boolean(filters.collegeId),
   });
 
   const toCell = (value) => String(value ?? "").replace(/,/g, " ").trim();
@@ -166,7 +203,7 @@ export default function StudentsPage() {
     event.target.value = "";
   };
 
-  const runSearch = () => {
+  const runSearch = useCallback(() => {
     const params = new URLSearchParams();
     if (filters.search.trim()) params.set("search", filters.search.trim());
     if (filters.collegeId.trim()) params.set("collegeId", filters.collegeId.trim());
@@ -174,7 +211,7 @@ export default function StudentsPage() {
     if (filters.batchId.trim()) params.set("batchId", filters.batchId.trim());
     const query = params.toString() ? `?${params.toString()}` : "";
     dispatch(fetchSuperStudents(query));
-  };
+  }, [dispatch, filters.batchId, filters.collegeId, filters.departmentId, filters.search]);
 
   const createStudentMutation = useMutation({
     mutationFn: (payload) => superAdminApi.createStudent(payload),
@@ -204,12 +241,59 @@ export default function StudentsPage() {
     },
   });
 
-  const toggleStatus = async (student, confirmationText = null) => {
-    await superAdminApi.updateStudentStatus(student.id, {
-      isActive: !student.isActive,
-      ...(confirmationText ? { confirmationText } : {}),
+  const updateStudentMutation = useMutation({
+    mutationFn: (payload) => superAdminApi.updateStudent(editingStudent?.id, payload),
+    onSuccess: () => {
+      setBanner({ type: "success", title: "Student updated", message: "Student information has been updated successfully." });
+      toast.success("Student updated successfully");
+      setEditingStudent(null);
+      runSearch();
+    },
+    onError: (error) => {
+      setBanner({ type: "error", title: "Update failed", message: error?.message || "Unable to update student." });
+      toast.error(error?.message || "Unable to update student");
+    },
+  });
+
+  const deleteStudentHandler = async (student, confirmationText = null) => {
+    try {
+      await superAdminApi.deleteStudent(student.id, {
+        ...(confirmationText ? { confirmationText } : {}),
+      });
+      setBanner({ type: "success", title: "Student deleted", message: `${student.fullName} has been permanently deleted from the database.` });
+      toast.success("Student deleted successfully");
+      runSearch();
+    } catch (error) {
+      setBanner({ type: "error", title: "Delete failed", message: error?.message || "Unable to delete student." });
+      toast.error(error?.message || "Unable to delete student");
+    }
+  };
+
+  const openEditForm = (student) => {
+    setEditingStudent(student);
+    setEditFormData({
+      fullName: student.fullName || "",
+      email: student.email || "",
+      enrollNumber: student.enrollNumber || "",
+      collegeId: student.collegeId || "",
+      departmentId: student.departmentId || "",
+      batchId: student.batchId || "",
     });
-    runSearch();
+  };
+
+  const handleEditSubmit = () => {
+    if (!editFormData.fullName.trim() || !editFormData.email.trim() || !editFormData.enrollNumber.trim()) {
+      toast.error("Please fill in all required fields");
+      return;
+    }
+    updateStudentMutation.mutate({
+      fullName: editFormData.fullName,
+      email: editFormData.email,
+      enrollNumber: editFormData.enrollNumber,
+      collegeId: editFormData.collegeId,
+      departmentId: editFormData.departmentId,
+      ...(editFormData.batchId ? { batchId: editFormData.batchId } : {}),
+    });
   };
 
   useEffect(() => {
@@ -229,25 +313,56 @@ export default function StudentsPage() {
     if (importJobQuery.data.status === "queued" || importJobQuery.data.status === "processing") {
       setBanner({ type: "warning", title: "Import in progress", message: "Job is still running. Results will appear shortly." });
     }
-  }, [importJobQuery.data]);
+  }, [importJobQuery.data, runSearch]);
 
-  const departments = useMemo(() => departmentsQuery.data?.data || [], [departmentsQuery.data]);
-  const batches = useMemo(() => batchesQuery.data?.data || [], [batchesQuery.data]);
+  const departments = useMemo(() => unwrapItems(departmentsQuery.data), [departmentsQuery.data]);
+  const batches = useMemo(() => unwrapItems(batchesQuery.data), [batchesQuery.data]);
+  const filterDepartments = useMemo(() => unwrapItems(filterDepartmentsQuery.data), [filterDepartmentsQuery.data]);
+  const filterBatches = useMemo(() => unwrapItems(filterBatchesQuery.data), [filterBatchesQuery.data]);
+  const filteredFilterBatches = useMemo(() => {
+    if (!filters.departmentId) return filterBatches;
+    return filterBatches.filter((batch) => String(batch.departmentId) === String(filters.departmentId));
+  }, [filterBatches, filters.departmentId]);
   const filteredBatches = useMemo(() => {
     if (!studentForm.departmentId) return batches;
     return batches.filter((batch) => String(batch.departmentId) === String(studentForm.departmentId));
   }, [batches, studentForm.departmentId]);
 
+  const editDepartmentsQuery = useQuery({
+    queryKey: ["super-edit-student-departments", editFormData.collegeId],
+    queryFn: () => {
+      const params = `?collegeId=${encodeURIComponent(editFormData.collegeId)}&limit=${collegeScopedLimit}`;
+      return superAdminApi.getDepartments(params);
+    },
+    enabled: Boolean(editFormData.collegeId),
+  });
+
+  const editBatchesQuery = useQuery({
+    queryKey: ["super-edit-student-batches", editFormData.collegeId],
+    queryFn: () => {
+      const params = `?collegeId=${encodeURIComponent(editFormData.collegeId)}&limit=${collegeScopedLimit}`;
+      return superAdminApi.getBatches(params);
+    },
+    enabled: Boolean(editFormData.collegeId),
+  });
+
+  const editDepartments = useMemo(() => unwrapItems(editDepartmentsQuery.data), [editDepartmentsQuery.data]);
+  const editBatches = useMemo(() => unwrapItems(editBatchesQuery.data), [editBatchesQuery.data]);
+  const filteredEditBatches = useMemo(() => {
+    if (!editFormData.departmentId) return editBatches;
+    return editBatches.filter((batch) => String(batch.departmentId) === String(editFormData.departmentId));
+  }, [editBatches, editFormData.departmentId]);
+
   return (
     <div className="space-y-6">
       {banner.type ? (
-        <Alert variant={banner.type === "error" ? "destructive" : "default"} className={banner.type === "warning" ? "border-amber-300 bg-amber-50 text-amber-800" : ""}>
+        <Alert variant={banner.type === "error" ? "destructive" : "default"} className={banner.type === "warning" ? "border-warning/30 bg-warning/10 text-warning" : ""}>
           <AlertTitle>{banner.title}</AlertTitle>
           <AlertDescription>{banner.message}</AlertDescription>
         </Alert>
       ) : null}
 
-      <Card className="rounded-2xl border-slate-200">
+      <Card className="rounded-2xl border-border">
         <CardHeader>
           <CardTitle>Create Student Account</CardTitle>
           <CardDescription>Super Admin can create student accounts manually across colleges.</CardDescription>
@@ -271,7 +386,7 @@ export default function StudentsPage() {
               onChange={(event) => setStudentForm((prev) => ({ ...prev, enrollNumber: event.target.value }))}
             />
             <select
-              className="h-10 rounded-md border border-slate-200 px-3 text-sm"
+              className="h-10 rounded-md border border-border px-3 text-sm"
               value={studentForm.collegeId}
               onChange={(event) => setStudentForm((prev) => ({ ...prev, collegeId: event.target.value, departmentId: "", batchId: "" }))}
             >
@@ -281,27 +396,29 @@ export default function StudentsPage() {
               ))}
             </select>
             <select
-              className="h-10 rounded-md border border-slate-200 px-3 text-sm"
+              className="h-10 rounded-md border border-border px-3 text-sm"
               value={studentForm.departmentId}
               onChange={(event) => setStudentForm((prev) => ({ ...prev, departmentId: event.target.value, batchId: "" }))}
+              disabled={!studentForm.collegeId || departmentsQuery.isLoading}
             >
-              <option value="">Select department</option>
-              {departments.map((department) => (
+              <option value="">{studentForm.collegeId ? (departmentsQuery.isLoading ? "Loading departments..." : "Select department") : "Select college first"}</option>
+              {studentForm.collegeId && departments.map((department) => (
                 <option key={department.id} value={department.id}>{department.name}</option>
               ))}
             </select>
             <select
-              className="h-10 rounded-md border border-slate-200 px-3 text-sm"
+              className="h-10 rounded-md border border-border px-3 text-sm"
               value={studentForm.batchId}
               onChange={(event) => setStudentForm((prev) => ({ ...prev, batchId: event.target.value }))}
+              disabled={!studentForm.collegeId || batchesQuery.isLoading}
             >
-              <option value="">Select batch (optional)</option>
-              {filteredBatches.map((batch) => (
+              <option value="">{studentForm.collegeId ? (batchesQuery.isLoading ? "Loading batches..." : "Select batch (optional)") : "Select college first"}</option>
+              {studentForm.collegeId && filteredBatches.map((batch) => (
                 <option key={batch.id} value={batch.id}>{batch.name}</option>
               ))}
             </select>
           </div>
-          <p className="text-xs text-slate-500">Student ID is auto-generated. Password rule: first 3 letters of full name (first letter capitalized) + @ + last 3 digits of enroll number.</p>
+          <p className="text-xs text-text-secondary">Student ID is auto-generated. Password rule: first 3 letters of full name (first letter capitalized) + @ + last 3 digits of enroll number.</p>
           <Button
             onClick={() => createStudentMutation.mutate({
               fullName: studentForm.fullName,
@@ -324,7 +441,7 @@ export default function StudentsPage() {
           </Button>
 
           {createdCredentials ? (
-            <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
+            <div className="rounded-lg border border-success/30 bg-success/10 p-3 text-sm text-success">
               <p className="font-semibold">Student credentials</p>
               <p>Email: {createdCredentials.identifier}</p>
               <p>Student ID: {createdCredentials.studentId}</p>
@@ -334,7 +451,7 @@ export default function StudentsPage() {
         </CardContent>
       </Card>
 
-      <Card className="rounded-2xl border-slate-200">
+      <Card className="rounded-2xl border-border">
         <CardHeader>
           <CardTitle>Bulk Import (Excel/CSV)</CardTitle>
           <CardDescription>Upload .xlsx/.xls/.csv file or paste CSV for the selected college.</CardDescription>
@@ -342,7 +459,7 @@ export default function StudentsPage() {
         <CardContent className="space-y-3">
           <div className="grid gap-3 md:grid-cols-2">
             <select
-              className="h-10 rounded-md border border-slate-200 px-3 text-sm"
+              className="h-10 rounded-md border border-border px-3 text-sm"
               value={filters.collegeId}
               onChange={(event) => setFilters((prev) => ({ ...prev, collegeId: event.target.value }))}
             >
@@ -354,8 +471,8 @@ export default function StudentsPage() {
             <Input type="file" accept=".xlsx,.xls,.csv" onChange={handleImportFile} />
           </div>
 
-          {importFileName ? <p className="text-xs text-slate-500">Loaded: {importFileName}</p> : null}
-          <p className="text-xs text-slate-500">Required columns: fullName, email, enrollNumber, department. Optional: studentId, batch.</p>
+          {importFileName ? <p className="text-xs text-text-secondary">Loaded: {importFileName}</p> : null}
+          <p className="text-xs text-text-secondary">Required columns: fullName, email, enrollNumber, department. Optional: studentId, batch.</p>
 
           <Textarea rows={8} value={csvData} onChange={(event) => setCsvData(event.target.value)} />
 
@@ -366,19 +483,19 @@ export default function StudentsPage() {
             >
               {importMutation.isPending ? "Queueing..." : "Start Import"}
             </Button>
-            {activeImportJobId ? <p className="text-xs text-slate-500">Job: {activeImportJobId}</p> : null}
+            {activeImportJobId ? <p className="text-xs text-text-secondary">Job: {activeImportJobId}</p> : null}
           </div>
 
           {importJobQuery.data ? (
-            <div className="rounded-lg border border-slate-200 p-3 text-sm">
-              <p className="font-medium text-slate-800">Status: {String(importJobQuery.data.status || "unknown").toUpperCase()}</p>
+            <div className="rounded-lg border border-border p-3 text-sm">
+              <p className="font-medium text-text-primary">Status: {String(importJobQuery.data.status || "unknown").toUpperCase()}</p>
               {importJobQuery.data.result ? (
                 <>
-                  <p className="mt-1 text-slate-600">
+                  <p className="mt-1 text-text-secondary">
                     Created: {importJobQuery.data.result.created || 0} • Failed: {importJobQuery.data.result.failed || 0} • Duplicates: {importJobQuery.data.result.duplicates || 0}
                   </p>
                   {Array.isArray(importJobQuery.data.result.errors) && importJobQuery.data.result.errors.length > 0 ? (
-                    <div className="mt-2 max-h-40 overflow-auto rounded-md border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700">
+                    <div className="mt-2 max-h-40 overflow-auto rounded-md border border-border bg-background p-2 text-xs text-text-secondary">
                       {importJobQuery.data.result.errors.slice(0, 10).map((item, index) => (
                         <p key={`${item.row || "row"}-${index}`}>Row {item.row || "?"}: {item.reason || "Invalid data"}</p>
                       ))}
@@ -386,63 +503,167 @@ export default function StudentsPage() {
                   ) : null}
                 </>
               ) : null}
-              {importJobQuery.data.error ? <p className="mt-1 text-red-600">Error: {importJobQuery.data.error}</p> : null}
+              {importJobQuery.data.error ? <p className="mt-1 text-danger">Error: {importJobQuery.data.error}</p> : null}
             </div>
           ) : null}
         </CardContent>
       </Card>
 
-      <Card className="rounded-2xl border-slate-200">
+      <Card className="rounded-2xl border-border">
         <CardHeader><CardTitle>Global Students</CardTitle></CardHeader>
         <CardContent>
           <div className="mb-4 grid gap-2 sm:grid-cols-5">
             <Input placeholder="Search" value={filters.search} onChange={(e) => setFilters((prev) => ({ ...prev, search: e.target.value }))} />
-            <select className="h-10 rounded-md border border-slate-200 px-3 text-sm" value={filters.collegeId} onChange={(e) => setFilters((prev) => ({ ...prev, collegeId: e.target.value }))}>
+            <select
+              className="h-10 rounded-md border border-border px-3 text-sm"
+              value={filters.collegeId}
+              onChange={(e) => setFilters((prev) => ({ ...prev, collegeId: e.target.value, departmentId: "", batchId: "" }))}
+            >
               <option value="">All colleges</option>
               {colleges.map((college) => (
                 <option key={college.id} value={college.id}>{college.name}</option>
               ))}
             </select>
-            <Input placeholder="Department ID" value={filters.departmentId} onChange={(e) => setFilters((prev) => ({ ...prev, departmentId: e.target.value }))} />
-            <Input placeholder="Batch ID" value={filters.batchId} onChange={(e) => setFilters((prev) => ({ ...prev, batchId: e.target.value }))} />
+            <select
+              className="h-10 rounded-md border border-border px-3 text-sm"
+              value={filters.departmentId}
+              onChange={(e) => setFilters((prev) => ({ ...prev, departmentId: e.target.value, batchId: "" }))}
+              disabled={!filters.collegeId || filterDepartmentsQuery.isLoading}
+            >
+              <option value="">{filters.collegeId ? (filterDepartmentsQuery.isLoading ? "Loading departments..." : "All departments") : "Select college first"}</option>
+              {filters.collegeId && filterDepartments.map((department) => (
+                <option key={department.id} value={department.id}>{department.name}</option>
+              ))}
+            </select>
+            <select
+              className="h-10 rounded-md border border-border px-3 text-sm"
+              value={filters.batchId}
+              onChange={(e) => setFilters((prev) => ({ ...prev, batchId: e.target.value }))}
+              disabled={!filters.collegeId || filterBatchesQuery.isLoading}
+            >
+              <option value="">{filters.collegeId ? (filterBatchesQuery.isLoading ? "Loading batches..." : "All batches") : "Select college first"}</option>
+              {filters.collegeId && filteredFilterBatches.map((batch) => (
+                <option key={batch.id} value={batch.id}>{batch.name}</option>
+              ))}
+            </select>
             <Button variant="outline" onClick={runSearch}>Search</Button>
           </div>
           <div className="space-y-2">
             {students.map((student) => (
-              <div key={student.id} className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2">
+              <div key={student.id} className="flex items-center justify-between rounded-xl border border-border px-3 py-2">
                 <div>
-                  <p className="font-medium text-slate-800">{student.fullName}</p>
-                  <p className="text-xs text-slate-500">{student.email} • {student.studentId} • {student.college?.name}</p>
+                  <p className="font-medium text-text-primary">{student.fullName}</p>
+                  <p className="text-xs text-text-secondary">{student.email} • {student.studentId} • {student.college?.name}</p>
                 </div>
-                <Button size="sm" variant="outline" onClick={() => {
-                  if (student.isActive) {
-                    setPendingBlock(student);
-                    return;
-                  }
-                  toggleStatus(student);
-                }}>
-                  {student.isActive ? "Block" : "Unblock"}
-                </Button>
+                <div className="flex items-center justify-center gap-4">
+                  <Button size="sm" variant="outline" onClick={() => openEditForm(student)}>
+                    Edit
+                  </Button>
+                  <Button size="sm" variant="destructive" onClick={() => setPendingDelete(student)}>
+                    Delete
+                  </Button>
+                </div>
               </div>
             ))}
           </div>
         </CardContent>
       </Card>
 
+      {editingStudent && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm p-4">
+          <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl bg-card border border-border shadow-lg">
+            <div className="sticky top-0 flex items-center justify-between border-b border-border bg-card p-6 z-10">
+              <div>
+                <h2 className="text-xl font-semibold text-text-primary">Edit Student - {editingStudent?.fullName}</h2>
+                <p className="text-sm text-text-secondary mt-1">Update student information</p>
+              </div>
+              <button
+                onClick={() => setEditingStudent(null)}
+                className="inline-flex items-center justify-center rounded-lg hover:bg-background p-2 transition-colors"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                <Input
+                  placeholder="Full name"
+                  value={editFormData.fullName}
+                  onChange={(event) => setEditFormData((prev) => ({ ...prev, fullName: event.target.value }))}
+                />
+                <Input
+                  type="email"
+                  placeholder="Email"
+                  value={editFormData.email}
+                  onChange={(event) => setEditFormData((prev) => ({ ...prev, email: event.target.value }))}
+                />
+                <Input
+                  placeholder="Enroll number"
+                  value={editFormData.enrollNumber}
+                  onChange={(event) => setEditFormData((prev) => ({ ...prev, enrollNumber: event.target.value }))}
+                />
+                <select
+                  className="h-10 rounded-md border border-border px-3 text-sm"
+                  value={editFormData.collegeId}
+                  onChange={(event) => setEditFormData((prev) => ({ ...prev, collegeId: event.target.value, departmentId: "", batchId: "" }))}
+                >
+                  <option value="">Select college</option>
+                  {colleges.filter((college) => college?.isActive !== false).map((college) => (
+                    <option key={college.id} value={college.id}>{college.name}</option>
+                  ))}
+                </select>
+                <select
+                  className="h-10 rounded-md border border-border px-3 text-sm"
+                  value={editFormData.departmentId}
+                  onChange={(event) => setEditFormData((prev) => ({ ...prev, departmentId: event.target.value, batchId: "" }))}
+                >
+                  <option value="">Select department</option>
+                  {editDepartments.map((department) => (
+                    <option key={department.id} value={department.id}>{department.name}</option>
+                  ))}
+                </select>
+                <select
+                  className="h-10 rounded-md border border-border px-3 text-sm"
+                  value={editFormData.batchId}
+                  onChange={(event) => setEditFormData((prev) => ({ ...prev, batchId: event.target.value }))}
+                >
+                  <option value="">Select batch (optional)</option>
+                  {filteredEditBatches.map((batch) => (
+                    <option key={batch.id} value={batch.id}>{batch.name}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="sticky bottom-0 border-t border-border bg-background p-6 flex items-center justify-end gap-3">
+              <Button variant="outline" onClick={() => setEditingStudent(null)} disabled={updateStudentMutation.isPending}>
+                Cancel
+              </Button>
+              <Button onClick={handleEditSubmit} disabled={updateStudentMutation.isPending}>
+                {updateStudentMutation.isPending ? "Updating..." : "Save Changes"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+
+
       <TypedConfirmDialog
-        open={Boolean(pendingBlock)}
-        onOpenChange={(open) => !open && setPendingBlock(null)}
-        title="Typed Confirmation Required"
-        description={`Blocking ${pendingBlock?.fullName || "this student"} will prevent login until unblocked.`}
-        expectedText={`BLOCK ${pendingBlock?.studentId || pendingBlock?.id || ""}`}
-        inputLabel="Type the exact phrase"
-        confirmLabel="Block Student"
+        open={Boolean(pendingDelete)}
+        onOpenChange={(open) => !open && setPendingDelete(null)}
+        title="Delete Student - Typed Confirmation Required"
+        description={`Deleting ${pendingDelete?.fullName || "this student"} will permanently remove them and all associated data from the database. This action cannot be undone.`}
+        expectedText={`DELETE ${pendingDelete?.studentId || pendingDelete?.id || ""}`}
+        inputLabel="Type the exact phrase to confirm"
+        confirmLabel="Permanently Delete Student"
         confirmVariant="destructive"
         onConfirm={async (typedText) => {
-          if (pendingBlock) {
-            await toggleStatus(pendingBlock, typedText);
+          if (pendingDelete) {
+            await deleteStudentHandler(pendingDelete, typedText);
           }
-          setPendingBlock(null);
+          setPendingDelete(null);
         }}
       />
     </div>

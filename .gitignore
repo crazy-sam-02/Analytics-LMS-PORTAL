@@ -1,0 +1,14 @@
+# Credentials must NEVER be committed
+credentails.txt
+credentials.txt
+*.credentials
+*.secret
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Scratch / temp
+scratch/

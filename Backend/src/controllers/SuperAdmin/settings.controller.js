@@ -1,11 +1,13 @@
-const prisma = require("../../config/db");
+const models = require("../../models");
 const { createAuditLog } = require("../../services/audit.service");
 const { asyncHandler } = require("../../utils/http");
 
 const SETTINGS_KEY = "platform.defaults";
 
 const getPlatformSettings = asyncHandler(async (_req, res) => {
-  const settings = await prisma.platformSetting.findUnique({
+  const m = await models.init();
+  const db = m.dbClient;
+  const settings = await db.platformSetting.findUnique({
     where: { key: SETTINGS_KEY },
   });
 
@@ -24,7 +26,9 @@ const getPlatformSettings = asyncHandler(async (_req, res) => {
 });
 
 const updatePlatformSettings = asyncHandler(async (req, res) => {
-  const existing = await prisma.platformSetting.findUnique({ where: { key: SETTINGS_KEY } });
+  const m = await models.init();
+  const db = m.dbClient;
+  const existing = await db.platformSetting.findUnique({ where: { key: SETTINGS_KEY } });
 
   const nextValue = {
     maxAttemptsDefault: req.body.maxAttemptsDefault ?? existing?.value?.maxAttemptsDefault ?? 1,
@@ -32,7 +36,7 @@ const updatePlatformSettings = asyncHandler(async (req, res) => {
     globalRules: req.body.globalRules ?? existing?.value?.globalRules ?? {},
   };
 
-  const settings = await prisma.platformSetting.upsert({
+  const settings = await db.platformSetting.upsert({
     where: { key: SETTINGS_KEY },
     update: {
       value: nextValue,

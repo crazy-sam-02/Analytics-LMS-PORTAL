@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
-import { useNavigate } from "react-router-dom";
-import { fetchAdminTests, transitionAdminTestStatus, deleteAdminTest, duplicateAdminTest } from "@/features/Admin/adminPanelSlice";
+import { fetchAdminTests, transitionAdminTestStatus, deleteAdminTest } from "@/features/Admin/adminPanelSlice";
+import { openTestEditDialog } from "@/features/Admin/testCreationSlice";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,13 +22,14 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
+import { adminApi } from "@/services/api";
 
 const STATUS_TONE = {
-  DRAFT: "bg-slate-100 text-slate-700 border-slate-200",
-  SCHEDULED: "bg-blue-50 text-blue-700 border-blue-200",
-  LIVE: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  DRAFT: "bg-muted text-text-secondary border-border",
+  SCHEDULED: "bg-primary/10 text-primary border-primary/30",
+  LIVE: "bg-success/10 text-success border-success/30",
   COMPLETED: "bg-teal-50 text-teal-700 border-teal-200",
-  ARCHIVED: "bg-slate-50 text-slate-500 border-slate-200",
+  ARCHIVED: "bg-background text-text-secondary border-border",
 };
 
 const normalizeStatus = (status) => {
@@ -51,23 +52,30 @@ const transitionsForStatus = (status) => {
       return [
         { action: "SCHEDULE", label: "Schedule" },
         { action: "GO_LIVE", label: "Go Live" },
-        { action: "ARCHIVE", label: "Archive" },
+        { action: "DELETE", label: "Delete" },
       ];
     case "SCHEDULED":
       return [
         { action: "GO_LIVE", label: "Go Live" },
-        { action: "ARCHIVE", label: "Archive" },
+        { action: "DELETE", label: "Delete" },
       ];
     case "LIVE":
       return [
         { action: "COMPLETE", label: "Mark Complete" },
-        { action: "ARCHIVE", label: "Archive" },
+        { action: "DELETE", label: "Delete" },
       ];
     case "COMPLETED":
-      return [{ action: "ARCHIVE", label: "Archive" }];
+      return [{ action: "DELETE", label: "Delete" }];
     default:
       return [];
   }
+};
+
+const isAdminReadOnlyTest = (test) => {
+  if (!test) return false;
+  if (test.canAdminOperate === false) return true;
+  if (test.managedBy === "SUPER_ADMIN") return true;
+  return Boolean(test.isGlobal);
 };
 
 const transitionConfirmationText = (testTitle, action) => {
@@ -78,8 +86,8 @@ const transitionConfirmationText = (testTitle, action) => {
       return `Go live now for "${testTitle}"? Questions become locked for editing after publish.`;
     case "COMPLETE":
       return `Mark "${testTitle}" as completed? This will stop it from remaining active.`;
-    case "ARCHIVE":
-      return `Archive "${testTitle}"? It will be hidden from active admin workflows but retained for reports.`;
+    case "DELETE":
+      return `Delete "${testTitle}"? This action is irreversible and will remove all associated data.`;
     default:
       return `Apply transition ${action} for "${testTitle}"?`;
   }
@@ -87,7 +95,6 @@ const transitionConfirmationText = (testTitle, action) => {
 
 export default function ManageTestsPage() {
   const dispatch = useDispatch();
-  const navigate = useNavigate();
   const tests = useSelector((state) => state.adminPanel.tests.data);
   const loading = useSelector((state) => state.adminPanel.tests.loading);
   const pagination = useSelector((state) => state.adminPanel.tests.pagination || {});
@@ -107,6 +114,7 @@ export default function ManageTestsPage() {
   const [bulkAction, setBulkAction] = useState("ARCHIVE");
   const [deleteConfirmName, setDeleteConfirmName] = useState("");
   const [deleteDialog, setDeleteDialog] = useState({ open: false, test: null });
+  const [editingTestId, setEditingTestId] = useState("");
 
   const canTransition = canEdit || canPublish;
 
@@ -180,12 +188,16 @@ export default function ManageTestsPage() {
     }
 
     if (pendingAction.type === "transition") {
-      dispatch(
-        transitionAdminTestStatus({
-          testId: pendingAction.test.id,
-          action: pendingAction.action,
-        })
-      );
+      if (pendingAction.action === "DELETE") {
+        dispatch(deleteAdminTest(pendingAction.test.id));
+      } else {
+        dispatch(
+          transitionAdminTestStatus({
+            testId: pendingAction.test.id,
+            action: pendingAction.action,
+          })
+        );
+      }
     }
 
     setPendingAction(null);
@@ -194,18 +206,24 @@ export default function ManageTestsPage() {
   const selectedTests = tests.filter((test) => selectedIds.includes(test.id));
   const bulkPreview = useMemo(() => {
     if (bulkAction === "ARCHIVE") {
-      const valid = selectedTests.filter((test) => normalizeStatus(test.status) !== "ARCHIVED").length;
+      const valid = selectedTests.filter(
+        (test) => !isAdminReadOnlyTest(test) && normalizeStatus(test.status) !== "ARCHIVED"
+      ).length;
       return { valid, skipped: selectedTests.length - valid };
     }
 
     const valid = selectedTests.filter(
-      (test) => normalizeStatus(test.status) === "DRAFT" && Number(test?._count?.submissions || 0) === 0
+      (test) => !isAdminReadOnlyTest(test)
+        && normalizeStatus(test.status) === "DRAFT"
+        && Number(test?._count?.submissions || 0) === 0
     ).length;
     return { valid, skipped: selectedTests.length - valid };
   }, [bulkAction, selectedTests]);
 
   const runBulkAction = async () => {
     const actionPromises = selectedTests.map(async (test) => {
+      if (isAdminReadOnlyTest(test)) return false;
+
       if (bulkAction === "ARCHIVE") {
         if (normalizeStatus(test.status) === "ARCHIVED") return false;
         await dispatch(transitionAdminTestStatus({ testId: test.id, action: "ARCHIVE" }));
@@ -227,9 +245,24 @@ export default function ManageTestsPage() {
     setBulkOpen(false);
   };
 
-  const onDuplicate = async (testId) => {
-    await dispatch(duplicateAdminTest(testId));
-    toast.success("Test duplicated as draft copy.");
+  const onOpenEdit = async (testId) => {
+    if (!testId) return;
+
+    const selectedTest = tests.find((item) => item.id === testId);
+    if (isAdminReadOnlyTest(selectedTest)) {
+      toast.error("This test is managed by super admin and is read-only for admins.");
+      return;
+    }
+
+    try {
+      setEditingTestId(testId);
+      const testDetail = await adminApi.getTestById(testId);
+      dispatch(openTestEditDialog({ test: testDetail }));
+    } catch (error) {
+      toast.error(error?.message || "Failed to load test for editing.");
+    } finally {
+      setEditingTestId("");
+    }
   };
 
   if (!canEdit && !canPublish && !canCreate) {
@@ -238,7 +271,7 @@ export default function ManageTestsPage() {
 
   return (
     <div className="space-y-6">
-      <Card className="rounded-2xl border-slate-200">
+      <Card className="rounded-2xl border-border">
         <CardHeader className="flex flex-row items-center justify-between gap-2">
           <div>
             <CardTitle>Create Test</CardTitle>
@@ -248,7 +281,7 @@ export default function ManageTestsPage() {
         </CardHeader>
       </Card>
 
-      <Card className="rounded-2xl border-slate-200">
+      <Card className="rounded-2xl border-border">
         <CardHeader>
           <CardTitle>Existing Tests</CardTitle>
           <CardDescription>Use lifecycle filters and transition actions to manage test state safely.</CardDescription>
@@ -256,12 +289,12 @@ export default function ManageTestsPage() {
         <CardContent className="space-y-3">
           <div className="grid gap-2 md:grid-cols-4">
             <Input value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="Search by name or description" />
-            <select className="h-10 rounded-md border border-slate-200 px-3 text-sm" value={sortBy} onChange={(event) => setSortBy(event.target.value)}>
+            <select className="h-10 rounded-md border border-border px-3 text-sm" value={sortBy} onChange={(event) => setSortBy(event.target.value)}>
               {SORT_FIELDS.map((item) => (
                 <option key={item.value} value={item.value}>{item.label}</option>
               ))}
             </select>
-            <select className="h-10 rounded-md border border-slate-200 px-3 text-sm" value={sortOrder} onChange={(event) => setSortOrder(event.target.value)}>
+            <select className="h-10 rounded-md border border-border px-3 text-sm" value={sortOrder} onChange={(event) => setSortOrder(event.target.value)}>
               <option value="desc">Desc</option>
               <option value="asc">Asc</option>
             </select>
@@ -286,13 +319,13 @@ export default function ManageTestsPage() {
             })}
           </div>
 
-          {loading ? <p className="text-sm text-slate-500">Loading tests...</p> : null}
-          {!loading && tests.length === 0 ? <p className="text-sm text-slate-500">No tests available.</p> : null}
-          <div className="overflow-x-auto rounded-xl border border-slate-200">
+          {loading ? <p className="text-sm text-text-secondary">Loading tests...</p> : null}
+          {!loading && tests.length === 0 ? <p className="text-sm text-text-secondary">No tests available.</p> : null}
+          <div className="overflow-x-auto rounded-xl border border-border">
             <table className="min-w-full divide-y divide-slate-200 text-sm">
-              <thead className="bg-slate-50">
+              <thead className="bg-background">
                 <tr>
-                  <th className="px-3 py-2 text-left"><input type="checkbox" checked={tests.length > 0 && selectedIds.length === tests.length} onChange={(event) => setSelectedIds(event.target.checked ? tests.map((item) => item.id) : [])} /></th>
+                  <th className="px-3 py-2 text-left"><input type="checkbox" checked={tests.length > 0 && selectedIds.length === tests.length} onChange={(event) => setSelectedIds(event.target.checked ? tests.filter((item) => !isAdminReadOnlyTest(item)).map((item) => item.id) : [])} /></th>
                   <th className="px-3 py-2 text-left">Test Name</th>
                   <th className="px-3 py-2 text-left">Status</th>
                   <th className="px-3 py-2 text-left">Target</th>
@@ -302,28 +335,38 @@ export default function ManageTestsPage() {
                   <th className="px-3 py-2 text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100 bg-white">
+              <tbody className="divide-y divide-slate-100 bg-card">
                 {tests.map((test) => {
                   const totalAttempts = Number(test?._count?.submissions || 0);
+                  const adminReadOnly = isAdminReadOnlyTest(test);
                   return (
                     <tr key={test.id}>
-                      <td className="px-3 py-2"><input type="checkbox" checked={selectedIds.includes(test.id)} onChange={(event) => setSelectedIds((prev) => event.target.checked ? [...new Set([...prev, test.id])] : prev.filter((id) => id !== test.id))} /></td>
-                      <td className="px-3 py-2 font-medium text-slate-800">{test.title}</td>
+                      <td className="px-3 py-2"><input type="checkbox" checked={selectedIds.includes(test.id)} disabled={adminReadOnly} onChange={(event) => setSelectedIds((prev) => event.target.checked ? [...new Set([...prev, test.id])] : prev.filter((id) => id !== test.id))} /></td>
+                      <td className="px-3 py-2 font-medium text-text-primary">{test.title}</td>
                       <td className="px-3 py-2"><span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${STATUS_TONE[normalizeStatus(test.status)] || STATUS_TONE.DRAFT}`}>{normalizeStatus(test.status)}</span></td>
-                      <td className="px-3 py-2 text-slate-600">{test?.department?.name || "Department"} / {test?.batchAssignments?.length || 0} batches</td>
-                      <td className="px-3 py-2 text-slate-600">{new Date(test.startsAt).toLocaleDateString()} - {new Date(test.endsAt).toLocaleDateString()}</td>
-                      <td className="px-3 py-2 text-slate-600">{totalAttempts}</td>
-                      <td className="px-3 py-2 text-slate-600">{totalAttempts > 0 ? "Computed" : "-"}</td>
+                      <td className="px-3 py-2 text-text-secondary">
+                        {test?.department?.name || "Department"} / {test?.batchAssignments?.length || 0} batches
+                        {adminReadOnly ? <span className="ml-2 text-xs text-amber-700">(Super admin managed)</span> : null}
+                      </td>
+                      <td className="px-3 py-2 text-text-secondary">{new Date(test.startsAt).toLocaleDateString()} - {new Date(test.endsAt).toLocaleDateString()}</td>
+                      <td className="px-3 py-2 text-text-secondary">{totalAttempts}</td>
+                      <td className="px-3 py-2 text-text-secondary">{totalAttempts > 0 ? "Computed" : "-"}</td>
                       <td className="px-3 py-2 text-right">
                         <div className="flex justify-end gap-1">
-                          <Button size="sm" variant="outline" onClick={() => onDuplicate(test.id)}>Duplicate</Button>
-                          {normalizeStatus(test.status) === "LIVE" ? (
-                            <Button size="sm" variant="outline" onClick={() => navigate(`/admin/tests/${test.id}/monitor`)}>Monitor Live</Button>
+                          {canEdit && !adminReadOnly ? (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => onOpenEdit(test.id)}
+                              disabled={editingTestId === test.id}
+                            >
+                              {editingTestId === test.id ? "Opening..." : "Edit Test"}
+                            </Button>
                           ) : null}
-                          {canTransition ? transitionsForStatus(normalizeStatus(test.status)).map((transition) => (
-                            <Button key={`${test.id}-${transition.action}`} type="button" size="sm" variant={transition.action === "ARCHIVE" ? "ghost" : "outline"} onClick={() => onTransition(test, transition.action)}>{transition.label}</Button>
+                          {canTransition && !adminReadOnly ? transitionsForStatus(normalizeStatus(test.status)).map((transition) => (
+                            <Button key={`${test.id}-${transition.action}`} type="button" size="sm" variant={transition.action === "DELETE" ? "destructive" : "outline"} onClick={() => onTransition(test, transition.action)}>{transition.label}</Button>
                           )) : null}
-                          {canDelete && normalizeStatus(test.status) === "DRAFT" ? <Button size="sm" variant="destructive" onClick={() => onDeleteDraft(test)}>Delete</Button> : null}
+                          {canDelete && !adminReadOnly && normalizeStatus(test.status) === "DRAFT" ? <Button size="sm" variant="destructive" onClick={() => onDeleteDraft(test)}>Delete</Button> : null}
                         </div>
                       </td>
                     </tr>
@@ -334,7 +377,7 @@ export default function ManageTestsPage() {
           </div>
 
           <div className="flex items-center justify-between">
-            <p className="text-xs text-slate-500">Page {pagination.page || page} of {pagination.totalPages || 1}</p>
+            <p className="text-xs text-text-secondary">Page {pagination.page || page} of {pagination.totalPages || 1}</p>
             <div className="flex gap-2">
               <Button variant="outline" size="sm" onClick={() => setPage((prev) => Math.max(1, prev - 1))} disabled={(pagination.page || page) <= 1}>Previous</Button>
               <Button variant="outline" size="sm" onClick={() => setPage((prev) => prev + 1)} disabled={(pagination.page || page) >= (pagination.totalPages || 1)}>Next</Button>
@@ -390,8 +433,8 @@ export default function ManageTestsPage() {
       />
 
       {bulkOpen ? (
-        <div className="fixed right-6 bottom-6 z-50 rounded-xl border border-slate-200 bg-white p-3 shadow-lg">
-          <p className="mb-2 text-xs text-slate-500">Choose bulk action</p>
+        <div className="fixed right-6 bottom-6 z-50 rounded-xl border border-border bg-card p-3 shadow-lg">
+          <p className="mb-2 text-xs text-text-secondary">Choose bulk action</p>
           <div className="flex gap-2">
             <Button size="sm" variant={bulkAction === "ARCHIVE" ? "default" : "outline"} onClick={() => setBulkAction("ARCHIVE")}>Archive</Button>
             <Button size="sm" variant={bulkAction === "DELETE" ? "destructive" : "outline"} onClick={() => setBulkAction("DELETE")}>Delete</Button>

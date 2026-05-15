@@ -12,6 +12,7 @@ export const useAttemptAutosave = () => {
   const dispatch = useDispatch();
   const debounceTimerRef = useRef(null);
   const isFlushingRef = useRef(false);
+  const cooldownUntilRef = useRef(0);
 
   const { attempt_id, test_id, answers, changed_answer_ids } = useSelector((state) => state.test);
 
@@ -56,10 +57,14 @@ export const useAttemptAutosave = () => {
       return;
     }
 
+    if (Date.now() < cooldownUntilRef.current) {
+      return;
+    }
+
     isFlushingRef.current = true;
     dispatch(setSaveStatus("saving"));
 
-    const retryDelays = [1000, 2000, 4000];
+    const retryDelays = [1500, 3000, 6000];
 
     try {
       let lastError = null;
@@ -81,6 +86,12 @@ export const useAttemptAutosave = () => {
           return;
         } catch (error) {
           lastError = error;
+          if (Number(error?.status) === 429) {
+            const retryAfterSeconds = Number(error?.retryAfterSeconds || 0);
+            const cooldownMs = retryAfterSeconds > 0 ? retryAfterSeconds * 1000 : 10_000;
+            cooldownUntilRef.current = Date.now() + cooldownMs;
+          }
+
           if (index < retryDelays.length) {
             await wait(retryDelays[index]);
           }
@@ -117,7 +128,23 @@ export const useAttemptAutosave = () => {
         window.clearTimeout(debounceTimerRef.current);
       }
     };
-  }, [attempt_id, changedPayload.length, flush]);
+  }, [attempt_id, changedPayload.length]);
+
+  useEffect(() => {
+    if (!attempt_id || !test_id) {
+      return undefined;
+    }
+
+    const intervalId = window.setInterval(() => {
+      if (changedPayload.length > 0) {
+        flush();
+      }
+    }, 5000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [attempt_id, changedPayload.length, test_id]);
 
   useEffect(() => {
     if (!attempt_id || !test_id) {

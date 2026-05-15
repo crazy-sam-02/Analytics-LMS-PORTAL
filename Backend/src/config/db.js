@@ -1,6 +1,6 @@
 const mongoose = require("mongoose");
-const { randomUUID } = require("crypto");
 const env = require("./env");
+const { SYSTEM_DEFAULT_TEST_SETTINGS } = require("../services/test-config.service");
 
 const uri = env.mongoUri;
 if (!uri) {
@@ -8,6 +8,7 @@ if (!uri) {
 }
 
 let db;
+let connectPromise = null;
 
 const MODEL_TO_COLLECTION = {
   college: "college",
@@ -16,11 +17,13 @@ const MODEL_TO_COLLECTION = {
   department: "department",
   batch: "batch",
   admin: "admin",
+  user: "user",
   student: "student",
   test: "test",
   question: "question",
   questionBank: "questionBank",
   subject: "subject",
+  cloneMapping: "cloneMapping",
   submission: "submission",
   answer: "answer",
   violation: "violation",
@@ -33,7 +36,6 @@ const MODEL_TO_COLLECTION = {
   superReportJob: "superReportJob",
   platformSetting: "platformSetting",
   auditLog: "auditLog",
-  notification: "notification",
 };
 
 const RELATIONS = {
@@ -43,7 +45,6 @@ const RELATIONS = {
     students: { model: "student", type: "many", sourceField: "id", targetField: "collegeId" },
     reportJobs: { model: "reportJob", type: "many", sourceField: "id", targetField: "collegeId" },
     auditLogs: { model: "auditLog", type: "many", sourceField: "id", targetField: "collegeId" },
-    notifications: { model: "notification", type: "many", sourceField: "id", targetField: "collegeId" },
     events: { model: "event", type: "many", sourceField: "id", targetField: "collegeId" },
     tests: { model: "test", type: "many", sourceField: "id", targetField: "collegeId" },
     submissions: { model: "submission", type: "many", sourceField: "id", targetField: "collegeId" },
@@ -56,6 +57,8 @@ const RELATIONS = {
     reportJobs: { model: "superReportJob", type: "many", sourceField: "id", targetField: "initiatedById" },
     auditLogs: { model: "auditLog", type: "many", sourceField: "id", targetField: "superAdminId" },
     settings: { model: "platformSetting", type: "many", sourceField: "id", targetField: "updatedById" },
+    questionBankItems: { model: "questionBank", type: "many", sourceField: "id", targetField: "createdBySuperAdminId" },
+    createdSubjects: { model: "subject", type: "many", sourceField: "id", targetField: "createdBySuperAdminId" },
   },
   superAdminRefreshToken: {
     superAdmin: { model: "superAdmin", type: "one", sourceField: "superAdminId", targetField: "id" },
@@ -70,7 +73,7 @@ const RELATIONS = {
   batch: {
     department: { model: "department", type: "one", sourceField: "departmentId", targetField: "id" },
     college: { model: "college", type: "one", sourceField: "collegeId", targetField: "id" },
-    students: { model: "student", type: "many", sourceField: "id", targetField: "batchId" },
+    students: { model: "student", type: "many", sourceField: "id", targetField: "batchIds" },
     tests: { model: "test", type: "many", sourceField: "id", targetField: "batchId" },
     testAssignments: { model: "testBatch", type: "many", sourceField: "id", targetField: "batchId" },
   },
@@ -84,10 +87,9 @@ const RELATIONS = {
     refreshTokens: { model: "adminRefreshToken", type: "many", sourceField: "id", targetField: "adminId" },
     reportJobs: { model: "reportJob", type: "many", sourceField: "id", targetField: "adminId" },
     auditLogs: { model: "auditLog", type: "many", sourceField: "id", targetField: "adminId" },
-    notifications: { model: "notification", type: "many", sourceField: "id", targetField: "adminId" },
   },
   student: {
-    batch: { model: "batch", type: "one", sourceField: "batchId", targetField: "id" },
+    batches: { model: "batch", type: "many", sourceField: "batchIds", targetField: "id" },
     department: { model: "department", type: "one", sourceField: "departmentId", targetField: "id" },
     college: { model: "college", type: "one", sourceField: "collegeId", targetField: "id" },
     submissions: { model: "submission", type: "many", sourceField: "id", targetField: "userId" },
@@ -104,7 +106,6 @@ const RELATIONS = {
     submissions: { model: "submission", type: "many", sourceField: "id", targetField: "testId" },
     testSessions: { model: "testSession", type: "many", sourceField: "id", targetField: "testId" },
     auditLogs: { model: "auditLog", type: "many", sourceField: "id", targetField: "testId" },
-    notifications: { model: "notification", type: "many", sourceField: "id", targetField: "testId" },
   },
   question: {
     test: { model: "test", type: "one", sourceField: "testId", targetField: "id" },
@@ -112,12 +113,14 @@ const RELATIONS = {
   },
   questionBank: {
     createdByAdmin: { model: "admin", type: "one", sourceField: "createdByAdminId", targetField: "id" },
+    createdBySuperAdmin: { model: "superAdmin", type: "one", sourceField: "createdBySuperAdminId", targetField: "id" },
     college: { model: "college", type: "one", sourceField: "collegeId", targetField: "id" },
     subjectRef: { model: "subject", type: "one", sourceField: "subjectId", targetField: "id" },
   },
   subject: {
     college: { model: "college", type: "one", sourceField: "collegeId", targetField: "id" },
     createdByAdmin: { model: "admin", type: "one", sourceField: "createdByAdminId", targetField: "id" },
+    createdBySuperAdmin: { model: "superAdmin", type: "one", sourceField: "createdBySuperAdminId", targetField: "id" },
   },
   submission: {
     user: { model: "student", type: "one", sourceField: "userId", targetField: "id" },
@@ -167,11 +170,6 @@ const RELATIONS = {
     superAdmin: { model: "superAdmin", type: "one", sourceField: "superAdminId", targetField: "id" },
     test: { model: "test", type: "one", sourceField: "testId", targetField: "id" },
   },
-  notification: {
-    college: { model: "college", type: "one", sourceField: "collegeId", targetField: "id" },
-    admin: { model: "admin", type: "one", sourceField: "adminId", targetField: "id" },
-    test: { model: "test", type: "one", sourceField: "testId", targetField: "id" },
-  },
 };
 
 const DEFAULTS = {
@@ -186,12 +184,22 @@ const DEFAULTS = {
     attemptsAllowed: 1,
     evaluationRule: "BEST_ATTEMPT",
     isPublished: false,
-    restrictTabSwitch: true,
-    restrictCopyPaste: true,
-    restrictRightClick: true,
-    requireFullscreen: true,
-    violationLimit: 3,
+    testType: SYSTEM_DEFAULT_TEST_SETTINGS.testType,
+    proctoringPreset: SYSTEM_DEFAULT_TEST_SETTINGS.proctoringPreset,
+    proctoringEnabled: SYSTEM_DEFAULT_TEST_SETTINGS.proctoringConfig.enabled,
+    restrictTabSwitch: SYSTEM_DEFAULT_TEST_SETTINGS.proctoringConfig.tabSwitch === "monitored",
+    restrictCopyPaste: SYSTEM_DEFAULT_TEST_SETTINGS.proctoringConfig.copyPaste === "monitored",
+    restrictRightClick: SYSTEM_DEFAULT_TEST_SETTINGS.proctoringConfig.rightClickDisabled,
+    requireFullscreen: SYSTEM_DEFAULT_TEST_SETTINGS.proctoringConfig.fullscreenRequired,
+    violationLimit: SYSTEM_DEFAULT_TEST_SETTINGS.proctoringConfig.violationThreshold,
+    monitorWindowBlur: SYSTEM_DEFAULT_TEST_SETTINGS.proctoringConfig.windowBlur,
+    detectScreenshot: SYSTEM_DEFAULT_TEST_SETTINGS.proctoringConfig.screenshotDetection,
+    detectDevtools: SYSTEM_DEFAULT_TEST_SETTINGS.proctoringConfig.devtoolsDetection,
+    autoNextSingle: SYSTEM_DEFAULT_TEST_SETTINGS.proctoringConfig.autoNextSingle,
+    paragraphWordLimit: SYSTEM_DEFAULT_TEST_SETTINGS.proctoringConfig.paragraphWordLimit,
+    proctoringConfig: SYSTEM_DEFAULT_TEST_SETTINGS.proctoringConfig,
     isGlobal: false,
+    assignedTo: [],
   },
   question: { options: [], marks: 1 },
   questionBank: { options: [], marks: 1, difficulty: "MEDIUM" },
@@ -217,7 +225,148 @@ const DEFAULTS = {
   superReportJob: { status: "QUEUED" },
   platformSetting: {},
   auditLog: {},
-  notification: { channel: "IN_APP", isRead: false },
+};
+
+const OBJECT_ID_FIELDS = new Set([
+  "_id",
+  "id",
+  "collegeId",
+  "departmentId",
+  "headId",
+  "batchId",
+  "batchIds",
+  "assignedTo",
+  "createdByAdminId",
+  "createdBySuperAdminId",
+  "subjectId",
+  "sourceTestId",
+  "clonedTestId",
+  "targetCollegeId",
+  "targetDepartmentId",
+  "userId",
+  "testId",
+  "questionId",
+  "submissionId",
+  "adminId",
+  "superAdminId",
+  "initiatedById",
+  "updatedById",
+]);
+
+const isPlainObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value) && !(value instanceof Date) && !(value instanceof mongoose.Types.ObjectId);
+
+const isObjectIdString = (value) => typeof value === "string" && mongoose.Types.ObjectId.isValid(value.trim());
+
+const toObjectId = (value) => {
+  if (value instanceof mongoose.Types.ObjectId) {
+    return value;
+  }
+
+  if (isObjectIdString(value)) {
+    return new mongoose.Types.ObjectId(String(value).trim());
+  }
+
+  return value;
+};
+
+const isObjectIdField = (field) => OBJECT_ID_FIELDS.has(field);
+
+const normalizeStoredValue = (field, value) => {
+  if (value === null || typeof value === "undefined") {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeStoredValue(field, item));
+  }
+
+  if (isPlainObject(value)) {
+    const out = {};
+    for (const [key, nestedValue] of Object.entries(value)) {
+      out[key] = normalizeStoredValue(key, nestedValue);
+    }
+    return out;
+  }
+
+  if (isObjectIdField(field)) {
+    const normalized = toObjectId(value);
+    if (normalized instanceof mongoose.Types.ObjectId) {
+      return normalized;
+    }
+  }
+
+  return value;
+};
+
+const normalizeDocumentForWrite = (input) => {
+  if (!isPlainObject(input)) {
+    return input;
+  }
+
+  const out = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (key === "id") {
+      const normalizedId = toObjectId(value);
+      if (normalizedId instanceof mongoose.Types.ObjectId) {
+        out._id = normalizedId;
+      }
+      continue;
+    }
+
+    out[key] = normalizeStoredValue(key, value);
+  }
+
+  return out;
+};
+
+const serializeValueForApi = (value) => {
+  if (value instanceof mongoose.Types.ObjectId) {
+    return value.toString();
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => serializeValueForApi(item));
+  }
+
+  if (isPlainObject(value)) {
+    const out = {};
+    for (const [key, nestedValue] of Object.entries(value)) {
+      if (key === "_id") {
+        out.id = serializeValueForApi(nestedValue);
+        continue;
+      }
+
+      out[key] = serializeValueForApi(nestedValue);
+    }
+
+    if (!Object.prototype.hasOwnProperty.call(out, "id") && Object.prototype.hasOwnProperty.call(value, "id")) {
+      out.id = serializeValueForApi(value.id);
+    }
+
+    return out;
+  }
+
+  return value;
+};
+
+const normalizeLookupValue = (field, value) => normalizeStoredValue(field, value);
+const toDocumentFieldName = (field) => (field === "id" ? "_id" : field);
+
+const buildRelationLookupFilter = (relation, doc) => {
+  const lookupValue = normalizeLookupValue(relation.sourceField, doc[relation.sourceField]);
+  const targetField = toDocumentFieldName(relation.targetField);
+
+  if (Array.isArray(lookupValue)) {
+    return { [targetField]: { $in: lookupValue } };
+  }
+
+  return { [targetField]: lookupValue };
+};
+
+// --- Unique compound key definitions for models that use compound findUnique ---
+const COMPOUND_UNIQUE_KEYS = {
+  testSession: { userId_testId: ["userId", "testId"] },
+  answer: { submissionId_questionId: ["submissionId", "questionId"] },
 };
 
 function materializeDefaults(modelName) {
@@ -230,36 +379,87 @@ function materializeDefaults(modelName) {
 }
 
 async function ensureConnected() {
-  if (db) {
+  const activeDb = mongoose.connection?.db || null;
+
+  // Reuse an existing healthy connection.
+  if (mongoose.connection.readyState === 1 && activeDb) {
+    db = activeDb;
     return db;
   }
 
-  await mongoose.connect(uri, {
-    dbName: env.mongoDbName || undefined,
-    maxPoolSize: 10,
-    minPoolSize: 1,
-    retryWrites: true,
-  });
-
-  db = mongoose.connection.db;
-  return db;
-}
-
-function isOperatorObject(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
+  // Avoid spawning parallel connect attempts under load.
+  if (connectPromise) {
+    return connectPromise;
   }
-  const keys = Object.keys(value);
-  return keys.some((k) => ["in", "contains", "mode", "gt", "gte", "lt", "lte", "not", "equals"].includes(k));
+
+  connectPromise = (async () => {
+    try {
+      if (mongoose.connection.readyState === 2) {
+        await new Promise((resolve, reject) => {
+          mongoose.connection.once("connected", resolve);
+          mongoose.connection.once("error", reject);
+        });
+      } else {
+        await mongoose.connect(uri, {
+          dbName: env.mongoDbName || undefined,
+          maxPoolSize: 20,
+          minPoolSize: 2,
+          retryWrites: true,
+        });
+      }
+
+      const resolvedDb = mongoose.connection?.db || null;
+      if (!resolvedDb) {
+        throw new Error("MongoDB connected but database handle is unavailable");
+      }
+
+      db = resolvedDb;
+      return db;
+    } finally {
+      connectPromise = null;
+    }
+  })();
+
+  return connectPromise;
 }
 
-function normalizeWhere(where) {
+function getCollection(modelName) {
+  const collectionName = MODEL_TO_COLLECTION[modelName] || modelName;
+  const activeDb = db || mongoose.connection?.db;
+  if (!activeDb) {
+    throw new Error(`MongoDB is not connected. Unable to access collection ${collectionName}`);
+  }
+  return activeDb.collection(collectionName);
+}
+
+// ---------------------------------------------------------------------------
+// Convert ORM-style where clauses to a native MongoDB filter.
+//
+// This handles:
+//   - scalar equality:   { field: value }
+//   - operators:         { field: { in: [...], contains: "...", gt/gte/lt/lte, not, equals, mode } }
+//   - logical:           { OR: [...], AND: [...], NOT: [...] }
+//   - nested compound keys that controllers pass as { userId_testId: { userId, testId } }
+//   - relation filters:  { batchAssignments: { some: { batchId: "..." } } }
+// ---------------------------------------------------------------------------
+
+function normalizeCompoundWhere(modelName, where) {
   if (!where || typeof where !== "object" || Array.isArray(where)) {
     return where;
   }
 
+  const compounds = COMPOUND_UNIQUE_KEYS[modelName] || {};
   const out = {};
+
   for (const [key, value] of Object.entries(where)) {
+    if (compounds[key] && value && typeof value === "object" && !Array.isArray(value)) {
+      // Expand compound key: { userId_testId: { userId, testId } } → { userId, testId }
+      Object.assign(out, value);
+      continue;
+    }
+
+    // Also handle the legacy inline-relation flattening where key contains "_" and
+    // value is a plain object that is NOT an operator.
     if (
       value &&
       typeof value === "object" &&
@@ -271,153 +471,44 @@ function normalizeWhere(where) {
       Object.assign(out, value);
       continue;
     }
+
     out[key] = value;
   }
 
   return out;
 }
 
-function matchesScalar(value, condition) {
-  if (condition && typeof condition === "object" && !Array.isArray(condition)) {
-    if (Object.prototype.hasOwnProperty.call(condition, "equals")) {
-      return value === condition.equals;
-    }
-
-    if (Object.prototype.hasOwnProperty.call(condition, "in")) {
-      return Array.isArray(condition.in) && condition.in.includes(value);
-    }
-
-    if (Object.prototype.hasOwnProperty.call(condition, "contains")) {
-      const hay = value == null ? "" : String(value);
-      const needle = String(condition.contains);
-      if (condition.mode === "insensitive") {
-        return hay.toLowerCase().includes(needle.toLowerCase());
-      }
-      return hay.includes(needle);
-    }
-
-    if (Object.prototype.hasOwnProperty.call(condition, "gt") && !(value > condition.gt)) {
-      return false;
-    }
-    if (Object.prototype.hasOwnProperty.call(condition, "gte") && !(value >= condition.gte)) {
-      return false;
-    }
-    if (Object.prototype.hasOwnProperty.call(condition, "lt") && !(value < condition.lt)) {
-      return false;
-    }
-    if (Object.prototype.hasOwnProperty.call(condition, "lte") && !(value <= condition.lte)) {
-      return false;
-    }
-
-    if (Object.prototype.hasOwnProperty.call(condition, "not")) {
-      return !matchesScalar(value, condition.not);
-    }
-
-    if (Object.keys(condition).length === 0) {
-      return true;
-    }
-
-    if (!isOperatorObject(condition)) {
-      return Object.entries(condition).every(([k, v]) => {
-        const nestedValue = value == null ? undefined : value[k];
-        return matchesScalar(nestedValue, v);
-      });
-    }
-
-    return true;
+function isOperatorObject(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
   }
-
-  return value === condition;
+  const keys = Object.keys(value);
+  return keys.some((k) => ["in", "contains", "mode", "gt", "gte", "lt", "lte", "not", "equals"].includes(k));
 }
 
-function compareValues(a, b, direction) {
-  if (a === b) {
-    return 0;
-  }
-  if (a == null) {
-    return direction === "desc" ? 1 : -1;
-  }
-  if (b == null) {
-    return direction === "desc" ? -1 : 1;
-  }
-  if (a > b) {
-    return direction === "desc" ? -1 : 1;
-  }
-  return direction === "desc" ? 1 : -1;
-}
-
-function sortDocs(docs, orderBy) {
-  if (!orderBy) {
-    return docs;
+function toMongoFilter(modelName, where) {
+  if (!where || typeof where !== "object") {
+    return {};
   }
 
-  const clauses = Array.isArray(orderBy) ? orderBy : [orderBy];
-  return docs.sort((left, right) => {
-    for (const clause of clauses) {
-      const [field, direction] = Object.entries(clause)[0];
-      const cmp = compareValues(left[field], right[field], direction || "asc");
-      if (cmp !== 0) {
-        return cmp;
-      }
-    }
-    return 0;
-  });
-}
+  const normalized = normalizeCompoundWhere(modelName, where);
+  const filter = {};
 
-async function readModelDocs(modelName) {
-  const database = await ensureConnected();
-  const collectionName = MODEL_TO_COLLECTION[modelName] || modelName;
-  const rows = await database.collection(collectionName).find({}).toArray();
-  return rows.map((row) => {
-    const cloned = { ...row };
-    delete cloned._id;
-    return cloned;
-  });
-}
+  for (const [key, value] of Object.entries(normalized)) {
+    const dbField = toDocumentFieldName(key);
 
-async function getRelatedDocs(modelName, doc, relationName) {
-  const relation = RELATIONS[modelName] && RELATIONS[modelName][relationName];
-  if (!relation) {
-    return [];
-  }
-
-  const related = await readModelDocs(relation.model);
-  if (relation.type === "one") {
-    return related.filter((item) => item[relation.targetField] === doc[relation.sourceField]).slice(0, 1);
-  }
-  return related.filter((item) => item[relation.targetField] === doc[relation.sourceField]);
-}
-
-async function matchesWhere(modelName, doc, where) {
-  if (!where) {
-    return true;
-  }
-
-  const normalized = normalizeWhere(where);
-  const entries = Object.entries(normalized);
-
-  for (const [key, value] of entries) {
     if (key === "OR") {
       const conditions = Array.isArray(value) ? value : [];
-      let any = false;
-      for (const condition of conditions) {
-        if (await matchesWhere(modelName, doc, condition)) {
-          any = true;
-          break;
-        }
-      }
-      if (!any) {
-        return false;
+      if (conditions.length > 0) {
+        filter.$or = conditions.map((c) => toMongoFilter(modelName, c));
       }
       continue;
     }
 
     if (key === "AND") {
       const conditions = Array.isArray(value) ? value : [];
-      for (const condition of conditions) {
-        if (!(await matchesWhere(modelName, doc, condition))) {
-          return false;
-        }
+      if (conditions.length > 0) {
+        filter.$and = conditions.map((c) => toMongoFilter(modelName, c));
       }
       continue;
     }
@@ -425,77 +516,265 @@ async function matchesWhere(modelName, doc, where) {
     if (key === "NOT") {
       const conditions = Array.isArray(value) ? value : [value];
       for (const condition of conditions) {
-        if (await matchesWhere(modelName, doc, condition)) {
-          return false;
+        const sub = toMongoFilter(modelName, condition);
+        for (const [sk, sv] of Object.entries(sub)) {
+          filter[sk] = { $not: sv && typeof sv === "object" ? sv : { $eq: sv } };
         }
       }
       continue;
     }
 
+    // Check if this key refers to a relation (for some/none/every filters)
     const relation = RELATIONS[modelName] && RELATIONS[modelName][key];
-    if (relation) {
-      const relatedDocs = await getRelatedDocs(modelName, doc, key);
-
-      if (value && typeof value === "object" && !Array.isArray(value)) {
-        if (Object.prototype.hasOwnProperty.call(value, "some")) {
-          let someMatch = false;
-          for (const relatedDoc of relatedDocs) {
-            if (await matchesWhere(relation.model, relatedDoc, value.some)) {
-              someMatch = true;
-              break;
-            }
-          }
-          if (!someMatch) {
-            return false;
-          }
-          continue;
-        }
-
-        if (Object.prototype.hasOwnProperty.call(value, "none")) {
-          for (const relatedDoc of relatedDocs) {
-            if (await matchesWhere(relation.model, relatedDoc, value.none)) {
-              return false;
-            }
-          }
-          continue;
-        }
-
-        if (Object.prototype.hasOwnProperty.call(value, "every")) {
-          for (const relatedDoc of relatedDocs) {
-            if (!(await matchesWhere(relation.model, relatedDoc, value.every))) {
-              return false;
-            }
-          }
-          continue;
-        }
-
-        if (relation.type === "one") {
-          const relatedDoc = relatedDocs[0] || null;
-          if (!relatedDoc) {
-            return false;
-          }
-          if (!(await matchesWhere(relation.model, relatedDoc, value))) {
-            return false;
-          }
-          continue;
-        }
-      }
-
+    if (relation && value && typeof value === "object" && !Array.isArray(value)) {
+      // Relation filters like { batchAssignments: { some: { batchId: "..." } } }
+      // These need to be resolved at query time via separate queries
+      // We mark them for post-processing by the caller
+      filter[`__rel__${key}`] = value;
       continue;
     }
 
-    if (!matchesScalar(doc[key], value)) {
-      return false;
+    if (value === null || value === undefined) {
+      filter[dbField] = null;
+      continue;
+    }
+
+    if (typeof value !== "object" || value instanceof Date) {
+      filter[dbField] = normalizeStoredValue(key, value);
+      continue;
+    }
+
+    if (Array.isArray(value)) {
+      filter[dbField] = normalizeStoredValue(key, value);
+      continue;
+    }
+
+    // Operator object
+    if (isOperatorObject(value)) {
+      const mongoCondition = {};
+
+      if (Object.prototype.hasOwnProperty.call(value, "equals")) {
+        filter[dbField] = normalizeStoredValue(key, value.equals);
+        continue;
+      }
+
+      if (Object.prototype.hasOwnProperty.call(value, "in")) {
+        mongoCondition.$in = normalizeStoredValue(key, value.in);
+      }
+
+      if (Object.prototype.hasOwnProperty.call(value, "not")) {
+        if (value.not && typeof value.not === "object" && value.not.in) {
+          mongoCondition.$nin = normalizeStoredValue(key, value.not.in);
+        } else {
+          mongoCondition.$ne = normalizeStoredValue(key, value.not);
+        }
+      }
+
+      if (Object.prototype.hasOwnProperty.call(value, "contains")) {
+        const escapedNeedle = String(value.contains).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const flags = value.mode === "insensitive" ? "i" : "";
+        mongoCondition.$regex = escapedNeedle;
+        if (flags) {
+          mongoCondition.$options = flags;
+        }
+      }
+
+      if (Object.prototype.hasOwnProperty.call(value, "gt")) {
+        mongoCondition.$gt = normalizeStoredValue(key, value.gt);
+      }
+      if (Object.prototype.hasOwnProperty.call(value, "gte")) {
+        mongoCondition.$gte = normalizeStoredValue(key, value.gte);
+      }
+      if (Object.prototype.hasOwnProperty.call(value, "lt")) {
+        mongoCondition.$lt = normalizeStoredValue(key, value.lt);
+      }
+      if (Object.prototype.hasOwnProperty.call(value, "lte")) {
+        mongoCondition.$lte = normalizeStoredValue(key, value.lte);
+      }
+
+      filter[dbField] = Object.keys(mongoCondition).length > 0 ? mongoCondition : normalizeStoredValue(key, value);
+      continue;
+    }
+
+    // Plain object value (likely a simple equality or nested object)
+    filter[dbField] = normalizeStoredValue(key, value);
+  }
+
+  return filter;
+}
+
+/**
+ * Extract relation filter keys from the mongo filter (prefixed with __rel__)
+ * and return them separately so the caller can resolve them.
+ */
+function extractRelationFilters(filter) {
+  const relations = {};
+  const cleanFilter = {};
+
+  for (const [key, value] of Object.entries(filter)) {
+    if (key.startsWith("__rel__")) {
+      relations[key.slice(7)] = value;
+    } else {
+      cleanFilter[key] = value;
     }
   }
 
-  return true;
+  return { cleanFilter, relations };
 }
 
-async function countForSelect(modelName, doc, countSpec) {
+function toMongoSort(orderBy) {
+  if (!orderBy) {
+    return undefined;
+  }
+
+  const clauses = Array.isArray(orderBy) ? orderBy : [orderBy];
+  const sort = {};
+
+  for (const clause of clauses) {
+    for (const [field, direction] of Object.entries(clause)) {
+      sort[field] = direction === "desc" ? -1 : 1;
+    }
+  }
+
+  return Object.keys(sort).length > 0 ? sort : undefined;
+}
+
+function cleanDoc(doc) {
+  if (!doc) {
+    return null;
+  }
+  const cloned = serializeValueForApi(doc);
+  delete cloned._id;
+  return cloned;
+}
+
+// ---------------------------------------------------------------------------
+// Resolve `include` and `select` by performing targeted lookups instead of
+// loading entire collections.
+// ---------------------------------------------------------------------------
+
+async function resolveInclude(modelName, doc, include) {
+  if (!include || !doc) {
+    return doc;
+  }
+
+  const output = { ...doc };
+
+  for (const [field, spec] of Object.entries(include)) {
+    if (field === "_count") {
+      output._count = await resolveCount(modelName, doc, spec);
+      continue;
+    }
+
+    const relation = RELATIONS[modelName] && RELATIONS[modelName][field];
+    if (!relation) {
+      continue;
+    }
+
+    const relCollection = getCollection(relation.model);
+    const relationFilter = buildRelationLookupFilter(relation, doc);
+
+    if (relation.type === "one") {
+      const related = await relCollection.findOne(relationFilter);
+      const cleanRelated = cleanDoc(related);
+      output[field] = spec && typeof spec === "object" && spec !== true
+        ? await resolveSelectAndInclude(relation.model, cleanRelated, spec)
+        : cleanRelated;
+    } else {
+      // "many" relation
+      let relFilter = relationFilter;
+      let relSort = undefined;
+      let relSkip = 0;
+      let relLimit = 0;
+
+      if (spec && typeof spec === "object" && spec !== true) {
+        if (spec.where) {
+          const additionalFilter = toMongoFilter(relation.model, spec.where);
+          const { cleanFilter } = extractRelationFilters(additionalFilter);
+          relFilter = { ...relFilter, ...cleanFilter };
+        }
+        relSort = toMongoSort(spec.orderBy);
+        relSkip = typeof spec.skip === "number" ? spec.skip : 0;
+        relLimit = typeof spec.take === "number" ? spec.take : 0;
+      }
+
+      let cursor = relCollection.find(relFilter);
+      if (relSort) {
+        cursor = cursor.sort(relSort);
+      }
+      if (relSkip > 0) {
+        cursor = cursor.skip(relSkip);
+      }
+      if (relLimit > 0) {
+        cursor = cursor.limit(relLimit);
+      }
+
+      const rawDocs = await cursor.toArray();
+      const cleanDocs = rawDocs.map(cleanDoc);
+
+      if (spec && typeof spec === "object" && spec !== true) {
+        const mapped = [];
+        for (const relDoc of cleanDocs) {
+          mapped.push(await resolveSelectAndInclude(relation.model, relDoc, spec));
+        }
+        output[field] = mapped;
+      } else {
+        output[field] = cleanDocs;
+      }
+    }
+  }
+
+  return output;
+}
+
+async function resolveSelect(modelName, doc, select) {
+  if (!select || !doc) {
+    return doc;
+  }
+
+  const output = {};
+
+  for (const [field, spec] of Object.entries(select)) {
+    if (field === "_count") {
+      output._count = await resolveCount(modelName, doc, spec);
+      continue;
+    }
+
+    const relation = RELATIONS[modelName] && RELATIONS[modelName][field];
+    if (!relation) {
+      if (spec) {
+        output[field] = doc[field];
+      }
+      continue;
+    }
+
+    // Handle relation in select
+    const relCollection = getCollection(relation.model);
+    const relationFilter = buildRelationLookupFilter(relation, doc);
+
+    if (relation.type === "one") {
+      const related = await relCollection.findOne(relationFilter);
+      const cleanRelated = cleanDoc(related);
+      output[field] = spec === true ? cleanRelated : await resolveSelectAndInclude(relation.model, cleanRelated, spec || {});
+    } else {
+      const rawDocs = await relCollection.find(relationFilter).toArray();
+      const cleanDocs = rawDocs.map(cleanDoc);
+      const mapped = [];
+      for (const relDoc of cleanDocs) {
+        mapped.push(spec === true ? relDoc : await resolveSelectAndInclude(relation.model, relDoc, spec || {}));
+      }
+      output[field] = mapped;
+    }
+  }
+
+  return output;
+}
+
+async function resolveCount(modelName, doc, countSpec) {
   if (!countSpec || typeof countSpec !== "object") {
     return {};
   }
+
   const selected = countSpec.select || {};
   const out = {};
 
@@ -506,150 +785,197 @@ async function countForSelect(modelName, doc, countSpec) {
       continue;
     }
 
-    const relatedDocs = await getRelatedDocs(modelName, doc, relationName);
-    if (spec === true) {
-      out[relationName] = relatedDocs.length;
-      continue;
-    }
+    const relCollection = getCollection(relation.model);
+    let countFilter = buildRelationLookupFilter(relation, doc);
 
     if (spec && typeof spec === "object" && spec.where) {
-      let count = 0;
-      for (const item of relatedDocs) {
-        if (await matchesWhere(relation.model, item, spec.where)) {
-          count += 1;
-        }
-      }
-      out[relationName] = count;
-      continue;
+      const additionalFilter = toMongoFilter(relation.model, spec.where);
+      const { cleanFilter } = extractRelationFilters(additionalFilter);
+      countFilter = { ...countFilter, ...cleanFilter };
     }
 
-    out[relationName] = relatedDocs.length;
+    out[relationName] = await relCollection.countDocuments(countFilter);
   }
 
   return out;
 }
 
-async function applySelectAndInclude(modelName, doc, args = {}) {
+async function resolveSelectAndInclude(modelName, doc, args = {}) {
   if (!doc) {
     return null;
   }
 
-  const include = args.include || null;
-  const select = args.select || null;
+  let output = doc;
 
-  let output;
-  if (select) {
-    output = {};
-    for (const [field, spec] of Object.entries(select)) {
-      if (field === "_count") {
-        output._count = await countForSelect(modelName, doc, spec);
-        continue;
-      }
-
-      const relation = RELATIONS[modelName] && RELATIONS[modelName][field];
-      if (!relation) {
-        if (spec) {
-          output[field] = doc[field];
-        }
-        continue;
-      }
-
-      const relatedDocs = await getRelatedDocs(modelName, doc, field);
-      if (relation.type === "one") {
-        const relatedDoc = relatedDocs[0] || null;
-        output[field] = spec === true ? relatedDoc : await applySelectAndInclude(relation.model, relatedDoc, spec || {});
-      } else {
-        const relatedOut = [];
-        for (const relatedDoc of relatedDocs) {
-          relatedOut.push(spec === true ? relatedDoc : await applySelectAndInclude(relation.model, relatedDoc, spec || {}));
-        }
-        output[field] = relatedOut;
-      }
-    }
-  } else {
-    output = { ...doc };
+  if (args.select) {
+    output = await resolveSelect(modelName, doc, args.select);
   }
 
-  if (!include) {
-    return output;
-  }
-
-  for (const [field, spec] of Object.entries(include)) {
-    if (field === "_count") {
-      output._count = await countForSelect(modelName, doc, spec);
-      continue;
-    }
-
-    const relation = RELATIONS[modelName] && RELATIONS[modelName][field];
-    if (!relation) {
-      continue;
-    }
-
-    let relatedDocs = await getRelatedDocs(modelName, doc, field);
-    if (spec && typeof spec === "object" && spec.where) {
-      const filtered = [];
-      for (const relatedDoc of relatedDocs) {
-        if (await matchesWhere(relation.model, relatedDoc, spec.where)) {
-          filtered.push(relatedDoc);
-        }
-      }
-      relatedDocs = filtered;
-    }
-
-    if (spec && typeof spec === "object" && relation.type === "many") {
-      relatedDocs = sortDocs(relatedDocs, spec.orderBy);
-      if (typeof spec.skip === "number" && spec.skip > 0) {
-        relatedDocs = relatedDocs.slice(spec.skip);
-      }
-      if (typeof spec.take === "number") {
-        relatedDocs = relatedDocs.slice(0, spec.take);
-      }
-    }
-
-    if (relation.type === "one") {
-      const relatedDoc = relatedDocs[0] || null;
-      output[field] = spec === true ? relatedDoc : await applySelectAndInclude(relation.model, relatedDoc, spec || {});
-      continue;
-    }
-
-    const mapped = [];
-    for (const relatedDoc of relatedDocs) {
-      mapped.push(spec === true ? relatedDoc : await applySelectAndInclude(relation.model, relatedDoc, spec || {}));
-    }
-    output[field] = mapped;
+  if (args.include) {
+    output = await resolveInclude(modelName, output, args.include);
   }
 
   return output;
 }
 
-async function createModelAccessor(modelName) {
-  const database = await ensureConnected();
-  const collectionName = MODEL_TO_COLLECTION[modelName] || modelName;
-  return database.collection(collectionName);
+// ---------------------------------------------------------------------------
+// Resolve relation-based where filters (some/none/every).
+//
+// These require looking up related documents. We do targeted queries
+// instead of loading entire collections.
+// ---------------------------------------------------------------------------
+
+async function filterByRelations(modelName, docs, relationFilters) {
+  if (Object.keys(relationFilters).length === 0) {
+    return docs;
+  }
+
+  const filtered = [];
+
+  for (const doc of docs) {
+    let matches = true;
+
+    for (const [relationName, filterSpec] of Object.entries(relationFilters)) {
+      const relation = RELATIONS[modelName] && RELATIONS[modelName][relationName];
+      if (!relation) {
+        continue;
+      }
+
+      const relCollection = getCollection(relation.model);
+      const relationFilter = buildRelationLookupFilter(relation, doc);
+
+      if (filterSpec && typeof filterSpec === "object") {
+        if (Object.prototype.hasOwnProperty.call(filterSpec, "some")) {
+          const subFilter = toMongoFilter(relation.model, filterSpec.some);
+          const { cleanFilter } = extractRelationFilters(subFilter);
+          const exists = await relCollection.findOne({
+            ...relationFilter,
+            ...cleanFilter,
+          });
+          if (!exists) {
+            matches = false;
+            break;
+          }
+        } else if (Object.prototype.hasOwnProperty.call(filterSpec, "none")) {
+          const subFilter = toMongoFilter(relation.model, filterSpec.none);
+          const { cleanFilter } = extractRelationFilters(subFilter);
+          const exists = await relCollection.findOne({
+            ...relationFilter,
+            ...cleanFilter,
+          });
+          if (exists) {
+            matches = false;
+            break;
+          }
+        } else if (Object.prototype.hasOwnProperty.call(filterSpec, "every")) {
+          const totalCount = await relCollection.countDocuments({
+            ...relationFilter,
+          });
+          if (totalCount === 0) {
+            continue;
+          }
+          const subFilter = toMongoFilter(relation.model, filterSpec.every);
+          const { cleanFilter } = extractRelationFilters(subFilter);
+          const matchingCount = await relCollection.countDocuments({
+            ...relationFilter,
+            ...cleanFilter,
+          });
+          if (matchingCount !== totalCount) {
+            matches = false;
+            break;
+          }
+        } else if (relation.type === "one") {
+          // Direct filter on a one-relation: { college: { isActive: true } }
+          const subFilter = toMongoFilter(relation.model, filterSpec);
+          const { cleanFilter } = extractRelationFilters(subFilter);
+          const exists = await relCollection.findOne({
+            ...relationFilter,
+            ...cleanFilter,
+          });
+          if (!exists) {
+            matches = false;
+            break;
+          }
+        }
+      }
+    }
+
+    if (matches) {
+      filtered.push(doc);
+    }
+  }
+
+  return filtered;
 }
+
+// ---------------------------------------------------------------------------
+// modelClient — Drop-in replacement for the previous ORM, using native
+// MongoDB queries with proper indexed filters and $lookup for relations.
+// ---------------------------------------------------------------------------
 
 function modelClient(modelName) {
   return {
+    // Compatibility helper: some controllers expect a Mongoose-like
+    // `findOne(...).lean()` chain. Provide a minimal shim so existing
+    // controller code works while we migrate to the service/dbClient API.
+    findOne(query) {
+      const self = this;
+      return {
+        lean: async () => {
+          return await self.findFirst({ where: query });
+        },
+      };
+    },
     async findMany(args = {}) {
-      const rows = await readModelDocs(modelName);
-      const filtered = [];
-      for (const row of rows) {
-        if (await matchesWhere(modelName, row, args.where)) {
-          filtered.push(row);
+      await ensureConnected();
+      const collection = getCollection(modelName);
+      const mongoFilter = toMongoFilter(modelName, args.where);
+      const { cleanFilter, relations } = extractRelationFilters(mongoFilter);
+      const sort = toMongoSort(args.orderBy);
+
+      // If no relation filters, use native MongoDB pagination
+      if (Object.keys(relations).length === 0) {
+        let cursor = collection.find(cleanFilter);
+        if (sort) {
+          cursor = cursor.sort(sort);
         }
+        if (typeof args.skip === "number" && args.skip > 0) {
+          cursor = cursor.skip(args.skip);
+        }
+        if (typeof args.take === "number") {
+          cursor = cursor.limit(args.take);
+        }
+
+        const rawDocs = await cursor.toArray();
+        const docs = rawDocs.map(cleanDoc);
+        const out = [];
+        for (const doc of docs) {
+          out.push(await resolveSelectAndInclude(modelName, doc, args));
+        }
+        return out;
       }
 
-      let shaped = sortDocs(filtered, args.orderBy);
+      // Has relation filters — fetch candidates then filter
+      let cursor = collection.find(cleanFilter);
+      if (sort) {
+        cursor = cursor.sort(sort);
+      }
+      // Fetch a generous batch to allow for relation filtering
+      const rawDocs = await cursor.toArray();
+      const candidates = rawDocs.map(cleanDoc);
+      let filtered = await filterByRelations(modelName, candidates, relations);
+
+      // Apply sort, skip, take on the relation-filtered results
       if (typeof args.skip === "number" && args.skip > 0) {
-        shaped = shaped.slice(args.skip);
+        filtered = filtered.slice(args.skip);
       }
       if (typeof args.take === "number") {
-        shaped = shaped.slice(0, args.take);
+        filtered = filtered.slice(0, args.take);
       }
 
       const out = [];
-      for (const row of shaped) {
-        out.push(await applySelectAndInclude(modelName, row, args));
+      for (const doc of filtered) {
+        out.push(await resolveSelectAndInclude(modelName, doc, args));
       }
       return out;
     },
@@ -660,19 +986,35 @@ function modelClient(modelName) {
     },
 
     async findUnique(args = {}) {
-      const where = normalizeWhere(args.where || {});
-      return this.findFirst({ ...args, where, take: 1 });
+      await ensureConnected();
+      const collection = getCollection(modelName);
+      const normalizedWhere = normalizeCompoundWhere(modelName, args.where || {});
+      const mongoFilter = toMongoFilter(modelName, normalizedWhere);
+      const { cleanFilter } = extractRelationFilters(mongoFilter);
+
+      const rawDoc = await collection.findOne(cleanFilter);
+      const doc = cleanDoc(rawDoc);
+      if (!doc) {
+        return null;
+      }
+      return resolveSelectAndInclude(modelName, doc, args);
     },
 
     async create(args = {}) {
-      const collection = await createModelAccessor(modelName);
+      await ensureConnected();
+      const collection = getCollection(modelName);
       const now = new Date();
-      const data = args.data || {};
+      const data = normalizeDocumentForWrite(args.data || {});
       const doc = {
-        id: data.id || randomUUID(),
         ...materializeDefaults(modelName),
         ...data,
       };
+
+      if (!Object.prototype.hasOwnProperty.call(doc, "_id")) {
+        doc._id = new mongoose.Types.ObjectId();
+      }
+
+      delete doc.id;
 
       if (!Object.prototype.hasOwnProperty.call(doc, "createdAt")) {
         doc.createdAt = now;
@@ -680,11 +1022,13 @@ function modelClient(modelName) {
       doc.updatedAt = now;
 
       await collection.insertOne(doc);
-      return applySelectAndInclude(modelName, doc, args);
+      const clean = cleanDoc(doc);
+      return resolveSelectAndInclude(modelName, clean, args);
     },
 
     async createMany(args = {}) {
-      const collection = await createModelAccessor(modelName);
+      await ensureConnected();
+      const collection = getCollection(modelName);
       const rows = Array.isArray(args.data) ? args.data : [];
       if (rows.length === 0) {
         return { count: 0 };
@@ -692,11 +1036,15 @@ function modelClient(modelName) {
 
       const now = new Date();
       const docs = rows.map((row) => {
+        const normalizedRow = normalizeDocumentForWrite(row);
         const doc = {
-          id: row.id || randomUUID(),
           ...materializeDefaults(modelName),
-          ...row,
+          ...normalizedRow,
         };
+        if (!Object.prototype.hasOwnProperty.call(doc, "_id")) {
+          doc._id = new mongoose.Types.ObjectId();
+        }
+        delete doc.id;
         if (!Object.prototype.hasOwnProperty.call(doc, "createdAt")) {
           doc.createdAt = now;
         }
@@ -704,71 +1052,119 @@ function modelClient(modelName) {
         return doc;
       });
 
-      await collection.insertMany(docs);
+      try {
+        await collection.insertMany(docs, { ordered: false });
+      } catch (error) {
+        // If skipDuplicates was intended, swallow duplicate-key errors
+        if (args.skipDuplicates && error.code === 11000) {
+          return { count: docs.length - (error.writeErrors?.length || 0) };
+        }
+        throw error;
+      }
       return { count: docs.length };
     },
 
     async update(args = {}) {
-      const collection = await createModelAccessor(modelName);
-      const where = normalizeWhere(args.where || {});
-      const existing = await this.findFirst({ where });
-      if (!existing) {
-        return null;
-      }
+      await ensureConnected();
+      const collection = getCollection(modelName);
+      const normalizedWhere = normalizeCompoundWhere(modelName, args.where || {});
+      const mongoFilter = toMongoFilter(modelName, normalizedWhere);
+      const { cleanFilter } = extractRelationFilters(mongoFilter);
 
-      const next = {
-        ...existing,
-        ...(args.data || {}),
+      const updateData = {
+        ...normalizeDocumentForWrite(args.data || {}),
         updatedAt: new Date(),
       };
 
-      await collection.updateOne({ id: existing.id }, { $set: next });
-      return applySelectAndInclude(modelName, next, args);
+      const result = await collection.findOneAndUpdate(
+        cleanFilter,
+        { $set: updateData },
+        { returnDocument: "after" }
+      );
+
+      // MongoDB driver versions differ here:
+      // some return the updated document directly, others wrap it in { value }.
+      const updatedDoc = result && typeof result === "object" && "value" in result
+        ? result.value
+        : result;
+      if (!updatedDoc) {
+        return null;
+      }
+
+      const clean = cleanDoc(updatedDoc);
+      return resolveSelectAndInclude(modelName, clean, args);
     },
 
     async updateMany(args = {}) {
-      const collection = await createModelAccessor(modelName);
-      const current = await this.findMany({ where: args.where });
-      if (current.length === 0) {
-        return { count: 0 };
+      await ensureConnected();
+      const collection = getCollection(modelName);
+      const mongoFilter = toMongoFilter(modelName, args.where);
+      const { cleanFilter, relations } = extractRelationFilters(mongoFilter);
+
+      if (Object.keys(relations).length > 0) {
+        // Relations in updateMany where — need to resolve IDs first
+        const candidates = await collection.find(cleanFilter).toArray();
+        const docs = candidates.map(cleanDoc);
+        const filtered = await filterByRelations(modelName, docs, relations);
+        const ids = filtered.map((d) => d.id);
+        if (ids.length === 0) {
+          return { count: 0 };
+        }
+        const result = await collection.updateMany(
+          { _id: { $in: normalizeLookupValue("id", ids) } },
+          { $set: { ...normalizeDocumentForWrite(args.data || {}), updatedAt: new Date() } }
+        );
+        return { count: result.modifiedCount || 0 };
       }
 
-      const ids = current.map((item) => item.id);
-      const patch = {
-        ...(args.data || {}),
-        updatedAt: new Date(),
-      };
-
-      await collection.updateMany({ id: { $in: ids } }, { $set: patch });
-      return { count: ids.length };
+      const result = await collection.updateMany(
+        cleanFilter,
+        { $set: { ...normalizeDocumentForWrite(args.data || {}), updatedAt: new Date() } }
+      );
+      return { count: result.modifiedCount || 0 };
     },
 
     async delete(args = {}) {
-      const collection = await createModelAccessor(modelName);
-      const where = normalizeWhere(args.where || {});
-      const existing = await this.findFirst({ where });
+      await ensureConnected();
+      const collection = getCollection(modelName);
+      const normalizedWhere = normalizeCompoundWhere(modelName, args.where || {});
+      const mongoFilter = toMongoFilter(modelName, normalizedWhere);
+      const { cleanFilter } = extractRelationFilters(mongoFilter);
+
+      const existing = await collection.findOne(cleanFilter);
       if (!existing) {
         return null;
       }
 
-      await collection.deleteOne({ id: existing.id });
-      return existing;
+      await collection.deleteOne({ _id: existing._id });
+      return cleanDoc(existing);
     },
 
     async deleteMany(args = {}) {
-      const collection = await createModelAccessor(modelName);
-      const existing = await this.findMany({ where: args.where });
-      const ids = existing.map((item) => item.id);
-      if (ids.length === 0) {
-        return { count: 0 };
+      await ensureConnected();
+      const collection = getCollection(modelName);
+      const mongoFilter = toMongoFilter(modelName, args.where);
+      const { cleanFilter, relations } = extractRelationFilters(mongoFilter);
+
+      if (Object.keys(relations).length > 0) {
+        const candidates = await collection.find(cleanFilter).toArray();
+        const docs = candidates.map(cleanDoc);
+        const filtered = await filterByRelations(modelName, docs, relations);
+        const ids = filtered.map((d) => d.id);
+        if (ids.length === 0) {
+          return { count: 0 };
+        }
+        const result = await collection.deleteMany({ _id: { $in: normalizeLookupValue("id", ids) } });
+        return { count: result.deletedCount || 0 };
       }
-      await collection.deleteMany({ id: { $in: ids } });
-      return { count: ids.length };
+
+      const result = await collection.deleteMany(cleanFilter);
+      return { count: result.deletedCount || 0 };
     },
 
     async upsert(args = {}) {
-      const where = normalizeWhere(args.where || {});
-      const existing = await this.findFirst({ where });
+      const normalizedWhere = normalizeCompoundWhere(modelName, args.where || {});
+      const existing = await this.findFirst({ where: normalizedWhere });
       if (existing) {
         return this.update({ where: { id: existing.id }, data: args.update || {}, select: args.select, include: args.include });
       }
@@ -776,37 +1172,73 @@ function modelClient(modelName) {
     },
 
     async count(args = {}) {
-      const rows = await this.findMany({ where: args.where });
-      return rows.length;
+      await ensureConnected();
+      const collection = getCollection(modelName);
+      const mongoFilter = toMongoFilter(modelName, args.where);
+      const { cleanFilter, relations } = extractRelationFilters(mongoFilter);
+
+      if (Object.keys(relations).length > 0) {
+        const candidates = await collection.find(cleanFilter).toArray();
+        const docs = candidates.map(cleanDoc);
+        const filtered = await filterByRelations(modelName, docs, relations);
+        return filtered.length;
+      }
+
+      return collection.countDocuments(cleanFilter);
     },
 
     async groupBy(args = {}) {
-      const rows = await this.findMany({ where: args.where });
+      await ensureConnected();
+      const collection = getCollection(modelName);
+      const mongoFilter = toMongoFilter(modelName, args.where);
+      const { cleanFilter } = extractRelationFilters(mongoFilter);
       const by = Array.isArray(args.by) ? args.by : [];
-      const grouped = new Map();
 
-      for (const row of rows) {
-        const key = JSON.stringify(by.map((field) => row[field]));
-        if (!grouped.has(key)) {
-          const seed = {};
-          for (const field of by) {
-            seed[field] = row[field];
-          }
-          seed._count = {};
-          grouped.set(key, seed);
-        }
+      // Build MongoDB aggregation pipeline for groupBy
+      const groupId = {};
+      for (const field of by) {
+        const dbField = field === "id" ? "_id" : field;
+        groupId[dbField] = `$${dbField}`;
+      }
 
-        const bucket = grouped.get(key);
-        if (args._count === true) {
-          bucket._count._all = (bucket._count._all || 0) + 1;
-        } else if (args._count && typeof args._count === "object") {
-          for (const countField of Object.keys(args._count)) {
-            bucket._count[countField] = (bucket._count[countField] || 0) + 1;
-          }
+      const groupStage = { _id: groupId };
+
+      if (args._count === true) {
+        groupStage._all_count = { $sum: 1 };
+      } else if (args._count && typeof args._count === "object") {
+        for (const countField of Object.keys(args._count)) {
+          groupStage[`_count_${countField}`] = { $sum: 1 };
         }
       }
 
-      return Array.from(grouped.values());
+      const pipeline = [
+        { $match: cleanFilter },
+        { $group: groupStage },
+      ];
+
+      const results = await collection.aggregate(pipeline).toArray();
+
+      return results.map((row) => {
+        const out = {};
+        for (const field of by) {
+          const dbField = field === "id" ? "_id" : field;
+          if (dbField === "_id" && by.length === 1) {
+            out[field] = serializeValueForApi(row._id);
+            continue;
+          }
+
+          out[field] = serializeValueForApi(row._id?.[dbField]);
+        }
+        out._count = {};
+        if (args._count === true) {
+          out._count._all = row._all_count || 0;
+        } else if (args._count && typeof args._count === "object") {
+          for (const countField of Object.keys(args._count)) {
+            out._count[countField] = row[`_count_${countField}`] || 0;
+          }
+        }
+        return out;
+      });
     },
   };
 }
@@ -828,7 +1260,29 @@ dbClient.$disconnect = async () => {
 
 dbClient.$transaction = async (payload) => {
   if (typeof payload === "function") {
-    return payload(dbClient);
+    // Use MongoDB client sessions for real transaction support
+    const session = await mongoose.connection.startSession();
+    try {
+      let result;
+      await session.withTransaction(async () => {
+        result = await payload(dbClient);
+      });
+      return result;
+    } catch (error) {
+      // If transactions are not supported (standalone MongoDB), fall back to
+      // running the callback without a session. This preserves backward
+      // compatibility for dev environments that use standalone mongod.
+      if (
+        error.codeName === "IllegalOperation" ||
+        error.message?.includes("Transaction numbers") ||
+        error.message?.includes("replica set")
+      ) {
+        return payload(dbClient);
+      }
+      throw error;
+    } finally {
+      await session.endSession();
+    }
   }
   if (Array.isArray(payload)) {
     return Promise.all(payload);

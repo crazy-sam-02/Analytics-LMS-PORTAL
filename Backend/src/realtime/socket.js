@@ -1,14 +1,75 @@
 const { Server } = require("socket.io");
+const { createAdapter } = require("@socket.io/redis-adapter");
+const Redis = require("ioredis");
 const { verifyAccessToken } = require("../utils/token");
+const env = require("../config/env");
 
 let io = null;
+let socketRedisPubClient = null;
+let socketRedisSubClient = null;
 
-const initSocket = (httpServer, frontendOrigin) => {
+const attachRedisAdapterIfAvailable = async () => {
+  if (!io || !env.redis?.enabled || !env.redisUrl) {
+    return;
+  }
+
+  // One-shot Redis adapter bootstrap:
+  // if Redis is down, fall back to in-memory adapter without retry storms.
+  const pubClient = new Redis(env.redisUrl, {
+    connectionName: `lms-socket-pub:${env.nodeEnv}`,
+    lazyConnect: true,
+    enableReadyCheck: true,
+    maxRetriesPerRequest: 1,
+    enableOfflineQueue: false,
+    connectTimeout: 3000,
+    retryStrategy: () => null,
+  });
+
+  const subClient = pubClient.duplicate({
+    connectionName: `lms-socket-sub:${env.nodeEnv}`,
+    lazyConnect: true,
+    retryStrategy: () => null,
+    connectTimeout: 3000,
+  });
+
+  pubClient.on("error", (err) => {
+    console.error("Socket.IO Redis pub client error:", err.message);
+  });
+  subClient.on("error", (err) => {
+    console.error("Socket.IO Redis sub client error:", err.message);
+  });
+
+  try {
+    await Promise.all([pubClient.connect(), subClient.connect()]);
+    io.adapter(createAdapter(pubClient, subClient));
+    socketRedisPubClient = pubClient;
+    socketRedisSubClient = subClient;
+    console.log("Socket.IO Redis adapter attached for horizontal scaling.");
+  } catch (error) {
+    console.warn("Socket.IO Redis adapter unavailable, using in-memory adapter:", error?.message || "connection failed");
+    try {
+      pubClient.disconnect();
+      subClient.disconnect();
+    } catch {
+      // noop
+    }
+  }
+};
+
+const initSocket = (httpServer, frontendOrigins) => {
+  const allowedOrigins = Array.isArray(frontendOrigins)
+    ? frontendOrigins
+    : [frontendOrigins].filter(Boolean);
+
   io = new Server(httpServer, {
     cors: {
-      origin: frontendOrigin,
+      origin: allowedOrigins,
       credentials: true,
     },
+  });
+
+  attachRedisAdapterIfAvailable().catch((error) => {
+    console.warn("Socket.IO Redis adapter bootstrap error, using in-memory adapter:", error?.message || "unknown error");
   });
 
   io.use((socket, next) => {
@@ -72,6 +133,21 @@ const emitToTestRoom = (testId, event, payload) => {
   io.to(`test_${testId}`).emit(event, payload);
 };
 
+const shutdownSocket = async () => {
+  const closeClient = async (client) => {
+    if (!client) return;
+    try {
+      await client.quit();
+    } catch {
+      client.disconnect();
+    }
+  };
+
+  await Promise.all([closeClient(socketRedisPubClient), closeClient(socketRedisSubClient)]);
+  socketRedisPubClient = null;
+  socketRedisSubClient = null;
+};
+
 module.exports = {
   initSocket,
   getIO,
@@ -79,4 +155,6 @@ module.exports = {
   emitToUser,
   emitToRole,
   emitToTestRoom,
+  shutdownSocket,
 };
+

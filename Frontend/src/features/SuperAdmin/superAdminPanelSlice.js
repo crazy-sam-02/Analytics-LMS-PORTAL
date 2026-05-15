@@ -18,7 +18,7 @@ const initialState = {
 
 export const fetchSuperColleges = createAsyncThunk("superAdminPanel/colleges", async () => superAdminApi.getColleges());
 export const createSuperCollege = createAsyncThunk("superAdminPanel/createCollege", async (payload) => superAdminApi.createCollege(payload));
-export const fetchSuperAdmins = createAsyncThunk("superAdminPanel/admins", async () => superAdminApi.getAdmins());
+export const fetchSuperAdmins = createAsyncThunk("superAdminPanel/admins", async (params = "") => superAdminApi.getAdmins(params));
 export const createSuperAdminUser = createAsyncThunk("superAdminPanel/createAdmin", async (payload) => superAdminApi.createAdmin(payload));
 export const fetchSuperStudents = createAsyncThunk("superAdminPanel/students", async (params = "") => superAdminApi.getStudents(params));
 export const fetchSuperTests = createAsyncThunk("superAdminPanel/tests", async () => superAdminApi.getTests());

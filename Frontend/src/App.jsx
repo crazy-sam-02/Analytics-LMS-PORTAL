@@ -11,7 +11,7 @@ function App() {
 
   return (
     <AppErrorBoundary>
-      <Suspense fallback={<div className="grid min-h-screen place-items-center text-slate-500">Loading...</div>}>
+      <Suspense fallback={<div className="grid min-h-screen place-items-center text-text-secondary">Loading...</div>}>
         {isSuperAdminPath ? <SuperAdminRouter /> : isAdminPath ? <AdminRouter /> : <AppRouter />}
       </Suspense>
     </AppErrorBoundary>

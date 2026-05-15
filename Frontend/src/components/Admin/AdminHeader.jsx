@@ -24,25 +24,7 @@ export default function AdminHeader() {
             <p className="mt-1 text-xs text-text-secondary">{college?.code || "-"} • Admin Workspace</p>
           </div>
         </div>
-
-        <div className="ml-auto flex min-w-72 flex-1 items-center gap-3 sm:max-w-2xl">
-          <button
-            type="button"
-            onClick={() => setSearchOpen(true)}
-            className="flex h-10 flex-1 items-center gap-2 rounded-xl border border-border bg-background px-3 py-2 text-left text-sm text-text-secondary"
-          >
-            <Search className="size-4 text-text-secondary" />
-            <span>Search tests, students, batches</span>
-            <span className="ml-auto rounded-md border border-border bg-card px-1.5 py-0.5 text-[10px] font-semibold text-text-secondary">Ctrl+K</span>
-          </button>
-
-          <button type="button" className="grid size-10 place-items-center rounded-xl border border-border bg-card text-text-secondary hover:bg-muted">
-            <Bell className="size-5" />
-          </button>
-
-          <Button type="button" variant="outline" size="sm" onClick={() => navigate("/admin/tests")}>All Tests</Button>
-          <Button type="button" size="sm" onClick={() => navigate("/admin/tests?create=1")}>Quick Action</Button>
-
+         
           <div className="flex items-center gap-2 rounded-xl border border-border bg-card px-2 py-1.5">
             <Avatar className="size-8 rounded-lg bg-primary/10 text-primary after:hidden">
               <AvatarFallback className="rounded-lg bg-primary/10 text-xs font-bold text-primary">
@@ -59,7 +41,7 @@ export default function AdminHeader() {
             </div>
             <ChevronDown className="size-4 text-text-secondary" />
           </div>
-        </div>
+        
       </header>
 
       <AdminCommandPalette open={searchOpen} onOpenChange={setSearchOpen} />

@@ -16,6 +16,23 @@ const requirePermission = (...permissions) => (req, _res, next) => {
   next();
 };
 
+const requireAnyPermission = (...permissions) => (req, _res, next) => {
+  const effectivePermissions = Array.isArray(req.admin?.permissions) ? req.admin.permissions : [];
+  const hasAny = permissions.some((permission) => effectivePermissions.includes(permission));
+
+  if (!hasAny) {
+    throw new ApiError(
+      403,
+      "Insufficient permissions for this action",
+      { requiredAny: permissions },
+      "INSUFFICIENT_PERMISSIONS"
+    );
+  }
+
+  next();
+};
+
 module.exports = {
   requirePermission,
+  requireAnyPermission,
 };

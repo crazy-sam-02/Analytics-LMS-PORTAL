@@ -1,5 +1,6 @@
-import { useEffect } from "react";
+import { Fragment, useEffect, useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useSelector } from "react-redux";
 import { Link } from "react-router-dom";
 import { CartesianGrid, Line, LineChart, XAxis, YAxis, BarChart, Bar } from "recharts";
 import StatCard from "@/components/common/StatCard";
@@ -26,6 +27,9 @@ const barConfig = {
 
 function mapStatusVariant(status) {
   const normalized = String(status || "pending").toLowerCase();
+  if (normalized === "auto_submitted" || normalized === "submitted") {
+    return "active";
+  }
   if (normalized === "ended") {
     return "ended";
   }
@@ -36,6 +40,10 @@ function mapStatusVariant(status) {
 }
 
 export default function AdminDashboardPage() {
+  const [expandedSubmissionId, setExpandedSubmissionId] = useState("");
+  const admin = useSelector((state) => state.adminAuth.admin);
+  const adminCollegeId = admin?.collegeId;
+
   const {
     data,
     isLoading,
@@ -60,10 +68,22 @@ export default function AdminDashboardPage() {
   }, [refetch]);
 
   const cards = data?.cards || {};
-  const submissions = data?.recentSubmissions || [];
-  const activity = data?.recentActivity || [];
+  const allSubmissions = data?.recentSubmissions || [];
+  const allActivity = data?.recentActivity || [];
   const trend = data?.charts?.testParticipationTrend || [];
   const avgScore = data?.charts?.averageScorePerTest?.slice(0, 8) || [];
+
+  // Filter submissions to only include those from the admin's college
+  const submissions = useMemo(() => {
+    if (!adminCollegeId) return [];
+    return allSubmissions.filter((submission) => submission.collegeId === adminCollegeId);
+  }, [allSubmissions, adminCollegeId]);
+
+  // Filter activity to only include those from the admin's college
+  const activity = useMemo(() => {
+    if (!adminCollegeId) return [];
+    return allActivity.filter((item) => item.collegeId === adminCollegeId);
+  }, [allActivity, adminCollegeId]);
 
   return (
     <div className="space-y-6">
@@ -124,26 +144,62 @@ export default function AdminDashboardPage() {
                   <TableHead>Student</TableHead>
                   <TableHead>Exam</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead>Malpractice</TableHead>
                   <TableHead>Score</TableHead>
                   <TableHead>Accuracy</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {submissions.map((item) => {
-                  const status = item.test?.status || "pending";
+                  const status = item.status || "pending";
+                  const violationCount = Number(item?._count?.violations || item?.violations?.length || 0);
+                  const isExpanded = expandedSubmissionId === item.id;
                   return (
-                    <TableRow key={item.id}>
-                      <TableCell>
-                        <div className="font-medium text-text-primary">{item.user?.fullName || "-"}</div>
-                        <div className="text-xs text-text-secondary">{item.user?.studentId || "-"}</div>
-                      </TableCell>
-                      <TableCell>{item.test?.title || "-"}</TableCell>
-                      <TableCell>
-                        <Badge variant={mapStatusVariant(status)}>{status}</Badge>
-                      </TableCell>
-                      <TableCell>{item.score ?? "-"}</TableCell>
-                      <TableCell>{item.accuracy != null ? `${item.accuracy}%` : "-"}</TableCell>
-                    </TableRow>
+                    <Fragment key={item.id}>
+                      <TableRow>
+                        <TableCell>
+                          <div className="font-medium text-text-primary">{item.user?.fullName || "-"}</div>
+                          <div className="text-xs text-text-secondary">{item.user?.studentId || "-"}</div>
+                        </TableCell>
+                        <TableCell>{item.test?.title || "-"}</TableCell>
+                        <TableCell>
+                          <Badge variant={mapStatusVariant(status)}>{status}</Badge>
+                        </TableCell>
+                        <TableCell>
+                          {violationCount > 0 ? (
+                            <button
+                              type="button"
+                              className="inline-flex items-center gap-1 rounded-full border border-danger/30 bg-danger/10 px-2 py-0.5 text-xs font-medium text-danger hover:bg-danger/15"
+                              onClick={() => setExpandedSubmissionId((prev) => (prev === item.id ? "" : item.id))}
+                            >
+                              MALPRACTICE ({violationCount})
+                            </button>
+                          ) : (
+                            <Badge variant="secondary">Clean</Badge>
+                          )}
+                        </TableCell>
+                        <TableCell>{item.score ?? "-"}</TableCell>
+                        <TableCell>{item.accuracy != null ? `${item.accuracy}%` : "-"}</TableCell>
+                      </TableRow>
+
+                      {isExpanded ? (
+                        <TableRow>
+                          <TableCell colSpan={6}>
+                            <div className="rounded-lg border border-danger/25 bg-danger/5 px-3 py-2">
+                              <p className="text-xs font-semibold text-danger">Violation Details</p>
+                              <div className="mt-1 space-y-1 text-xs text-text-secondary">
+                                {(item.violations || []).map((violation) => (
+                                  <p key={violation.id}>
+                                    {violation.type} • {new Date(violation.createdAt).toLocaleString()}
+                                  </p>
+                                ))}
+                                {(item.violations || []).length === 0 ? <p>No violation detail available.</p> : null}
+                              </div>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ) : null}
+                    </Fragment>
                   );
                 })}
               </TableBody>
@@ -152,31 +208,7 @@ export default function AdminDashboardPage() {
         </CardContent>
       </Card>
 
-      <Card className="rounded-xl">
-        <CardHeader>
-          <CardTitle>Recent Admin Activity</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          {!isLoading && activity.length === 0 ? <p className="text-sm text-text-secondary">No activity yet.</p> : null}
-          {activity.map((item) => (
-            <div key={item.id} className="flex flex-wrap items-center justify-between rounded-xl border border-border bg-background px-3 py-2">
-              <div>
-                <p className="font-medium text-text-primary">{item.action}</p>
-                <p className="text-xs text-text-secondary">
-                  {item.admin?.fullName || item.admin?.email || "System"} • {new Date(item.createdAt).toLocaleString()}
-                </p>
-              </div>
-              {item.test?.id ? (
-                <Link to="/admin/tests" className="text-xs font-medium text-primary hover:text-primary-dark">
-                  {item.test?.title || "View Test"}
-                </Link>
-              ) : (
-                <span className="text-xs text-text-secondary">No target</span>
-              )}
-            </div>
-          ))}
-        </CardContent>
-      </Card>
+
     </div>
   );
 }

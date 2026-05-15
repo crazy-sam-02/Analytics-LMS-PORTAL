@@ -239,7 +239,7 @@ export default function DepartmentsPage() {
 
   return (
     <div className="space-y-6">
-      <Card className="rounded-2xl border-slate-200">
+      <Card className="rounded-2xl border-border">
         <CardHeader>
           <CardTitle>Create Department</CardTitle>
           <CardDescription>Create departments under specific colleges.</CardDescription>
@@ -251,7 +251,7 @@ export default function DepartmentsPage() {
             onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
           />
           <select
-            className="h-10 rounded-md border border-slate-200 px-3 text-sm"
+            className="h-10 rounded-md border border-border px-3 text-sm"
             value={form.collegeId}
             onChange={(event) => setForm((prev) => ({ ...prev, collegeId: event.target.value }))}
           >
@@ -260,13 +260,13 @@ export default function DepartmentsPage() {
               <option key={college.id} value={college.id}>{college.name}</option>
             ))}
           </select>
-          <Button onClick={createDepartment} disabled={saving} className="bg-blue-500 hover:bg-blue-600">
+          <Button onClick={createDepartment} disabled={saving} className="bg-primary/100 hover:bg-primary">
             {saving ? "Saving..." : "Create Department"}
           </Button>
         </CardContent>
       </Card>
 
-      <Card className="rounded-2xl border-slate-200">
+      <Card className="rounded-2xl border-border">
         <CardHeader>
           <CardTitle>Departments</CardTitle>
           <CardDescription>Rename or delete departments for each college.</CardDescription>
@@ -279,7 +279,7 @@ export default function DepartmentsPage() {
               onChange={(event) => setFilters((prev) => ({ ...prev, search: event.target.value }))}
             />
             <select
-              className="h-10 rounded-md border border-slate-200 px-3 text-sm"
+              className="h-10 rounded-md border border-border px-3 text-sm"
               value={filters.collegeId}
               onChange={(event) => setFilters((prev) => ({ ...prev, collegeId: event.target.value }))}
             >
@@ -294,11 +294,11 @@ export default function DepartmentsPage() {
           </div>
 
           <div className="space-y-2">
-            {!loading && departments.length === 0 ? <p className="text-sm text-slate-500">No departments found.</p> : null}
+            {!loading && departments.length === 0 ? <p className="text-sm text-text-secondary">No departments found.</p> : null}
             {departments.map((department) => {
               const isRenaming = renamingId === department.id;
               return (
-                <div key={department.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 px-3 py-2">
+                <div key={department.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border px-3 py-2">
                   <div>
                     {isRenaming ? (
                       <Input
@@ -307,9 +307,9 @@ export default function DepartmentsPage() {
                         onChange={(event) => setRenameValue(event.target.value)}
                       />
                     ) : (
-                      <p className="font-medium text-slate-800">{department.name}</p>
+                      <p className="font-medium text-text-primary">{department.name}</p>
                     )}
-                    <p className="text-xs text-slate-500">
+                    <p className="text-xs text-text-secondary">
                       {department.college?.name || "-"} • Batches: {department._count?.batches || 0} • Students: {department._count?.students || 0}
                     </p>
                   </div>
@@ -350,7 +350,7 @@ export default function DepartmentsPage() {
             })}
 
             {(departmentsPayload?.pagination?.pages || 1) > 1 ? (
-              <div className="flex items-center justify-between border-t border-slate-100 pt-2 text-xs text-slate-500">
+              <div className="flex items-center justify-between border-t border-border pt-2 text-xs text-text-secondary">
                 <p>Page {departmentsPayload?.pagination?.page || page} of {departmentsPayload?.pagination?.pages || 1}</p>
                 <div className="flex items-center gap-2">
                   <Button
@@ -376,7 +376,7 @@ export default function DepartmentsPage() {
         </CardContent>
       </Card>
 
-      <Card className="rounded-2xl border-slate-200">
+      <Card className="rounded-2xl border-border">
         <CardHeader>
           <CardTitle>Bulk Import Departments (Excel/CSV)</CardTitle>
           <CardDescription>Upload an Excel/CSV file and create departments across colleges in one go.</CardDescription>
@@ -384,7 +384,7 @@ export default function DepartmentsPage() {
         <CardContent className="space-y-3">
           <div className="grid gap-2 sm:grid-cols-2">
             <select
-              className="h-10 rounded-md border border-slate-200 px-3 text-sm"
+              className="h-10 rounded-md border border-border px-3 text-sm"
               value={importDefaultCollegeId}
               onChange={(event) => setImportDefaultCollegeId(event.target.value)}
             >
@@ -396,10 +396,10 @@ export default function DepartmentsPage() {
             <Input type="file" accept=".xlsx,.xls,.csv" onChange={handleImportFile} />
           </div>
 
-          {importFileName ? <p className="text-xs text-slate-500">Loaded: {importFileName}</p> : null}
+          {importFileName ? <p className="text-xs text-text-secondary">Loaded: {importFileName}</p> : null}
 
-          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
-            <p className="font-semibold text-slate-700">Accepted columns:</p>
+          <div className="rounded-lg border border-border bg-background p-3 text-xs text-text-secondary">
+            <p className="font-semibold text-text-secondary">Accepted columns:</p>
             <p className="mt-1">name, collegeId, collegeCode, collegeName</p>
             <p className="mt-1">Only name is mandatory if default college is selected.</p>
           </div>
@@ -411,12 +411,12 @@ export default function DepartmentsPage() {
           </Button>
 
           {importResult ? (
-            <div className="rounded-lg border border-slate-200 p-3 text-sm">
-              <p className="font-medium text-slate-800">
+            <div className="rounded-lg border border-border p-3 text-sm">
+              <p className="font-medium text-text-primary">
                 Created: {importResult.created || 0} • Failed: {importResult.failed || 0} • Duplicates: {importResult.duplicates || 0}
               </p>
               {Array.isArray(importResult.errors) && importResult.errors.length > 0 ? (
-                <div className="mt-2 max-h-40 overflow-auto rounded-md border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700">
+                <div className="mt-2 max-h-40 overflow-auto rounded-md border border-border bg-background p-2 text-xs text-text-secondary">
                   {importResult.errors.slice(0, 15).map((item, index) => (
                     <p key={`${item.row || "row"}-${index}`}>Row {item.row || "?"}: {item.reason || "Invalid data"}</p>
                   ))}

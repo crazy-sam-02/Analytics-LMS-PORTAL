@@ -1,5 +1,5 @@
-const prisma = require("../config/db");
-const redisClient = require("../config/redis");
+const models = require("../models");
+const { redisClient, getRedisQueueConnection } = require("../config/redis");
 const { emitToCollege } = require("../realtime/socket");
 
 const inDateRange = (value, from, to) => {
@@ -137,9 +137,10 @@ try {
 
 let reportQueue = null;
 let reportWorker = null;
-if (Queue && redisClient) {
+const queueConnection = getRedisQueueConnection();
+if (Queue && redisClient && queueConnection) {
   reportQueue = new Queue("admin-report-jobs", {
-    connection: redisClient,
+    connection: queueConnection,
   });
 
   reportWorker = new Worker(
@@ -148,7 +149,7 @@ if (Queue && redisClient) {
       await processReportSynchronously(job.data.reportJobId);
     },
     {
-      connection: redisClient,
+      connection: queueConnection,
       concurrency: 8,
     }
   );
@@ -157,7 +158,7 @@ if (Queue && redisClient) {
     const reportJobId = job?.data?.reportJobId;
     if (!reportJobId) return;
 
-    const reportJob = await prisma.reportJob.findUnique({ where: { id: reportJobId } });
+    const reportJob = await db.reportJob.findUnique({ where: { id: reportJobId } });
     if (!reportJob) return;
 
     emitToCollege(reportJob.collegeId, "report:status", {
@@ -173,7 +174,7 @@ const buildReportPayload = async (job) => {
   const submissionDateFilter = buildSubmissionDateFilter(filters);
 
   if (job.type === "STUDENT_WISE") {
-    const data = await prisma.submission.findMany({
+    const data = await db.submission.findMany({
       where: {
         collegeId: job.collegeId,
         ...(filters.studentId ? { userId: filters.studentId } : {}),
@@ -210,7 +211,7 @@ const buildReportPayload = async (job) => {
   }
 
   if (job.type === "TEST_WISE") {
-    const tests = await prisma.test.findMany({
+    const tests = await db.test.findMany({
       where: {
         collegeId: job.collegeId,
         ...(filters.testId ? { id: filters.testId } : {}),
@@ -268,7 +269,7 @@ const buildReportPayload = async (job) => {
   }
 
   if (job.type === "DEPARTMENT_WISE") {
-    const departments = await prisma.department.findMany({
+    const departments = await db.department.findMany({
       where: {
         collegeId: job.collegeId,
         ...(filters.departmentId ? { id: filters.departmentId } : {}),
@@ -313,7 +314,7 @@ const buildReportPayload = async (job) => {
 
   if (job.type === "COMPREHENSIVE") {
     const [tests, departments, batches, submissions] = await Promise.all([
-      prisma.test.findMany({
+      db.test.findMany({
         where: {
           collegeId: job.collegeId,
           ...(filters.testId ? { id: filters.testId } : {}),
@@ -330,7 +331,7 @@ const buildReportPayload = async (job) => {
         orderBy: { createdAt: "desc" },
         take: 100,
       }),
-      prisma.department.findMany({
+      db.department.findMany({
         where: {
           collegeId: job.collegeId,
           ...(filters.departmentId ? { id: filters.departmentId } : {}),
@@ -345,7 +346,7 @@ const buildReportPayload = async (job) => {
           },
         },
       }),
-      prisma.batch.findMany({
+      db.batch.findMany({
         where: {
           collegeId: job.collegeId,
           ...(filters.batchId ? { id: filters.batchId } : {}),
@@ -360,7 +361,7 @@ const buildReportPayload = async (job) => {
           },
         },
       }),
-      prisma.submission.findMany({
+      db.submission.findMany({
         where: {
           collegeId: job.collegeId,
           ...(filters.studentId ? { userId: filters.studentId } : {}),
@@ -431,7 +432,7 @@ const buildReportPayload = async (job) => {
     ];
   }
 
-  const batches = await prisma.batch.findMany({
+  const batches = await db.batch.findMany({
     where: {
       collegeId: job.collegeId,
       ...(filters.batchId ? { id: filters.batchId } : {}),
@@ -472,7 +473,7 @@ const buildReportPayload = async (job) => {
 };
 
 const processReportSynchronously = async (reportJobId) => {
-  const queued = await prisma.reportJob.update({
+  const queued = await db.reportJob.update({
     where: { id: reportJobId },
     data: { status: "PROCESSING" },
   });
@@ -483,12 +484,12 @@ const processReportSynchronously = async (reportJobId) => {
   });
 
   try {
-    const reportJob = await prisma.reportJob.findUnique({ where: { id: reportJobId } });
+    const reportJob = await db.reportJob.findUnique({ where: { id: reportJobId } });
     const payload = await buildReportPayload(reportJob);
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
     const resultUrl = `/api/admin/reports/${reportJobId}/download?expires=${encodeURIComponent(expiresAt)}`;
 
-    await prisma.reportJob.update({
+    await db.reportJob.update({
       where: { id: reportJobId },
       data: {
         status: "COMPLETED",
@@ -507,7 +508,7 @@ const processReportSynchronously = async (reportJobId) => {
       resultUrl,
     });
   } catch (error) {
-    const failed = await prisma.reportJob.update({
+    const failed = await db.reportJob.update({
       where: { id: reportJobId },
       data: {
         status: "FAILED",

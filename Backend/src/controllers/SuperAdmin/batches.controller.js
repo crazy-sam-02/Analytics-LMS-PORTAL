@@ -1,4 +1,4 @@
-const prisma = require("../../config/db");
+const models = require("../../models");
 const { createAuditLog } = require("../../services/audit.service");
 const { ApiError, asyncHandler } = require("../../utils/http");
 
@@ -30,23 +30,19 @@ const getBatchesGlobal = asyncHandler(async (req, res) => {
   };
 
   const [items, total] = await Promise.all([
-    prisma.batch.findMany({
-      where,
-      include: {
-        college: true,
-        department: true,
-        _count: {
-          select: {
-            students: true,
-            tests: true,
-          },
-        },
-      },
-      orderBy: { createdAt: "desc" },
-      skip: (page - 1) * limit,
-      take: limit,
-    }),
-    prisma.batch.count({ where }),
+    (async () => {
+      const m = await models.init();
+      return m.dbClient.batch.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip: (page - 1) * limit,
+        take: limit,
+      });
+    })(),
+    (async () => {
+      const m = await models.init();
+      return m.dbClient.batch.count({ where });
+    })(),
   ]);
 
   res.status(200).json({
@@ -72,16 +68,19 @@ const assignTestToBatches = asyncHandler(async (req, res) => {
     throw new ApiError(400, "At least one batchId is required");
   }
 
-  const test = await prisma.test.findUnique({ where: { id: testId } });
+  const m = await models.init();
+  const Test = m.dbClient.test;
+  const Batch = m.dbClient.batch;
+
+  const test = await Test.findUnique({ where: { id: testId } });
   if (!test) {
     throw new ApiError(404, "Test not found");
   }
 
-  const validBatches = await prisma.batch.findMany({
+  const validBatches = await Batch.findMany({
     where: {
       id: { in: requestedBatchIds },
     },
-    select: { id: true, collegeId: true },
   });
 
   const validBatchIds = new Set(validBatches.map((batch) => String(batch.id)));
@@ -91,12 +90,12 @@ const assignTestToBatches = asyncHandler(async (req, res) => {
     throw new ApiError(400, "No valid batches found", { invalidBatchIds });
   }
 
-  const existingAssignments = await prisma.testBatch.findMany({
+  const TestBatch = m.dbClient.testBatch;
+  const existingAssignments = await TestBatch.findMany({
     where: {
       testId,
       batchId: { in: [...validBatchIds] },
     },
-    select: { batchId: true },
   });
 
   const existingBatchIds = new Set(existingAssignments.map((item) => String(item.batchId)));
@@ -110,7 +109,9 @@ const assignTestToBatches = asyncHandler(async (req, res) => {
     }));
 
   if (assignments.length > 0) {
-    await prisma.testBatch.createMany({
+    const m2 = await models.init();
+    const TestBatch = m2.dbClient.testBatch;
+    await TestBatch.createMany({
       data: assignments,
     });
   }
@@ -127,12 +128,18 @@ const assignTestToBatches = asyncHandler(async (req, res) => {
 const createBatchGlobal = asyncHandler(async (req, res) => {
   const { name, year, collegeId, departmentId, studentIds = [] } = req.body;
 
-  const college = await prisma.college.findUnique({ where: { id: collegeId } });
+  const m = await models.init();
+  const College = m.dbClient.college;
+  const Department = m.dbClient.department;
+  const Batch = m.dbClient.batch;
+  const Student = m.dbClient.student;
+
+  const college = await College.findUnique({ where: { id: collegeId } });
   if (!college || !college.isActive) {
     throw new ApiError(400, "Batch cannot be created for inactive or missing college");
   }
 
-  const department = await prisma.department.findFirst({
+  const department = await Department.findFirst({
     where: {
       id: departmentId,
       collegeId,
@@ -143,7 +150,7 @@ const createBatchGlobal = asyncHandler(async (req, res) => {
     throw new ApiError(422, "Invalid department for selected college");
   }
 
-  const duplicate = await prisma.batch.findFirst({
+  const duplicate = await Batch.findFirst({
     where: {
       collegeId,
       departmentId,
@@ -153,31 +160,23 @@ const createBatchGlobal = asyncHandler(async (req, res) => {
         mode: "insensitive",
       },
     },
-    select: { id: true },
   });
 
   if (duplicate) {
     throw new ApiError(409, "Duplicate batch name for the same department and academic year", null, "BATCH_DUPLICATE_NAME");
   }
 
-  const batch = await prisma.batch.create({
+  const batch = await Batch.create({
     data: {
       name,
       year,
       collegeId,
       departmentId,
     },
-    include: {
-      college: true,
-      department: true,
-      _count: {
-        select: { students: true, tests: true },
-      },
-    },
   });
 
   if (Array.isArray(studentIds) && studentIds.length > 0) {
-    await prisma.student.updateMany({
+    await Student.updateMany({
       where: {
         id: { in: studentIds },
         collegeId,
@@ -207,7 +206,10 @@ const createBatchGlobal = asyncHandler(async (req, res) => {
 
 const updateBatchGlobal = asyncHandler(async (req, res) => {
   const { batchId } = req.params;
-  const existing = await prisma.batch.findUnique({ where: { id: batchId } });
+  const m = await models.init();
+  const db = m.dbClient;
+  
+  const existing = await db.batch.findUnique({ where: { id: batchId } });
 
   if (!existing) {
     throw new ApiError(404, "Batch not found");
@@ -217,7 +219,7 @@ const updateBatchGlobal = asyncHandler(async (req, res) => {
   const nextYear = req.body.year !== undefined ? Number(req.body.year) : existing.year;
   const nextDepartmentId = req.body.departmentId !== undefined ? req.body.departmentId : existing.departmentId;
 
-  const department = await prisma.department.findFirst({
+  const department = await db.department.findFirst({
     where: {
       id: nextDepartmentId,
       collegeId: existing.collegeId,
@@ -229,7 +231,7 @@ const updateBatchGlobal = asyncHandler(async (req, res) => {
     throw new ApiError(422, "Invalid department for selected batch college");
   }
 
-  const duplicate = await prisma.batch.findFirst({
+  const duplicate = await db.batch.findFirst({
     where: {
       id: { not: batchId },
       collegeId: existing.collegeId,
@@ -247,7 +249,7 @@ const updateBatchGlobal = asyncHandler(async (req, res) => {
     throw new ApiError(409, "Duplicate batch name for the same department and academic year", null, "BATCH_DUPLICATE_NAME");
   }
 
-  const updated = await prisma.batch.update({
+  const updated = await db.batch.update({
     where: { id: batchId },
     data: {
       ...(req.body.name !== undefined ? { name: nextName } : {}),
@@ -290,8 +292,10 @@ const updateBatchGlobal = asyncHandler(async (req, res) => {
 const deleteBatchGlobal = asyncHandler(async (req, res) => {
   const { batchId } = req.params;
   const { confirmationText } = req.body;
+  const m = await models.init();
+  const db = m.dbClient;
 
-  const existing = await prisma.batch.findUnique({
+  const existing = await db.batch.findUnique({
     where: { id: batchId },
     include: {
       _count: {
@@ -309,27 +313,26 @@ const deleteBatchGlobal = asyncHandler(async (req, res) => {
     throw new ApiError(400, `Typed acknowledgment mismatch. Expected: ${expectedConfirmation}`);
   }
 
-  const result = await prisma.$transaction(async (tx) => {
-    const removedAssignments = await tx.testBatch.deleteMany({ where: { batchId } });
+  // Perform delete operations sequentially (no transaction support in native MongoDB client wrapper)
+  const removedAssignments = await db.testBatch.deleteMany({ where: { batchId } });
 
-    const detachedLegacyTests = await tx.test.updateMany({
-      where: { batchId },
-      data: { batchId: null },
-    });
-
-    const detachedStudents = await tx.student.updateMany({
-      where: { batchId },
-      data: { batchId: null },
-    });
-
-    await tx.batch.delete({ where: { id: batchId } });
-
-    return {
-      removedAssignments: removedAssignments.count,
-      detachedLegacyTests: detachedLegacyTests.count,
-      detachedStudents: detachedStudents.count,
-    };
+  const detachedLegacyTests = await db.test.updateMany({
+    where: { batchId },
+    data: { batchId: null },
   });
+
+  const detachedStudents = await db.student.updateMany({
+    where: { batchId },
+    data: { batchId: null },
+  });
+
+  await db.batch.delete({ where: { id: batchId } });
+
+  const result = {
+    removedAssignments: removedAssignments.count || 0,
+    detachedLegacyTests: detachedLegacyTests.count || 0,
+    detachedStudents: detachedStudents.count || 0,
+  };
 
   await createAuditLog({
     action: "SUPER_ADMIN_BATCH_DELETED",

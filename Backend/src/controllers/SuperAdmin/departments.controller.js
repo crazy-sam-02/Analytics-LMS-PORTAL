@@ -1,4 +1,4 @@
-const prisma = require("../../config/db");
+const models = require("../../models");
 const { createAuditLog } = require("../../services/audit.service");
 const { ApiError, asyncHandler } = require("../../utils/http");
 
@@ -34,6 +34,8 @@ const getRowValue = (row, aliases = []) => {
 };
 
 const getDepartmentsGlobal = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const page = Number(req.query.page || 1);
   const limit = Number(req.query.limit || 20);
   const collegeId = req.query.collegeId;
@@ -56,7 +58,7 @@ const getDepartmentsGlobal = asyncHandler(async (req, res) => {
   };
 
   const [items, total] = await Promise.all([
-    prisma.department.findMany({
+    db.department.findMany({
       where,
       include: {
         college: true,
@@ -72,7 +74,7 @@ const getDepartmentsGlobal = asyncHandler(async (req, res) => {
       skip: (page - 1) * limit,
       take: limit,
     }),
-    prisma.department.count({ where }),
+    db.department.count({ where }),
   ]);
 
   res.status(200).json({
@@ -87,14 +89,16 @@ const getDepartmentsGlobal = asyncHandler(async (req, res) => {
 });
 
 const createDepartmentGlobal = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const { name, collegeId } = req.body;
 
-  const college = await prisma.college.findUnique({ where: { id: collegeId } });
+  const college = await db.college.findUnique({ where: { id: collegeId } });
   if (!college || !college.isActive) {
     throw new ApiError(400, "Department cannot be created for inactive or missing college");
   }
 
-  const existing = await prisma.department.findFirst({
+  const existing = await db.department.findFirst({
     where: {
       collegeId,
       name: {
@@ -108,7 +112,7 @@ const createDepartmentGlobal = asyncHandler(async (req, res) => {
     throw new ApiError(409, "Department with this name already exists in college");
   }
 
-  const department = await prisma.department.create({
+  const department = await db.department.create({
     data: {
       name,
       collegeId,
@@ -142,15 +146,17 @@ const createDepartmentGlobal = asyncHandler(async (req, res) => {
 });
 
 const updateDepartmentGlobal = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const { departmentId } = req.params;
   const { name } = req.body;
 
-  const existing = await prisma.department.findUnique({ where: { id: departmentId } });
+  const existing = await db.department.findUnique({ where: { id: departmentId } });
   if (!existing) {
     throw new ApiError(404, "Department not found");
   }
 
-  const duplicate = await prisma.department.findFirst({
+  const duplicate = await db.department.findFirst({
     where: {
       collegeId: existing.collegeId,
       id: { not: departmentId },
@@ -165,7 +171,7 @@ const updateDepartmentGlobal = asyncHandler(async (req, res) => {
     throw new ApiError(409, "Department with this name already exists in college");
   }
 
-  const updated = await prisma.department.update({
+  const updated = await db.department.update({
     where: { id: departmentId },
     data: { name },
     include: {
@@ -198,10 +204,12 @@ const updateDepartmentGlobal = asyncHandler(async (req, res) => {
 });
 
 const deleteDepartmentGlobal = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const { departmentId } = req.params;
   const { confirmationText } = req.body;
 
-  const existing = await prisma.department.findUnique({
+  const existing = await db.department.findUnique({
     where: { id: departmentId },
     include: {
       _count: {
@@ -238,7 +246,7 @@ const deleteDepartmentGlobal = asyncHandler(async (req, res) => {
     );
   }
 
-  await prisma.department.delete({ where: { id: departmentId } });
+  await db.department.delete({ where: { id: departmentId } });
 
   await createAuditLog({
     action: "SUPER_ADMIN_DELETE_DEPARTMENT",
@@ -257,6 +265,8 @@ const deleteDepartmentGlobal = asyncHandler(async (req, res) => {
 });
 
 const bulkImportDepartmentsGlobal = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const { csvData, defaultCollegeId } = req.body;
   const rows = parseCsv(csvData);
 
@@ -264,7 +274,7 @@ const bulkImportDepartmentsGlobal = asyncHandler(async (req, res) => {
     throw new ApiError(400, "No department rows found in import file");
   }
 
-  const colleges = await prisma.college.findMany({
+  const colleges = await db.college.findMany({
     where: { isActive: true },
     select: { id: true, name: true, code: true },
   });
@@ -310,7 +320,7 @@ const bulkImportDepartmentsGlobal = asyncHandler(async (req, res) => {
       continue;
     }
 
-    const existing = await prisma.department.findFirst({
+    const existing = await db.department.findFirst({
       where: {
         collegeId: resolvedCollege.id,
         name: {
@@ -327,7 +337,7 @@ const bulkImportDepartmentsGlobal = asyncHandler(async (req, res) => {
       continue;
     }
 
-    await prisma.department.create({
+    await db.department.create({
       data: {
         name: departmentName,
         collegeId: resolvedCollege.id,

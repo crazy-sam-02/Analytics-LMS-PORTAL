@@ -1,10 +1,13 @@
 import React from "react";
 import { Provider } from "react-redux";
 import { configureStore } from "@reduxjs/toolkit";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import testReducer from "@/features/Students/testSlice";
 import TestEnvironmentPage from "@/pages/Students/TestEnvironmentPage";
+import SubmissionPage from "@/pages/Students/SubmissionPage";
 import { studentApi } from "@/services/studentApi";
 
 vi.mock("sonner", () => ({
@@ -107,7 +110,21 @@ describe("TestEnvironment submit recovery integration", () => {
       proctoring_config: { threshold: 3 },
     });
 
-    studentApi.submitAttempt.mockResolvedValue({ success: true });
+    studentApi.submitAttempt.mockResolvedValue({
+      submission: {
+        id: "attempt-1",
+        status: "SUBMITTED",
+        submittedAt: new Date().toISOString(),
+        timeSpentSeconds: 60,
+        attemptNumber: 1,
+      },
+      summary: {
+        score: 90,
+        accuracy: 95,
+        timeSpentSeconds: 60,
+        attemptNumber: 1,
+      },
+    });
   });
 
   it("retries pending submission from sessionStorage on initial load", async () => {
@@ -122,15 +139,24 @@ describe("TestEnvironment submit recovery integration", () => {
     );
 
     const store = createStore();
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
+        },
+      },
+    });
 
     render(
       <Provider store={store}>
-        <MemoryRouter initialEntries={["/test/attempt-1"]}>
-          <Routes>
-            <Route path="/test/:attemptId" element={<TestEnvironmentPage />} />
-            <Route path="/results/:submissionId" element={<div>Results Screen</div>} />
-          </Routes>
-        </MemoryRouter>
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={["/test/attempt-1"]}>
+            <Routes>
+              <Route path="/test/:attemptId" element={<TestEnvironmentPage />} />
+              <Route path="/submission/:submissionId" element={<SubmissionPage />} />
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>
       </Provider>
     );
 
@@ -144,6 +170,6 @@ describe("TestEnvironment submit recovery integration", () => {
       timeout: 2500,
     });
 
-    expect(await screen.findByText("Results Screen")).toBeInTheDocument();
+    expect(await screen.findByText("Assessment Submitted")).toBeInTheDocument();
   });
 });

@@ -5,6 +5,72 @@ const withServerTime = (response) => ({
   serverTime: response?.headers?.date ? new Date(response.headers.date).getTime() : Date.now(),
 });
 
+const TEST_CLIENT_ID_KEY = "lms:test:client-session-id";
+
+const getOrCreateTestClientId = () => {
+  try {
+    const existing = sessionStorage.getItem(TEST_CLIENT_ID_KEY);
+    if (existing) return existing;
+
+    const next = `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+    sessionStorage.setItem(TEST_CLIENT_ID_KEY, next);
+    return next;
+  } catch {
+    return `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+  }
+};
+
+const testSessionHeaders = () => ({
+  "x-test-client-id": getOrCreateTestClientId(),
+});
+
+const normalizeTestId = (item) => String(item?.id || item?.test_id || item?.testId || "");
+const normalizeSubmissionId = (item) => String(item?.submissionId || item?.attempt_id || item?.attemptId || "");
+
+const findResumableAttemptByTestId = (items, testId) => {
+  const expectedTestId = String(testId || "");
+  if (!expectedTestId || !Array.isArray(items)) {
+    return null;
+  }
+
+  return (
+    items.find((item) => {
+      const itemTestId = normalizeTestId(item);
+      const itemSubmissionId = normalizeSubmissionId(item);
+      const latestStatus = String(item?.latestSubmissionStatus || "").toUpperCase();
+      return itemTestId === expectedTestId && Boolean(itemSubmissionId) && latestStatus === "IN_PROGRESS";
+    }) || null
+  );
+};
+
+const fetchAttemptSessionDirect = async (attemptId) => {
+  const response = await httpClient.get(`/attempts/${attemptId}`);
+  return withServerTime(response).data;
+};
+
+const startAttemptInFlight = new Map();
+let activeAttemptsInFlight = null;
+const testSessionInFlight = new Map();
+const submitAttemptInFlight = new Map();
+
+const dedupeChangedAnswers = (items = []) => {
+  const map = new Map();
+  items.forEach((item) => {
+    const questionId = item?.question_id;
+    if (!questionId) return;
+    map.set(String(questionId), item);
+  });
+  return [...map.values()];
+};
+
+const chunkArray = (items = [], size = 3) => {
+  const chunks = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+};
+
 export const studentApi = {
   login: async (payload) => {
     try {
@@ -54,9 +120,9 @@ export const studentApi = {
     }
   },
 
-  registerEvent: async (eventId) => {
+  registerEvent: async (eventId, payload = {}) => {
     try {
-      const response = await httpClient.post(`/events/${eventId}/register`, {});
+      const response = await httpClient.post(`/events/${eventId}/register`, payload);
       return response.data;
     } catch (error) {
       throw toApiError(error);
@@ -132,171 +198,176 @@ export const studentApi = {
     }
   },
 
-  getUnreadNotifications: async ({ page = 1, limit = 20 } = {}) => {
-    try {
-      const response = await httpClient.get("/notifications", {
-        params: {
-          unread: true,
-          page,
-          limit,
-        },
-      });
-      const { data, serverTime } = withServerTime(response);
-
-      return {
-        items: Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : [],
-        page: Number(data?.pagination?.page || page),
-        totalPages: Number(data?.pagination?.totalPages || 1),
-        hasMore: Boolean(data?.pagination ? Number(data.pagination.page || page) < Number(data.pagination.totalPages || 1) : false),
-        serverTime,
-      };
-    } catch (error) {
-      throw toApiError(error);
-    }
-  },
-
-  markNotificationRead: async (notificationId) => {
-    try {
-      const response = await httpClient.patch(`/notifications/${notificationId}/read`, {});
-      return response.data;
-    } catch (error) {
-      throw toApiError(error);
-    }
-  },
-
-  markAllNotificationsRead: async () => {
-    try {
-      const response = await httpClient.patch("/notifications/read-all", {});
-      return response.data;
-    } catch (error) {
-      throw toApiError(error);
-    }
-  },
-
   getActiveAttempts: async () => {
+    if (activeAttemptsInFlight) {
+      return activeAttemptsInFlight;
+    }
+
     try {
-      const response = await httpClient.get("/attempts/active");
-      const { data, serverTime } = withServerTime(response);
-      return {
-        items: Array.isArray(data) ? data : [],
-        serverTime,
-      };
+      activeAttemptsInFlight = (async () => {
+        const response = await httpClient.get("/attempts/active");
+        const { data, serverTime } = withServerTime(response);
+        return {
+          items: Array.isArray(data) ? data : [],
+          serverTime,
+        };
+      })();
+
+      return await activeAttemptsInFlight;
     } catch (error) {
       throw toApiError(error);
+    } finally {
+      activeAttemptsInFlight = null;
     }
   },
 
   startAttempt: async ({ test_id }) => {
-    try {
-      const response = await httpClient.post("/attempts/start", { test_id });
-      return withServerTime(response).data;
-    } catch (error) {
-      const parsed = toApiError(error);
-      if (parsed.status !== 404) {
-        throw parsed;
-      }
+    if (!test_id) {
+      const inputError = new Error("test_id is required to start attempt");
+      inputError.code = "INVALID_TEST_ID";
+      inputError.status = 400;
+      throw inputError;
+    }
 
+    const key = String(test_id);
+    const inFlight = startAttemptInFlight.get(key);
+    if (inFlight) {
+      return await inFlight;
+    }
+
+    const request = (async () => {
       try {
-        const legacyResponse = await httpClient.post(`/tests/${test_id}/start`, {});
-        return withServerTime(legacyResponse).data;
-      } catch (legacyError) {
-        throw toApiError(legacyError);
+        const clientSessionId = getOrCreateTestClientId();
+        const response = await httpClient.post(
+          `/tests/${test_id}/start`,
+          { clientSessionId },
+          { headers: testSessionHeaders() }
+        );
+        return withServerTime(response).data;
+      } catch (error) {
+        const parsed = toApiError(error);
+
+        if (parsed.status === 409) {
+          try {
+            const active = await studentApi.getActiveAttempts();
+            const resumable = findResumableAttemptByTestId(active?.items, test_id);
+
+            if (resumable) {
+              const attemptId = normalizeSubmissionId(resumable);
+              return await fetchAttemptSessionDirect(attemptId);
+            }
+          } catch {
+            // Fall through to default error behavior.
+          }
+        }
+
+        if (parsed.status === 429) {
+          try {
+            return await studentApi.getTestSession(test_id);
+          } catch {
+            // Fall through to default error behavior.
+          }
+        }
+
+        if (parsed.status !== 404) {
+          throw parsed;
+        }
+
+        try {
+          const legacyResponse = await httpClient.post("/attempts/start", { test_id });
+          return withServerTime(legacyResponse).data;
+        } catch (legacyError) {
+          throw toApiError(legacyError);
+        }
+      }
+    })();
+
+    startAttemptInFlight.set(key, request);
+
+    try {
+      return await request;
+    } finally {
+      if (startAttemptInFlight.get(key) === request) {
+        startAttemptInFlight.delete(key);
       }
     }
   },
 
   getAttemptSession: async (attemptId) => {
     try {
-      const response = await httpClient.get(`/attempts/${attemptId}`);
-      return withServerTime(response).data;
-    } catch (error) {
-      const parsed = toApiError(error);
-      if (parsed.status !== 404) {
-        throw parsed;
-      }
+      const activeAttempts = await studentApi.getActiveAttempts();
+      const attempt = (activeAttempts?.items || []).find(
+        (item) => String(item?.submissionId || item?.attempt_id || "") === String(attemptId)
+      );
 
-      try {
-        const activeAttempts = await studentApi.getActiveAttempts();
-        const attempt = (activeAttempts?.items || []).find(
-          (item) => String(item?.submissionId || item?.attempt_id || "") === String(attemptId)
-        );
+      if (attempt?.id || attempt?.test_id || attempt?.testId) {
+        const testId = attempt.id || attempt.test_id || attempt.testId;
+        let session = null;
 
-        if (!attempt?.id && !attempt?.test_id && !attempt?.testId) {
-          const notFound = new Error("Attempt not found");
-          notFound.status = 404;
-          notFound.code = "ATTEMPT_NOT_FOUND";
-          throw notFound;
+        try {
+          session = await studentApi.getTestSession(testId);
+        } catch (error) {
+          const parsed = error?.status ? error : toApiError(error);
+          if (parsed.status === 409 && parsed.code === "ACTIVE_SESSION_EXISTS") {
+            return await fetchAttemptSessionDirect(attemptId);
+          }
+
+          throw parsed;
         }
 
-        const testId = attempt.id || attempt.test_id || attempt.testId;
-        const session = await studentApi.getTestSession(testId);
         return {
           ...session,
           attempt_id: attemptId,
           test_id: testId,
         };
-      } catch (legacyError) {
-        throw toApiError(legacyError);
       }
+
+      return await fetchAttemptSessionDirect(attemptId);
+    } catch (error) {
+      throw error?.status ? error : toApiError(error);
     }
   },
 
   patchAttemptAnswers: async ({ attemptId, testId, changedAnswers }) => {
     try {
-      const response = await httpClient.patch(`/attempts/${attemptId}/answers`, {
-        answers: changedAnswers,
-      });
-      return response.data;
-    } catch (error) {
-      const parsed = toApiError(error);
-      if (parsed.status !== 404) {
-        throw parsed;
-      }
-
       if (!testId) {
-        throw parsed;
+        const inputError = new Error("testId is required to save answers");
+        inputError.code = "INVALID_TEST_ID";
+        inputError.status = 400;
+        throw inputError;
       }
 
-      try {
+      const clientSessionId = getOrCreateTestClientId();
+      const deduped = dedupeChangedAnswers(changedAnswers);
+      const chunks = chunkArray(deduped, 3);
+
+      for (const chunk of chunks) {
         await Promise.all(
-          changedAnswers.map((item) =>
+          chunk.map((item) =>
             httpClient.post(`/tests/${testId}/answer`, {
-              submissionId: attemptId,
-              questionId: item.question_id,
-              selectedOption: item.selected_option ?? null,
-              selectedOptions: item.selected_options ?? null,
-              answerText: item.answer_text ?? null,
-              answerBoolean: typeof item.answer_boolean === "boolean" ? item.answer_boolean : null,
-              markedForReview: Boolean(item.marked_for_review),
-            })
+            submissionId: attemptId,
+            questionId: item.question_id,
+            selectedOption: item.selected_option ?? null,
+            selectedOptions: item.selected_options ?? null,
+            answerText: item.answer_text ?? null,
+            answerBoolean: typeof item.answer_boolean === "boolean" ? item.answer_boolean : null,
+            markedForReview: Boolean(item.marked_for_review),
+            clientSessionId,
+            }, { headers: testSessionHeaders() })
           )
         );
-
-        return { saved: true };
-      } catch (legacyError) {
-        throw toApiError(legacyError);
       }
-    }
-  },
 
-  submitAttempt: async ({ attemptId, testId, reason }) => {
-    try {
-      const response = await httpClient.post(`/attempts/${attemptId}/submit`, { reason });
-      return response.data;
+      return { saved: true };
     } catch (error) {
       const parsed = toApiError(error);
       if (parsed.status !== 404) {
         throw parsed;
       }
 
-      if (!testId) {
-        throw parsed;
-      }
-
       try {
-        const response = await httpClient.post(`/tests/${testId}/submit`, {
-          submissionId: attemptId,
-          reason,
+        const response = await httpClient.patch(`/attempts/${attemptId}/answers`, {
+          answers: changedAnswers,
         });
         return response.data;
       } catch (legacyError) {
@@ -305,9 +376,79 @@ export const studentApi = {
     }
   },
 
+  submitAttempt: async ({ attemptId, testId, reason }) => {
+    if (!attemptId) {
+      const inputError = new Error("attemptId is required to submit attempt");
+      inputError.code = "INVALID_ATTEMPT_ID";
+      inputError.status = 400;
+      throw inputError;
+    }
+
+    const key = String(attemptId);
+    const inFlight = submitAttemptInFlight.get(key);
+    if (inFlight) {
+      return await inFlight;
+    }
+
+    const request = (async () => {
+      try {
+        if (!testId) {
+          throw new Error("Missing testId for /tests submit route");
+        }
+
+        const response = await httpClient.post(`/tests/${testId}/submit`, {
+          submissionId: attemptId,
+          reason,
+          clientSessionId: getOrCreateTestClientId(),
+        }, { headers: testSessionHeaders() });
+        return response.data;
+      } catch (error) {
+        const parsed = toApiError(error);
+        if (parsed.status !== 404 && parsed.status !== 400) {
+          throw parsed;
+        }
+
+        try {
+          const response = await httpClient.post(`/attempts/${attemptId}/submit`, { reason });
+          return response.data;
+        } catch (legacyError) {
+          throw toApiError(legacyError);
+        }
+      }
+    })();
+
+    submitAttemptInFlight.set(key, request);
+
+    try {
+      return await request;
+    } finally {
+      if (submitAttemptInFlight.get(key) === request) {
+        submitAttemptInFlight.delete(key);
+      }
+    }
+  },
+
   heartbeatAttempt: async ({ attemptId, testId }) => {
     try {
-      const response = await httpClient.patch(`/attempts/${attemptId}/heartbeat`, {});
+      if (testId) {
+        const response = await httpClient.post(
+          `/tests/${testId}/heartbeat`,
+          {
+            submissionId: attemptId,
+            clientSessionId: getOrCreateTestClientId(),
+          },
+          { headers: testSessionHeaders() }
+        );
+        return response.data;
+      }
+
+      const response = await httpClient.patch(
+        `/attempts/${attemptId}/heartbeat`,
+        {
+          clientSessionId: getOrCreateTestClientId(),
+        },
+        { headers: testSessionHeaders() }
+      );
       return response.data;
     } catch (error) {
       const parsed = toApiError(error);
@@ -315,13 +456,13 @@ export const studentApi = {
         throw parsed;
       }
 
-      if (!testId) {
-        throw parsed;
-      }
-
       try {
-        await studentApi.getTestSession(testId);
-        return { ok: true };
+        const response = await httpClient.patch(
+          `/attempts/${attemptId}/heartbeat`,
+          { clientSessionId: getOrCreateTestClientId() },
+          { headers: testSessionHeaders() }
+        );
+        return response.data;
       } catch (legacyError) {
         throw toApiError(legacyError);
       }
@@ -330,10 +471,21 @@ export const studentApi = {
  
   reportAttemptViolation: async ({ attemptId, testId, type, metadata }) => {
     try {
-      const response = await httpClient.post(`/attempts/${attemptId}/violations`, {
+      if (!testId) {
+        const response = await httpClient.post(`/attempts/${attemptId}/violations`, {
+          type,
+          metadata,
+          clientSessionId: getOrCreateTestClientId(),
+        }, { headers: testSessionHeaders() });
+        return response.data;
+      }
+
+      const response = await httpClient.post(`/tests/${testId}/violation`, {
+        submissionId: attemptId,
         type,
         metadata,
-      });
+        clientSessionId: getOrCreateTestClientId(),
+      }, { headers: testSessionHeaders() });
       return response.data;
     } catch (error) {
       const parsed = toApiError(error);
@@ -341,16 +493,12 @@ export const studentApi = {
         throw parsed;
       }
 
-      if (!testId) {
-        throw parsed;
-      }
-
       try {
-        const response = await httpClient.post(`/tests/${testId}/violation`, {
-          submissionId: attemptId,
+        const response = await httpClient.post(`/attempts/${attemptId}/violations`, {
           type,
           metadata,
-        });
+          clientSessionId: getOrCreateTestClientId(),
+        }, { headers: testSessionHeaders() });
         return response.data;
       } catch (legacyError) {
         throw toApiError(legacyError);
@@ -458,11 +606,23 @@ export const studentApi = {
   },
 
   getTestSession: async (testId) => {
+    const key = String(testId || "");
+    if (testSessionInFlight.has(key)) {
+      return testSessionInFlight.get(key);
+    }
+
     try {
-      const response = await httpClient.get(`/tests/${testId}/session`);
-      return response.data;
+      const request = (async () => {
+        const response = await httpClient.get(`/tests/${testId}/session`, { headers: testSessionHeaders() });
+        return response.data;
+      })();
+
+      testSessionInFlight.set(key, request);
+      return await request;
     } catch (error) {
       throw toApiError(error);
+    } finally {
+      testSessionInFlight.delete(key);
     }
   },
 };

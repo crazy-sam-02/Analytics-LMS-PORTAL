@@ -1,5 +1,6 @@
 import { createAsyncThunk, createSlice } from "@reduxjs/toolkit";
 import { studentApi } from "@/services/studentApi";
+import { resolveIncomingTestConfig } from "@/lib/testConfig";
 
 const normalizeQuestionType = (value) => {
   const type = String(value || "").toUpperCase();
@@ -22,14 +23,15 @@ const normalizeAnswersMap = (answersArrayOrObject) => {
 
   return (answersArrayOrObject || []).reduce((acc, item) => {
     const questionId = item?.questionId || item?.question_id;
+    const selectedOptions = item?.selectedOptions || item?.selected_options;
     if (!questionId) {
       return acc;
     }
 
     acc[questionId] = {
       selected_option: item?.selectedOption ?? item?.selected_option ?? null,
-      selected_options: Array.isArray(item?.selectedOptions || item?.selected_options)
-        ? [...(item?.selectedOptions || item?.selected_options)]
+      selected_options: Array.isArray(selectedOptions)
+        ? [...selectedOptions]
         : [],
       answer_boolean: typeof (item?.answerBoolean ?? item?.answer_boolean) === "boolean"
         ? (item?.answerBoolean ?? item?.answer_boolean)
@@ -42,14 +44,20 @@ const normalizeAnswersMap = (answersArrayOrObject) => {
   }, {});
 };
 
+const createDefaultViolationState = () => ({
+  tab_switch: 0,
+  copy: 0,
+  paste: 0,
+  window_blur: 0,
+  right_click: 0,
+  fullscreen_exit: 0,
+  screenshot_attempt: 0,
+  devtools_open: 0,
+  total: 0,
+});
+
 const normalizeViolations = (payload) => {
-  const base = {
-    tab_switch: 0,
-    copy: 0,
-    paste: 0,
-    window_blur: 0,
-    total: 0,
-  };
+  const base = createDefaultViolationState();
 
   if (!payload) {
     return base;
@@ -76,6 +84,14 @@ const normalizeViolations = (payload) => {
       base.copy += 1;
     } else if (type.includes("PASTE")) {
       base.paste += 1;
+    } else if (type.includes("RIGHT")) {
+      base.right_click += 1;
+    } else if (type.includes("FULLSCREEN")) {
+      base.fullscreen_exit += 1;
+    } else if (type.includes("SCREENSHOT")) {
+      base.screenshot_attempt += 1;
+    } else if (type.includes("DEVTOOLS")) {
+      base.devtools_open += 1;
     } else if (type.includes("BLUR")) {
       base.window_blur += 1;
     }
@@ -86,12 +102,80 @@ const normalizeViolations = (payload) => {
   return base;
 };
 
+const serializeApiError = (error) => ({
+  message: error?.message || "Request failed",
+  code: error?.code || "REQUEST_FAILED",
+  status: Number(error?.status || 0) || null,
+  details: error?.details || null,
+});
+
 const defaultProctoringConfig = {
   enabled: true,
   threshold: 3,
   fullscreen_required: false,
+  tab_switch: "monitored",
+  copy_paste: "monitored",
+  window_blur: true,
+  screenshot_detection: false,
+  right_click_disabled: true,
+  devtools_detection: true,
   auto_next_single: false,
   paragraph_word_limit: 250,
+};
+
+const buildStudentProctoringConfig = (payload, test) => {
+  const resolved = resolveIncomingTestConfig(test || {});
+  const source = {
+    ...(test?.proctoring_config || {}),
+    ...(payload?.proctoring_config || {}),
+  };
+
+  return {
+    ...defaultProctoringConfig,
+    enabled: Boolean(source.enabled ?? resolved.restrictions.enabled ?? defaultProctoringConfig.enabled),
+    threshold: Number(
+      source.threshold ??
+      resolved.restrictions.violationThreshold ??
+      defaultProctoringConfig.threshold
+    ),
+    fullscreen_required: Boolean(
+      source.fullscreen_required ??
+      resolved.restrictions.fullscreenRequired ??
+      defaultProctoringConfig.fullscreen_required
+    ),
+    tab_switch: source.tab_switch || resolved.restrictions.tabSwitch || defaultProctoringConfig.tab_switch,
+    copy_paste: source.copy_paste || resolved.restrictions.copyPaste || defaultProctoringConfig.copy_paste,
+    window_blur: Boolean(
+      source.window_blur ??
+      resolved.restrictions.windowBlur ??
+      defaultProctoringConfig.window_blur
+    ),
+    screenshot_detection: Boolean(
+      source.screenshot_detection ??
+      resolved.restrictions.screenshotDetection ??
+      defaultProctoringConfig.screenshot_detection
+    ),
+    right_click_disabled: Boolean(
+      source.right_click_disabled ??
+      resolved.restrictions.rightClickDisabled ??
+      defaultProctoringConfig.right_click_disabled
+    ),
+    devtools_detection: Boolean(
+      source.devtools_detection ??
+      resolved.restrictions.devtoolsDetection ??
+      defaultProctoringConfig.devtools_detection
+    ),
+    auto_next_single: Boolean(
+      source.auto_next_single ??
+      resolved.restrictions.autoNextSingle ??
+      defaultProctoringConfig.auto_next_single
+    ),
+    paragraph_word_limit: Number(
+      source.paragraph_word_limit ??
+      resolved.restrictions.paragraphWordLimit ??
+      defaultProctoringConfig.paragraph_word_limit
+    ),
+  };
 };
 
 const deriveServerEndTime = ({ serverEndTime, submission, test }) => {
@@ -114,14 +198,21 @@ const deriveServerEndTime = ({ serverEndTime, submission, test }) => {
 };
 
 const normalizeAttemptPayload = (payload) => {
-  const attemptId = payload?.attempt_id || payload?.attemptId || payload?.submission?.id || payload?.id || null;
-  const test = payload?.test || payload?.attempt?.test || null;
-  const testId = payload?.test_id || payload?.testId || test?.id || payload?.submission?.testId || null;
+  const submission = payload?.submission || payload;
+  const test = payload?.test || payload?.attempt?.test || submission?.test || null;
+  const attemptId = payload?.attempt_id || payload?.attemptId || submission?.id || payload?.id || null;
+  const testId = payload?.test_id || payload?.testId || test?.id || submission?.testId || null;
   const rawQuestions = payload?.questions || test?.questions || payload?.attempt?.questions || [];
   const normalizedQuestions = {};
 
-  (rawQuestions || []).forEach((question, index) => {
-    const qid = question?.id || question?.question_id;
+  const questionList = Array.isArray(rawQuestions)
+    ? rawQuestions
+    : rawQuestions && typeof rawQuestions === "object"
+      ? Object.values(rawQuestions)
+      : [];
+
+  questionList.forEach((question, index) => {
+    const qid = question?.id || question?._id || question?.questionId || question?.question_id;
     if (!qid) {
       return;
     }
@@ -142,15 +233,15 @@ const normalizeAttemptPayload = (payload) => {
         .sort((a, b) => a.order - b.order)
         .map((question) => question.id);
 
-  const answers = normalizeAnswersMap(payload?.answers || payload?.submission?.answers);
+  const answers = normalizeAnswersMap(payload?.answers || submission?.answers);
   const markedForReview = Object.entries(answers)
     .filter(([, answer]) => Boolean(answer?.marked_for_review))
     .map(([questionId]) => questionId);
 
-  const violations = normalizeViolations(payload?.violations || payload?.submission?.violations);
+  const violations = normalizeViolations(payload?.violations || submission?.violations);
   const serverEndTime = deriveServerEndTime({
     serverEndTime: payload?.server_end_time || payload?.serverEndTime,
-    submission: payload?.submission,
+    submission,
     test,
   });
 
@@ -164,14 +255,7 @@ const normalizeAttemptPayload = (payload) => {
     current_question_index: 0,
     server_end_time: serverEndTime,
     violations,
-    proctoring_config: {
-      ...defaultProctoringConfig,
-      ...(payload?.proctoring_config || {}),
-      threshold: Number(payload?.proctoring_config?.threshold || test?.violationLimit || defaultProctoringConfig.threshold),
-      fullscreen_required: Boolean(payload?.proctoring_config?.fullscreen_required || test?.requireFullscreen || false),
-      auto_next_single: Boolean(payload?.proctoring_config?.auto_next_single || false),
-      paragraph_word_limit: Number(payload?.proctoring_config?.paragraph_word_limit || defaultProctoringConfig.paragraph_word_limit),
-    },
+    proctoring_config: buildStudentProctoringConfig(payload, test),
   };
 };
 
@@ -199,7 +283,7 @@ export const saveAttemptAnswers = createAsyncThunk(
     try {
       return await studentApi.patchAttemptAnswers({ attemptId: attempt_id, testId: test_id, changedAnswers });
     } catch (error) {
-      return rejectWithValue(error);
+      return rejectWithValue(serializeApiError(error));
     }
   }
 );
@@ -210,7 +294,7 @@ export const reportAttemptViolation = createAsyncThunk(
     try {
       return await studentApi.reportAttemptViolation({ attemptId: attempt_id, testId: test_id, type, metadata });
     } catch (error) {
-      return rejectWithValue(error);
+      return rejectWithValue(serializeApiError(error));
     }
   }
 );
@@ -221,7 +305,7 @@ export const heartbeatAttempt = createAsyncThunk(
     try {
       return await studentApi.heartbeatAttempt({ attemptId: attempt_id, testId: test_id });
     } catch (error) {
-      return rejectWithValue(error);
+      return rejectWithValue(serializeApiError(error));
     }
   }
 );
@@ -232,7 +316,7 @@ export const submitAttempt = createAsyncThunk(
     try {
       return await studentApi.submitAttempt({ attemptId: attempt_id, testId: test_id, reason });
     } catch (error) {
-      return rejectWithValue(error);
+      return rejectWithValue(serializeApiError(error));
     }
   }
 );
@@ -251,13 +335,7 @@ const initialState = {
   current_question_index: 0,
   marked_for_review: [],
   server_end_time: null,
-  violations: {
-    tab_switch: 0,
-    copy: 0,
-    paste: 0,
-    window_blur: 0,
-    total: 0,
-  },
+  violations: createDefaultViolationState(),
   proctoring_config: defaultProctoringConfig,
   save_status: "idle",
   submit_status: "idle",
@@ -358,6 +436,10 @@ const testSlice = createSlice({
       if (type === "copy") state.violations.copy += 1;
       if (type === "paste") state.violations.paste += 1;
       if (type === "window_blur") state.violations.window_blur += 1;
+      if (type === "right_click") state.violations.right_click += 1;
+      if (type === "fullscreen_exit") state.violations.fullscreen_exit += 1;
+      if (type === "screenshot_attempt") state.violations.screenshot_attempt += 1;
+      if (type === "devtools_open") state.violations.devtools_open += 1;
       state.violations.total += 1;
     },
     setSaveStatus: (state, action) => {
@@ -379,13 +461,8 @@ const testSlice = createSlice({
       state.current_question_index = 0;
       state.marked_for_review = [];
       state.server_end_time = null;
-      state.violations = {
-        tab_switch: 0,
-        copy: 0,
-        paste: 0,
-        window_blur: 0,
-        total: 0,
-      };
+      state.violations = createDefaultViolationState();
+      state.proctoring_config = defaultProctoringConfig;
       state.save_status = "idle";
       state.submit_status = "idle";
       state.start_status = "idle";

@@ -1,1 +1,27 @@
-FROM baseImage
+FROM node:20-alpine AS builder
+WORKDIR /app
+
+# Install production dependencies only
+COPY package.json package-lock.json ./
+RUN npm ci --production --ignore-scripts
+
+# Copy application source
+COPY src/ ./src/
+COPY scripts/ ./scripts/
+
+FROM node:20-alpine
+WORKDIR /app
+
+# Copy from builder
+COPY --from=builder /app ./
+
+# Run as non-root user for security
+RUN addgroup -S lmsgroup && adduser -S lmsuser -G lmsgroup
+USER lmsuser
+
+EXPOSE 5000
+
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+  CMD wget -q -O - http://localhost:5000/api/health || exit 1
+
+CMD ["node", "src/server.js"]

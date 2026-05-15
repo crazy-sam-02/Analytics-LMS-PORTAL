@@ -1,770 +1,767 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
-import { useSelector } from "react-redux";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useSearchParams } from "react-router-dom";
-import { useVirtualizer } from "@tanstack/react-virtual";
-import {
-  Area,
-  AreaChart,
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Legend,
-  Line,
-  LineChart,
-  Pie,
-  PieChart,
-  PolarAngleAxis,
-  PolarGrid,
-  Radar,
-  RadarChart,
-  ReferenceLine,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
-import { Search } from "lucide-react";
-import { toast } from "sonner";
-import { adminApi } from "@/services/api";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import usePermission from "@/hooks/usePermission";
 import PermissionDenied from "@/components/Admin/PermissionDenied";
 import { ADMIN_PERMISSIONS } from "@/features/Admin/adminPermissions";
-import { ReportsSkeleton } from "@/components/common/page-skeletons";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { adminApi } from "@/services/api";
+import {
+  AreaTrendChart,
+  ChartCard,
+  EmptyState,
+  ExportButton,
+  GroupedBarChart,
+  HorizontalBarChart,
+  KpiCard,
+  LineTrendChart,
+  ScoreBadge,
+  ScoreDonutChart,
+  StatusBadge,
+  StudentIdentityCard,
+  Th,
+  TopicRadarChart,
+  ViolationBadge,
+} from "@/components/Reports/components";
+import { formatDateLabel, formatPercent, toQueryString } from "@/components/Reports/utils";
 
-const MODE_OPTIONS = [
+const ADMIN_MODES = [
   { key: "department", label: "Department" },
   { key: "batch", label: "Batch" },
   { key: "student", label: "Student" },
 ];
 
-const CHART_COLORS = ["var(--chart-1)", "var(--chart-2)", "var(--chart-3)", "var(--chart-4)", "var(--chart-5)"];
-
-const SORTABLE_KEYS = {
-  student: ["testName", "score", "percentile", "timeTaken", "date", "status"],
-  department: ["rank", "name", "rollNo", "avgScore", "participation", "violations"],
-  batch: ["rank", "name", "rollNo", "avgScore", "participation", "violations"],
+const MODE_DEFAULT_SORT = {
+  department: { key: "rank", dir: "asc" },
+  batch: { key: "avgScore", dir: "desc" },
+  student: { key: "date", dir: "desc" },
 };
 
-const DEFAULT_SORT_BY_MODE = {
-  student: { key: "date", direction: "desc" },
-  department: { key: "avgScore", direction: "desc" },
-  batch: { key: "avgScore", direction: "desc" },
+const clampPercent = (value) => Math.max(0, Math.min(100, Number(value || 0)));
+
+const getSortValue = (row, key) => {
+  if (!row) return null;
+  if (key === "date") return new Date(row.date || 0).getTime();
+  return row[key] ?? null;
 };
 
-const toScoreTone = (value) => {
-  if (value >= 75) return "text-emerald-700";
-  if (value >= 50) return "text-amber-700";
-  return "text-red-700";
-};
+const sortRows = (rows, sortState) => {
+  if (!Array.isArray(rows) || !rows.length) return [];
+  const { key, dir } = sortState || {};
+  if (!key) return [...rows];
+  const multiplier = dir === "asc" ? 1 : -1;
 
-const percentileTone = (value) => {
-  if (value >= 90) return "text-emerald-700";
-  if (value >= 70) return "text-blue-700";
-  if (value >= 50) return "text-amber-700";
-  return "text-red-700";
-};
-
-const formatPercentile = (value) => {
-  if (value == null) return "N/A";
-  return `${Number(value).toFixed(0)}th`;
-};
-
-function CustomTooltip({ active, payload, label }) {
-  if (!active || !payload?.length) return null;
-  return (
-    <div className="rounded-lg border border-border bg-card px-3 py-2 text-xs shadow-lg">
-      <p className="mb-1 text-muted-foreground">{label}</p>
-      {payload.map((item) => (
-        <div key={item.dataKey} className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <span className="h-2 w-2 rounded-sm" style={{ backgroundColor: item.color }} />
-            <span>{item.name}</span>
-          </div>
-          <span className="font-medium">{typeof item.value === "number" ? item.value.toFixed(2) : item.value}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function EmptyState({ title, description, actionLabel, onAction }) {
-  return (
-    <Card className="rounded-2xl border-slate-200">
-      <CardContent className="flex min-h-64 flex-col items-center justify-center gap-2 text-center">
-        <p className="text-base font-semibold text-slate-800">{title}</p>
-        <p className="max-w-xl text-sm text-slate-500">{description}</p>
-        {actionLabel ? (
-          <Button type="button" variant="outline" onClick={onAction} className="mt-2">
-            {actionLabel}
-          </Button>
-        ) : null}
-      </CardContent>
-    </Card>
-  );
-}
-
-function DataTable({ mode, rows, attemptRows, sortState, onSortChange }) {
-  const parentRef = useRef(null);
-  const sourceRows = mode === "student" ? attemptRows : rows;
-  const tableRows = useMemo(() => {
-    const sorted = [...sourceRows];
-    sorted.sort((a, b) => {
-      const av = a?.[sortState.key];
-      const bv = b?.[sortState.key];
-      if (av == null && bv == null) return 0;
-      if (av == null) return 1;
-      if (bv == null) return -1;
-
-      if (sortState.key === "date") {
-        return new Date(av).getTime() - new Date(bv).getTime();
-      }
-
-      if (sortState.key === "timeTaken") {
-        return Number(av || 0) - Number(bv || 0);
-      }
-
-      if (sortState.key === "percentile") {
-        return Number(av || 0) - Number(bv || 0);
-      }
-
-      if (typeof av === "number" && typeof bv === "number") {
-        return av - bv;
-      }
-
-      return String(av).localeCompare(String(bv));
-    });
-    return sortState.direction === "desc" ? sorted.reverse() : sorted;
-  }, [sourceRows, sortState]);
-
-  const virtualized = tableRows.length > 100;
-
-  const rowVirtualizer = useVirtualizer({
-    count: virtualized ? tableRows.length : 0,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => 48,
-  });
-
-  const toggleSort = (key) => {
-    onSortChange((prev) => {
-      if (prev.key === key) {
-        return { key, direction: prev.direction === "asc" ? "desc" : "asc" };
-      }
-      return { key, direction: "desc" };
-    });
-  };
-
-  const sortArrow = (key) => {
-    if (sortState.key !== key) return "↕";
-    return sortState.direction === "asc" ? "↑" : "↓";
-  };
-
-  const sortAria = (key) => {
-    if (sortState.key !== key) return "none";
-    return sortState.direction === "asc" ? "ascending" : "descending";
-  };
-
-  const sortButtonClass = "inline-flex items-center gap-1 font-semibold text-slate-600 hover:text-slate-900 transition-colors";
-
-  const renderRow = (row, idx) => {
-    if (mode === "student") {
-      return (
-        <tr key={`${row.testName}-${idx}`} className="border-b border-slate-100 hover:bg-slate-50/70">
-          <td className="px-3 py-2">{row.testName}</td>
-          <td className={`px-3 py-2 font-medium ${toScoreTone(row.score)}`}>{row.score}</td>
-          <td className={`px-3 py-2 ${percentileTone(Number(row.percentile || 0))}`} title={row.percentile == null ? "Percentile is not meaningful with fewer than 5 submissions." : ""}>{formatPercentile(row.percentile)}</td>
-          <td className="px-3 py-2">{Math.floor((row.timeTaken || 0) / 60)}m</td>
-          <td className="px-3 py-2">{new Date(row.date).toLocaleString()}</td>
-          <td className="px-3 py-2">
-            <Badge variant={row.status === "SUBMITTED" ? "default" : row.status === "AUTO_SUBMITTED" ? "secondary" : "destructive"}>
-              {row.status === "AUTO_SUBMITTED" ? "Auto-submitted" : row.status}
-            </Badge>
-          </td>
-        </tr>
-      );
+  return [...rows].sort((a, b) => {
+    const av = getSortValue(a, key);
+    const bv = getSortValue(b, key);
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    if (typeof av === "number" && typeof bv === "number") {
+      return (av - bv) * multiplier;
     }
+    return String(av).localeCompare(String(bv)) * multiplier;
+  });
+};
 
-    return (
-      <tr key={row.studentId} className="border-b border-slate-100 hover:bg-slate-50/70">
-        <td className="px-3 py-2">{row.rank || idx + 1}</td>
-        <td className="px-3 py-2">{row.name}</td>
-        <td className="px-3 py-2">{row.rollNo}</td>
-        <td className={`px-3 py-2 font-medium ${toScoreTone(row.avgScore)}`}>{Number(row.avgScore).toFixed(2)}</td>
-        <td className="px-3 py-2">{Number(row.participation || 0).toFixed(1)}%</td>
-        <td className="px-3 py-2">
-          {row.violations === 0 ? <Badge variant="outline">Clean</Badge> : <Badge variant={row.violations > 2 ? "destructive" : "secondary"}>{row.violations}</Badge>}
-        </td>
-      </tr>
-    );
-  };
+const getStatusVariant = (status) => {
+  const normalized = String(status || "").toLowerCase();
+  if (normalized === "submitted") return "success";
+  if (normalized === "auto_submitted" || normalized === "auto-submitted") return "warning";
+  if (normalized === "abandoned") return "danger";
+  return "default";
+};
 
-  return (
-    <Card className="rounded-2xl border-slate-200">
-      <CardHeader>
-        <CardTitle>{mode === "student" ? "Attempt History" : "Top Students"}</CardTitle>
-      </CardHeader>
-      <CardContent>
-        {tableRows.length === 0 ? (
-          <p className="text-sm text-slate-500">No rows to display.</p>
-        ) : (
-          <div ref={parentRef} className={virtualized ? "max-h-96 overflow-y-auto" : ""}>
-            <table className="w-full border-collapse text-sm">
-              <thead>
-                <tr className="border-b border-slate-200 text-left text-[11px] font-semibold tracking-[0.06em] text-slate-500 uppercase">
-                  {mode === "student" ? (
-                    <>
-                      <th className="px-3 py-2" aria-sort={sortAria("testName")}><button className={sortButtonClass} type="button" onClick={() => toggleSort("testName")}>Test Name {sortArrow("testName")}</button></th>
-                      <th className="px-3 py-2" aria-sort={sortAria("score")}><button className={sortButtonClass} type="button" onClick={() => toggleSort("score")}>Score {sortArrow("score")}</button></th>
-                      <th className="px-3 py-2" aria-sort={sortAria("percentile")}><button className={sortButtonClass} type="button" onClick={() => toggleSort("percentile")}>Percentile {sortArrow("percentile")}</button></th>
-                      <th className="px-3 py-2" aria-sort={sortAria("timeTaken")}><button className={sortButtonClass} type="button" onClick={() => toggleSort("timeTaken")}>Time {sortArrow("timeTaken")}</button></th>
-                      <th className="px-3 py-2" aria-sort={sortAria("date")}><button className={sortButtonClass} type="button" onClick={() => toggleSort("date")}>Date {sortArrow("date")}</button></th>
-                      <th className="px-3 py-2" aria-sort={sortAria("status")}><button className={sortButtonClass} type="button" onClick={() => toggleSort("status")}>Status {sortArrow("status")}</button></th>
-                    </>
-                  ) : (
-                    <>
-                      <th className="px-3 py-2" aria-sort={sortAria("rank")}><button className={sortButtonClass} type="button" onClick={() => toggleSort("rank")}>Rank {sortArrow("rank")}</button></th>
-                      <th className="px-3 py-2" aria-sort={sortAria("name")}><button className={sortButtonClass} type="button" onClick={() => toggleSort("name")}>Name {sortArrow("name")}</button></th>
-                      <th className="px-3 py-2" aria-sort={sortAria("rollNo")}><button className={sortButtonClass} type="button" onClick={() => toggleSort("rollNo")}>Roll No {sortArrow("rollNo")}</button></th>
-                      <th className="px-3 py-2" aria-sort={sortAria("avgScore")}><button className={sortButtonClass} type="button" onClick={() => toggleSort("avgScore")}>Avg Score {sortArrow("avgScore")}</button></th>
-                      <th className="px-3 py-2" aria-sort={sortAria("participation")}><button className={sortButtonClass} type="button" onClick={() => toggleSort("participation")}>Participation {sortArrow("participation")}</button></th>
-                      <th className="px-3 py-2" aria-sort={sortAria("violations")}><button className={sortButtonClass} type="button" onClick={() => toggleSort("violations")}>Violations {sortArrow("violations")}</button></th>
-                    </>
-                  )}
-                </tr>
-              </thead>
-              <tbody>
-                {virtualized
-                  ? rowVirtualizer.getVirtualItems().map((virtualRow) => renderRow(tableRows[virtualRow.index], virtualRow.index))
-                  : tableRows.map((row, idx) => renderRow(row, idx))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
+const formatViolationType = (type) => String(type || "UNKNOWN").replace(/_/g, " ").toLowerCase();
 
 export default function ReportsPage() {
-  const canViewReports = usePermission(ADMIN_PERMISSIONS.VIEW_REPORTS);
-  const canExportReports = usePermission(ADMIN_PERMISSIONS.EXPORT_REPORTS);
-  const admin = useSelector((state) => state.adminAuth.admin);
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const [mode, setMode] = useState(searchParams.get("mode") || "department");
-  const [testId, setTestId] = useState(searchParams.get("test") || "all");
-  const [departmentId, setDepartmentId] = useState(searchParams.get("department_id") || "");
-  const [batchId, setBatchId] = useState(searchParams.get("batch_id") || "");
-  const [studentId, setStudentId] = useState(searchParams.get("student_id") || "");
-  const [sortState, setSortState] = useState(() => {
-    const key = searchParams.get("sort_key");
-    const direction = searchParams.get("sort_dir") === "asc" ? "asc" : "desc";
-    if (key && SORTABLE_KEYS[mode]?.includes(key)) {
-      return { key, direction };
-    }
-    return DEFAULT_SORT_BY_MODE[mode] || DEFAULT_SORT_BY_MODE.department;
-  });
-  const [studentSearch, setStudentSearch] = useState("");
-  const [studentDropdownOpen, setStudentDropdownOpen] = useState(false);
-  const [exportState, setExportState] = useState({ status: "idle", jobId: null, progress: 0, downloadUrl: null, expiresAt: null });
-  const [banner, setBanner] = useState({ type: "", title: "", message: "" });
-  const exportPollRef = useRef(null);
-  const deferredStudentSearch = useDeferredValue(studentSearch.trim());
+  const canViewReports = usePermission(ADMIN_PERMISSIONS.VIEW_REPORTS);
+  const canExportReports = usePermission(ADMIN_PERMISSIONS.EXPORT_REPORTS);
 
-  const testsQuery = useQuery({ queryKey: ["admin-report-tests"], queryFn: () => adminApi.getTests("?page=1&limit=200"), staleTime: 120000 });
-  const departmentsQuery = useQuery({ queryKey: ["admin-report-departments"], queryFn: () => adminApi.getDepartments(), staleTime: 120000 });
-  const batchesQuery = useQuery({ queryKey: ["admin-report-batches"], queryFn: () => adminApi.getBatches(), staleTime: 120000 });
-  const studentsQuery = useQuery({
-    queryKey: ["admin-report-students", deferredStudentSearch],
-    queryFn: () => {
-      const query = new URLSearchParams();
-      query.set("page", "1");
-      query.set("limit", deferredStudentSearch.length >= 2 ? "30" : "100");
-      if (deferredStudentSearch.length >= 2) {
-        query.set("search", deferredStudentSearch);
-      }
-      return adminApi.getStudents(`?${query.toString()}`);
-    },
-    staleTime: 60000,
+  const mode = ADMIN_MODES.some((item) => item.key === searchParams.get("mode")) ? searchParams.get("mode") : "department";
+  const testId = searchParams.get("test") || "all";
+  const batchId = searchParams.get("batch") || "";
+  const studentId = searchParams.get("student_id") || "";
+
+  const [studentSearch, setStudentSearch] = useState("");
+  const [sortState, setSortState] = useState(MODE_DEFAULT_SORT[mode]);
+  const [exportState, setExportState] = useState({
+    status: "idle",
+    progress: 0,
+    downloadUrl: "",
+    expiresAt: null,
+    jobId: "",
   });
-  const selectedStudentQuery = useQuery({
-    queryKey: ["admin-report-student-profile", studentId],
-    queryFn: () => adminApi.getStudentProfile(studentId),
-    enabled: mode === "student" && Boolean(studentId),
-    staleTime: 60000,
+  const [violationDialog, setViolationDialog] = useState({
+    open: false,
+    studentName: "",
+    events: [],
+  });
+
+  const pollRef = useRef(null);
+
+  const updateParams = (next) => {
+    const nextParams = new URLSearchParams(searchParams);
+    Object.entries(next).forEach(([key, value]) => {
+      if (value == null || value === "") {
+        nextParams.delete(key);
+      } else {
+        nextParams.set(key, value);
+      }
+    });
+    setSearchParams(nextParams);
+  };
+
+  const testsQuery = useQuery({
+    queryKey: ["admin-report-tests-v2"],
+    queryFn: () => adminApi.getTests("?page=1&limit=100"),
+    staleTime: 120000,
+  });
+
+  const batchesQuery = useQuery({
+    queryKey: ["admin-report-batches-v2"],
+    queryFn: () => adminApi.getBatches(),
+    staleTime: 120000,
+  });
+
+  const studentsDirectoryQuery = useQuery({
+    queryKey: ["admin-report-students-directory-v2"],
+    queryFn: () => adminApi.getStudents("?page=1&limit=300"),
+    staleTime: 120000,
   });
 
   const analyticsQuery = useQuery({
-    queryKey: ["report", mode, departmentId, batchId, studentId, testId],
-    queryFn: () => {
-      const query = new URLSearchParams();
-      query.set("mode", mode);
-      if (departmentId) query.set("departmentId", departmentId);
-      if (batchId) query.set("batchId", batchId);
-      if (studentId) query.set("studentId", studentId);
-      if (testId !== "all") query.set("testId", testId);
-      return adminApi.getReportAnalytics(`?${query.toString()}`);
-    },
-    staleTime: mode === "student" ? 0 : 120000,
-    enabled: canViewReports,
+    queryKey: ["admin-report-analytics-v2", mode, testId, batchId, studentId],
+    queryFn: () =>
+      adminApi.getReportAnalytics(
+        toQueryString({
+          mode,
+          testId,
+          batchId,
+          studentId,
+        })
+      ),
+    enabled: canViewReports && (mode !== "student" || Boolean(studentId)),
+    staleTime: 45000,
   });
 
-  useEffect(() => {
-    const sortValid = SORTABLE_KEYS[mode]?.includes(sortState.key);
-    if (!sortValid) {
-      setSortState(DEFAULT_SORT_BY_MODE[mode] || DEFAULT_SORT_BY_MODE.department);
-    }
-  }, [mode, sortState.key]);
+  const tests = testsQuery.data?.data || [];
+  const batches = batchesQuery.data || [];
+  const studentsDirectory = studentsDirectoryQuery.data?.data || [];
+  const analytics = analyticsQuery.data || {};
+
+  const trendData = (analytics.scoreTrend || []).map((item, index) => ({
+    month: item.month || `Test ${index + 1}`,
+    score: Number(item.score || 0),
+  }));
+
+  const topicData = (analytics.topicPerformance || []).map((item, index) => ({
+    subject: item.subject || item.topic || `Topic ${index + 1}`,
+    score: Number(item.score || item.avgScore || 0),
+  }));
+
+  const departmentComparative = (analytics.departmentComparative || []).map((item) => ({
+    department: item.departmentName || item.department || "-",
+    avgScore: Number(item.avgScore || 0),
+    passRate: Number(item.passRate || 0),
+    participationRate: Number(item.participationRate || 0),
+    violations: Number(item.violations || 0),
+    students: Number(item.students || 0),
+  }));
+
+  const batchComparative = (analytics.batchComparative || []).map((item) => ({
+    batch: item.batchName || item.batch || "-",
+    avgScore: Number(item.avgScore || 0),
+    passRate: Number(item.passRate || 0),
+    participationRate: Number(item.participationRate || 0),
+    students: Number(item.students || 0),
+  }));
+
+  const distribution = useMemo(() => {
+    const base = ["0-20", "21-40", "41-60", "61-80", "81-100"].map((range) => ({ range, count: 0 }));
+    const map = new Map(base.map((item) => [item.range, item]));
+    (analytics.distribution || []).forEach((item) => {
+      if (!map.has(item.range)) return;
+      map.get(item.range).count = Number(item.count || 0);
+    });
+    return Array.from(map.values());
+  }, [analytics.distribution]);
+
+  const rankedRows = (analytics.tableRows || []).map((row, index) => ({
+    rank: Number(row.rank || index + 1),
+    name: row.name || "-",
+    rollNo: row.rollNo || row.studentId || "-",
+    studentId: row.studentId,
+    department: row.department || row.departmentName || "-",
+    batch: row.batch || row.batchName || "-",
+    avgScore: Number(row.avgScore || 0),
+    testsTaken: Number(row.testsTaken || 0),
+    violations: Number(row.violations || 0),
+    violationEvents: Array.isArray(row.violationEvents)
+      ? row.violationEvents.map((event) => ({
+          id: event.id,
+          type: event.type,
+          createdAt: event.createdAt,
+          metadata: event.metadata || null,
+          testName: event.testName || "Test",
+          submissionId: event.submissionId || null,
+        }))
+      : [],
+  }));
+
+  const attemptRows = (analytics.attemptHistory || []).map((item) => ({
+    id: item.id,
+    test: item.testName || item.testTitle || "-",
+    score: Number(item.score || 0),
+    percentile: item.percentile != null ? Number(item.percentile) : null,
+    timeTaken: Number(item.timeTaken || 0),
+    date: item.date,
+    status: item.status || "-",
+  }));
+
+  const selectedStudent = analytics.selectedStudent;
+  const totalStudents = Math.max(1, rankedRows.length);
+  const percentile = selectedStudent?.rank ? ((totalStudents - Number(selectedStudent.rank) + 1) / totalStudents) * 100 : 0;
+
+  const studentStats = {
+    avg: Number(analytics?.metrics?.avgScore || 0),
+    percentile,
+    rank: selectedStudent?.rank || null,
+    violations: Number(analytics?.metrics?.violations || 0),
+    totalSubmissions: attemptRows.length,
+  };
+
+  const sortedDepartmentRows = sortRows(rankedRows, sortState);
+  const sortedBatchRows = sortRows(rankedRows, sortState);
+  const sortedAttemptRows = sortRows(attemptRows, sortState);
+
+  const studentMatches = useMemo(() => {
+    const term = studentSearch.trim().toLowerCase();
+    if (term.length < 2) return [];
+    return studentsDirectory
+      .filter((student) => {
+        const hay = `${student.fullName || ""} ${student.studentId || ""} ${student.department?.name || ""}`.toLowerCase();
+        return hay.includes(term);
+      })
+      .slice(0, 8);
+  }, [studentSearch, studentsDirectory]);
 
   useEffect(() => {
-    const next = new URLSearchParams();
-    next.set("mode", mode);
-    next.set("test", testId);
-    next.set("sort_key", sortState.key);
-    next.set("sort_dir", sortState.direction);
-    if (departmentId) next.set("department_id", departmentId);
-    if (batchId) next.set("batch_id", batchId);
-    if (studentId) next.set("student_id", studentId);
-    setSearchParams(next, { replace: true });
-  }, [mode, testId, departmentId, batchId, studentId, sortState.key, sortState.direction, setSearchParams]);
+    setSortState(MODE_DEFAULT_SORT[mode]);
+    if (mode !== "student") {
+      setStudentSearch("");
+    }
+  }, [mode]);
 
   useEffect(() => {
     return () => {
-      if (exportPollRef.current) {
-        clearInterval(exportPollRef.current);
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
       }
     };
   }, []);
 
-  const tests = testsQuery.data?.data || [];
-  const departments = useMemo(() => departmentsQuery.data || [], [departmentsQuery.data]);
-  const batches = useMemo(
-    () => (batchesQuery.data || []).slice().sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""))),
-    [batchesQuery.data]
-  );
-  const students = useMemo(() => studentsQuery.data?.data || [], [studentsQuery.data]);
-
-  useEffect(() => {
-    if (mode === "department" && !departmentId && departments.length > 0) {
-      setDepartmentId(departments[0].id);
-    }
-    if (mode === "batch" && !batchId && batches.length > 0) {
-      setBatchId(batches[0].id);
-    }
-    if (mode === "student" && !studentId && students.length > 0) {
-      setStudentId(students[0].id);
-    }
-  }, [mode, departmentId, batchId, studentId, departments, batches, students]);
-
-  const filteredStudentResults = useMemo(() => {
-    if (deferredStudentSearch.length < 2) return [];
-    return students.slice(0, 10);
-  }, [deferredStudentSearch, students]);
-  const selectedStudent = selectedStudentQuery.data || students.find((item) => item.id === studentId);
-
-  const modeTypeForExport = mode === "department" ? "DEPARTMENT_WISE" : mode === "batch" ? "BATCH_WISE" : "STUDENT_WISE";
-
-  const downloadCsv = (rows, fileName) => {
-    if (!Array.isArray(rows) || rows.length === 0) {
-      toast.error("No data available for export.");
-      return;
+  const startPollingJob = (jobId) => {
+    if (!jobId) return;
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
     }
 
-    const headers = Object.keys(rows[0]);
-    const lines = [headers.join(",")].concat(rows.map((row) => headers.map((key) => JSON.stringify(row[key] ?? "")).join(",")));
-    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = fileName;
-    a.click();
-    URL.revokeObjectURL(url);
+    pollRef.current = setInterval(async () => {
+      try {
+        const status = await adminApi.getReportJobStatus(jobId);
+        setExportState((prev) => ({
+          ...prev,
+          status: status.status === "completed" ? "complete" : status.status === "failed" ? "failed" : "polling",
+          progress: Number(status.progress || 0),
+          downloadUrl: status.download_url || prev.downloadUrl || `/api/admin/reports/${jobId}/download`,
+          expiresAt: status.expires_at || prev.expiresAt,
+          jobId,
+        }));
+
+        if (status.status === "completed" || status.status === "failed") {
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+        }
+      } catch (_error) {
+        setExportState((prev) => ({ ...prev, status: "failed" }));
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    }, 1800);
   };
 
-  const startExport = async () => {
+  const handleExport = async () => {
     if (!canExportReports) return;
-    setExportState({ status: "loading", jobId: null, progress: 0, downloadUrl: null, expiresAt: null });
+
+    const reportType = mode === "batch" ? "BATCH_WISE" : mode === "student" ? "STUDENT_WISE" : "DEPARTMENT_WISE";
+
+    setExportState({ status: "loading", progress: 0, downloadUrl: "", expiresAt: null, jobId: "" });
+
     try {
-      const filters = {};
-      if (testId !== "all") filters.testId = testId;
-      if (mode === "department" && departmentId) filters.departmentId = departmentId;
-      if (mode === "batch" && batchId) filters.batchId = batchId;
-      if (mode === "student" && studentId) filters.studentId = studentId;
+      const result = await adminApi.generateReport({
+        type: reportType,
+        filters: {
+          testId: testId === "all" ? undefined : testId,
+          batchId: mode === "batch" ? batchId || undefined : undefined,
+          studentId: mode === "student" ? studentId || undefined : undefined,
+        },
+      });
 
-      const created = await adminApi.exportReport({ type: modeTypeForExport, filters });
-      const jobId = created.jobId;
-      setBanner({ type: "success", title: "Export queued", message: "Report generation job has started." });
-      setExportState({ status: "polling", jobId, progress: 0, downloadUrl: null, expiresAt: null });
-
-      if (exportPollRef.current) {
-        clearInterval(exportPollRef.current);
+      const jobId = result?.jobId;
+      if (!jobId) {
+        setExportState({ status: "failed", progress: 0, downloadUrl: "", expiresAt: null, jobId: "" });
+        return;
       }
 
-      exportPollRef.current = setInterval(async () => {
-        try {
-          const status = await adminApi.getAdminJobStatus(jobId);
-          if (status.status === "processing" || status.status === "queued") {
-            setExportState((prev) => ({ ...prev, status: "polling", progress: Number(status.progress || 0) }));
-            return;
-          }
-
-          if (status.status === "complete" || status.status === "completed") {
-            clearInterval(exportPollRef.current);
-            exportPollRef.current = null;
-            setBanner({ type: "success", title: "Export ready", message: "Download link is ready. Use the Download button." });
-            setExportState({ status: "complete", jobId, progress: 100, downloadUrl: status.download_url, expiresAt: status.expires_at });
-            return;
-          }
-
-          clearInterval(exportPollRef.current);
-          exportPollRef.current = null;
-          setExportState({ status: "failed", jobId, progress: 0, downloadUrl: null, expiresAt: null });
-          setBanner({ type: "error", title: "Export failed", message: "Job finished with an error. Retry export." });
-          toast.error("Export failed. Try again.");
-        } catch {
-          clearInterval(exportPollRef.current);
-          exportPollRef.current = null;
-          setExportState({ status: "failed", jobId, progress: 0, downloadUrl: null, expiresAt: null });
-          setBanner({ type: "error", title: "Polling failed", message: "Could not track export job status." });
-          toast.error("Export status polling failed.");
-        }
-      }, 3000);
-    } catch (error) {
-      setExportState({ status: "failed", jobId: null, progress: 0, downloadUrl: null, expiresAt: null });
-      setBanner({ type: "error", title: "Export not started", message: error?.message || "Unable to start export job." });
-      toast.error(error?.message || "Unable to start export job.");
+      setExportState({ status: "polling", progress: 5, downloadUrl: `/api/admin/reports/${jobId}/download`, expiresAt: null, jobId });
+      startPollingJob(jobId);
+    } catch (_error) {
+      setExportState({ status: "failed", progress: 0, downloadUrl: "", expiresAt: null, jobId: "" });
     }
   };
 
-  const onDownload = async () => {
+  const handleDownload = async () => {
     if (!exportState.jobId) return;
-    if (exportState.expiresAt && new Date(exportState.expiresAt).getTime() <= Date.now() + 60_000) {
-      setExportState((prev) => ({ ...prev, status: "loading" }));
-      const refreshed = await adminApi.regenerateReportLink(exportState.jobId);
-      setExportState((prev) => ({ ...prev, status: "complete", downloadUrl: refreshed.resultUrl, expiresAt: refreshed.expiresAt }));
+
+    try {
+      const isExpired = exportState.expiresAt && new Date(exportState.expiresAt).getTime() <= Date.now();
+      if (isExpired) {
+        const refreshed = await adminApi.regenerateReportLink(exportState.jobId);
+        setExportState((prev) => ({
+          ...prev,
+          downloadUrl: refreshed.resultUrl || prev.downloadUrl,
+          expiresAt: refreshed.expiresAt || prev.expiresAt,
+        }));
+      }
+
+      const blob = await adminApi.downloadReport(exportState.jobId);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `admin-report-${exportState.jobId}.pdf`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (_error) {
+      setExportState((prev) => ({ ...prev, status: "failed" }));
     }
-    window.open(`/api${exportState.downloadUrl || `/admin/reports/${exportState.jobId}/download`}`, "_blank", "noopener,noreferrer");
+  };
+
+  const handleModeSwitch = (nextMode) => {
+    updateParams({ mode: nextMode, batch: "", student_id: "" });
+  };
+
+  const handleSort = (key) => {
+    setSortState((prev) => {
+      if (prev.key === key) {
+        return { key, dir: prev.dir === "asc" ? "desc" : "asc" };
+      }
+      return { key, dir: "asc" };
+    });
+  };
+
+  const handleViolationClick = (row) => {
+    setViolationDialog({
+      open: true,
+      studentName: row.name || row.studentName || "Student",
+      events: Array.isArray(row.violationEvents) ? row.violationEvents : [],
+    });
   };
 
   if (!canViewReports) {
     return <PermissionDenied action="view reports" />;
   }
 
-  const data = analyticsQuery.data;
-  const loading = analyticsQuery.isFetching;
-  const noData = !loading && (!data || (mode === "student" ? (data.attemptHistory || []).length === 0 : (data.tableRows || []).length === 0));
-
-  if (loading && !data) {
-    return <ReportsSkeleton />;
-  }
-
   return (
-    <div className="mx-auto w-full max-w-7xl space-y-6 px-4 sm:px-6">
-      {banner.type ? (
-        <Alert variant={banner.type === "error" ? "destructive" : "default"}>
-          <AlertTitle>{banner.title}</AlertTitle>
-          <AlertDescription>{banner.message}</AlertDescription>
-        </Alert>
-      ) : null}
-
-      <section className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{admin?.college?.name || "College"}</p>
-          <h1 className="text-3xl font-semibold tracking-tight text-slate-900">Reports & Analytics</h1>
-          <p className="text-sm text-slate-500">Analyse performance by department, batch, or student.</p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <Select value={testId} onValueChange={setTestId}>
-            <SelectTrigger className="min-w-56"><SelectValue placeholder="All Tests" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Tests</SelectItem>
+    <div className="mx-auto w-full max-w-7xl space-y-6 px-4 py-4 sm:px-6">
+      <section className="rounded-2xl border border-border bg-card p-5">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold text-text-primary sm:text-3xl">Reports & Analytics</h1>
+            <p className="text-sm text-text-secondary">Performance and integrity insights across test scopes.</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="text-xs text-text-secondary">Test</label>
+            <select
+              value={testId}
+              onChange={(event) => updateParams({ test: event.target.value })}
+              className="h-9 rounded-lg border border-border bg-background px-3 text-sm"
+            >
+              <option value="all">All Tests</option>
               {tests.map((test) => (
-                <SelectItem key={test.id} value={test.id}>{test.title}</SelectItem>
+                <option key={test.id} value={test.id}>{test.title}</option>
               ))}
-            </SelectContent>
-          </Select>
-
-          <Button
-            onClick={exportState.status === "complete" ? onDownload : startExport}
-            disabled={!canExportReports || exportState.status === "loading" || exportState.status === "polling"}
-            title={!canExportReports ? "You don't have permission to export reports. Contact your platform administrator." : ""}
-          >
-            {exportState.status === "loading" ? "Generating..." : exportState.status === "polling" ? `Processing ${exportState.progress}%` : exportState.status === "complete" ? "Download" : "Export"}
-          </Button>
-
-          <Button
-            type="button"
-            variant="link"
-            className="h-auto px-0 text-xs"
-            onClick={() => downloadCsv(mode === "batch" ? (analyticsQuery.data?.batchComparative || []) : (analyticsQuery.data?.departmentComparative || []), `${mode}-comparison.csv`)}
-          >
-            Export comparison CSV
-          </Button>
-          <Button
-            type="button"
-            variant="link"
-            className="h-auto px-0 text-xs"
-            onClick={() => downloadCsv(analyticsQuery.data?.scoreTrend || [], `${mode}-trend.csv`)}
-          >
-            Export trend CSV
-          </Button>
+            </select>
+            <ExportButton
+              exportState={exportState}
+              onExport={handleExport}
+              onDownload={handleDownload}
+              disabled={!canExportReports}
+              disabledReason={!canExportReports ? "Contact your administrator to request export access" : ""}
+            />
+          </div>
         </div>
       </section>
 
-      <section className="space-y-3">
-        <div className="flex flex-wrap items-center gap-2">
-          {MODE_OPTIONS.map((item) => (
-            <Button
+      <section className="space-y-3 rounded-2xl border border-border bg-card p-4">
+        <div className="flex flex-wrap gap-2">
+          {ADMIN_MODES.map((item) => (
+            <button
               key={item.key}
-              size="sm"
               type="button"
-              variant={mode === item.key ? "default" : "outline"}
-              onClick={() => {
-                setMode(item.key);
-                if (item.key === "department") setDepartmentId("");
-                if (item.key === "batch") setBatchId("");
-                if (item.key === "student") setStudentId("");
-              }}
+              onClick={() => handleModeSwitch(item.key)}
+              className={`rounded-full px-4 py-2 text-sm font-medium transition-colors ${
+                mode === item.key ? "bg-primary text-primary-foreground" : "border border-border bg-background text-text-primary hover:bg-muted"
+              }`}
             >
               {item.label}
-            </Button>
+            </button>
           ))}
         </div>
 
-        {mode === "department" ? (
-          <div className="flex flex-wrap gap-2">
-            {departments.map((item) => (
-              <Button key={item.id} size="sm" variant={departmentId === item.id ? "default" : "outline"} onClick={() => setDepartmentId(item.id)}>
-                {item.name}
-              </Button>
-            ))}
-          </div>
-        ) : null}
-
-        {mode === "batch" ? (
-          <Select value={batchId || undefined} onValueChange={setBatchId}>
-            <SelectTrigger className="max-w-sm"><SelectValue placeholder="Select batch" /></SelectTrigger>
-            <SelectContent>
-              {batches.map((item) => (
-                <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>
+        <div className="flex flex-wrap gap-3">
+          {mode === "batch" ? (
+            <select
+              value={batchId}
+              onChange={(event) => updateParams({ batch: event.target.value })}
+              className="h-9 min-w-55 rounded-lg border border-border bg-background px-3 text-sm"
+            >
+              <option value="">Select batch</option>
+              {batches.map((batch) => (
+                <option key={batch.id} value={batch.id}>{batch.name}</option>
               ))}
-            </SelectContent>
-          </Select>
-        ) : null}
+            </select>
+          ) : null}
 
-        {mode === "student" ? (
-          <div className="grid gap-3 md:grid-cols-2">
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-3.5 size-4 text-slate-400" />
-              <Input
+          {mode === "student" ? (
+            <div className="relative flex w-full max-w-md flex-col gap-2">
+              <input
                 value={studentSearch}
-                onChange={(event) => {
-                  setStudentSearch(event.target.value);
-                  setStudentDropdownOpen(true);
-                }}
-                className="pl-9"
-                placeholder="Search student by name or roll number"
+                onChange={(event) => setStudentSearch(event.target.value)}
+                placeholder="Search student (name / roll / dept)"
+                className="h-9 rounded-lg border border-border bg-background px-3 text-sm"
               />
-              {studentDropdownOpen && studentSearch.trim().length >= 2 ? (
-                <div className="absolute z-20 mt-1 max-h-60 w-full overflow-y-auto rounded-md border border-slate-200 bg-white shadow-lg">
-                  {filteredStudentResults.length === 0 ? (
-                    <p className="px-3 py-2 text-sm text-slate-500">No results for "{studentSearch}"</p>
-                  ) : filteredStudentResults.map((item) => (
+
+              {studentSearch.trim().length >= 2 && studentMatches.length > 0 ? (
+                <div className="absolute top-10 z-10 max-h-56 w-full overflow-y-auto rounded-xl border border-border bg-card p-1 shadow-lg">
+                  {studentMatches.map((student) => (
                     <button
-                      key={item.id}
+                      key={student.id}
                       type="button"
                       onClick={() => {
-                        setStudentId(item.id);
-                        setStudentSearch(`${item.fullName} (${item.studentId})`);
-                        setStudentDropdownOpen(false);
+                        updateParams({ student_id: student.id });
+                        setStudentSearch(student.fullName || "");
                       }}
-                      className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-slate-50"
+                      className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm hover:bg-muted"
                     >
-                      <span>{item.fullName}</span>
-                      <span className="text-xs text-slate-500">{item.studentId}</span>
+                      <span className="font-medium text-text-primary">{student.fullName}</span>
+                      <span className="text-xs text-text-secondary">{student.studentId} · {student.department?.name || "-"}</span>
                     </button>
                   ))}
                 </div>
               ) : null}
-            </div>
-            <Select value={studentId || undefined} onValueChange={(value) => {
-              setStudentId(value);
-              const matched = students.find((item) => item.id === value);
-              if (matched) setStudentSearch(`${matched.fullName} (${matched.studentId})`);
-            }}>
-              <SelectTrigger><SelectValue placeholder="Select student" /></SelectTrigger>
-              <SelectContent>
-                {students.map((item) => (
-                  <SelectItem key={item.id} value={item.id}>{item.fullName} ({item.studentId})</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        ) : null}
 
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="secondary">{testId === "all" ? "All Tests" : tests.find((test) => test.id === testId)?.title || "Selected Test"}</Badge>
-          <Badge variant="outline">{new Date().getFullYear()}-{new Date().getFullYear() + 1}</Badge>
+              {studentSearch.trim().length < 2 ? (
+                <select
+                  value={studentId}
+                  onChange={(event) => updateParams({ student_id: event.target.value })}
+                  className="h-9 rounded-lg border border-border bg-background px-3 text-sm"
+                >
+                  <option value="">Select student</option>
+                  {studentsDirectory.map((student) => (
+                    <option key={student.id} value={student.id}>{student.fullName} ({student.studentId})</option>
+                  ))}
+                </select>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </section>
 
-      {noData ? (
-        <EmptyState
-          title={mode === "student" ? "No tests attempted yet" : "No data available"}
-          description={mode === "student" ? "This student has not submitted any tests in the selected filter scope." : "No data for this filter combination. Try All Tests to see full report."}
-          actionLabel={testId !== "all" ? "Reset to All Tests" : undefined}
-          onAction={testId !== "all" ? () => setTestId("all") : undefined}
-        />
-      ) : (
+      {analyticsQuery.isLoading ? (
+        <section className="rounded-2xl border border-border bg-card p-4 text-sm text-text-secondary">Loading report data...</section>
+      ) : null}
+
+      {analyticsQuery.isError ? (
+        <section className="rounded-2xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-500">Unable to load report analytics.</section>
+      ) : null}
+
+      {!analyticsQuery.isLoading && !analyticsQuery.isError ? (
         <section className="space-y-4">
-          {mode === "student" ? (
-            <Card className="rounded-2xl border-slate-200">
-              <CardContent className="flex flex-wrap items-center justify-between gap-4 p-4">
-                <div>
-                  <p className="text-lg font-semibold text-slate-900">{data?.selectedStudent?.name || selectedStudent?.fullName || "Student"}</p>
-                  <p className="text-sm text-slate-500">{selectedStudent?.studentId || "-"} • {selectedStudent?.department?.name || "-"} • {selectedStudent?.batch?.name || "-"}</p>
-                </div>
-                <div className="flex flex-wrap gap-4 text-sm">
-                  <div><p className="text-slate-500">Avg Score</p><p className="font-semibold">{Number(data?.metrics?.avgScore || 0).toFixed(2)}</p></div>
-                  <div><p className="text-slate-500">Percentile</p><p className={percentileTone(Number(data?.attemptHistory?.[0]?.percentile || 0))}>{formatPercentile(data?.attemptHistory?.[0]?.percentile)}</p></div>
-                  <div><p className="text-slate-500">College Rank</p><p className="font-semibold">#{data?.selectedStudent?.rank || "-"}</p></div>
-                  <div><p className="text-slate-500">Violations</p><p className={Number(data?.metrics?.violations || 0) > 2 ? "text-red-700" : Number(data?.metrics?.violations || 0) > 0 ? "text-amber-700" : "text-emerald-700"}>{data?.metrics?.violations || 0}</p></div>
-                </div>
-              </CardContent>
-            </Card>
+          {mode !== "student" ? (
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <KpiCard label="Avg Score" value={formatPercent(analytics?.metrics?.avgScore)} sub="Overall score performance" />
+              <KpiCard label="Pass Rate" value={formatPercent(analytics?.metrics?.passRate)} sub="Students above pass threshold" />
+              <KpiCard label="Participation Rate" value={formatPercent(analytics?.metrics?.participationRate)} sub="Submission completion" />
+              <KpiCard
+                label="Violations"
+                value={Number(analytics?.metrics?.violations || 0)}
+                sub="Proctoring flags"
+                flag={Number(analytics?.metrics?.violations || 0) > 10}
+                flagLabel="High violation volume"
+              />
+            </div>
           ) : (
-            <div className="grid gap-3 md:grid-cols-4">
-              <Card className="rounded-2xl border-slate-200"><CardContent className="p-4"><p className="text-xs text-slate-500">Average Score</p><p className={`text-2xl font-semibold ${toScoreTone(Number(data?.metrics?.avgScore || 0))}`}>{Number(data?.metrics?.avgScore || 0).toFixed(2)}</p></CardContent></Card>
-              <Card className="rounded-2xl border-slate-200"><CardContent className="p-4"><p className="text-xs text-slate-500">Pass Rate</p><p className="text-2xl font-semibold">{Number(data?.metrics?.passRate || 0).toFixed(1)}%</p></CardContent></Card>
-              <Card className="rounded-2xl border-slate-200"><CardContent className="p-4"><p className="text-xs text-slate-500">Participation</p><p className="text-2xl font-semibold">{Number(data?.metrics?.participationRate || 0).toFixed(1)}%</p></CardContent></Card>
-              <Card className="rounded-2xl border-slate-200"><CardContent className="p-4"><p className="text-xs text-slate-500">Violations</p><p className={`text-2xl font-semibold ${Number(data?.metrics?.violations || 0) > 10 ? "text-red-700" : ""}`}>{data?.metrics?.violations || 0}</p></CardContent></Card>
+            <StudentIdentityCard student={selectedStudent} stats={studentStats} />
+          )}
+
+          {mode === "department" ? (
+            <>
+              <div className="grid gap-4 lg:grid-cols-[3fr_2fr]">
+                <ChartCard title="Monthly Score Trend" height="h-[220px]">
+                  <AreaTrendChart data={trendData} xKey="month" dataKey="score" name="Avg Score" color="var(--chart-1)" />
+                </ChartCard>
+                <ChartCard
+                  title="Topic-wise Scores"
+                  height={topicData.length < 3 ? "h-[180px]" : "h-[220px]"}
+                  footer={topicData.length < 3 ? "Fallback to horizontal bars because fewer than 3 topics are available." : ""}
+                >
+                  {topicData.length < 3 ? <HorizontalBarChart data={topicData} /> : <TopicRadarChart data={topicData} />}
+                </ChartCard>
+              </div>
+
+              <ChartCard title="Department Comparison" height="h-[200px]">
+                <GroupedBarChart
+                  data={departmentComparative}
+                  xKey="department"
+                  series={[
+                    { key: "avgScore", label: "Avg Score" },
+                    { key: "passRate", label: "Pass Rate" },
+                    { key: "participationRate", label: "Participation" },
+                  ]}
+                />
+              </ChartCard>
+
+              <article className="overflow-x-auto rounded-2xl border border-border bg-card">
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr>
+                      <Th sortKey="rank" sortState={sortState} onSort={handleSort}>Rank</Th>
+                      <Th sortKey="name" sortState={sortState} onSort={handleSort}>Name</Th>
+                      <Th sortKey="rollNo" sortState={sortState} onSort={handleSort}>Roll No</Th>
+                      <Th sortKey="avgScore" sortState={sortState} onSort={handleSort}>Avg Score</Th>
+                      <Th sortKey="testsTaken" sortState={sortState} onSort={handleSort}>Tests Taken</Th>
+                      <Th sortKey="violations" sortState={sortState} onSort={handleSort}>Violations</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sortedDepartmentRows.map((row) => (
+                      <tr key={`${row.studentId}-${row.rank}`} className="border-t border-border/70">
+                        <td className="px-4 py-3">#{row.rank}</td>
+                        <td className="px-4 py-3 font-medium text-text-primary">{row.name}</td>
+                        <td className="px-4 py-3 text-text-secondary">{row.rollNo}</td>
+                        <td className="px-4 py-3"><ScoreBadge score={row.avgScore} /></td>
+                        <td className="px-4 py-3">{row.testsTaken}</td>
+                        <td className="px-4 py-3">
+                          <button
+                            type="button"
+                            onClick={() => handleViolationClick(row)}
+                            className="rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                            title="View violation details"
+                          >
+                            <ViolationBadge count={row.violations} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </article>
+            </>
+          ) : null}
+
+          {mode === "batch" ? (
+            <>
+              <div className="grid gap-4 lg:grid-cols-[3fr_2fr]">
+                <ChartCard title="Monthly Score Trend" height="h-[220px]">
+                  <LineTrendChart data={trendData} xKey="month" dataKey="score" name="Avg Score" color="var(--chart-2)" />
+                </ChartCard>
+                <ChartCard title="Score Distribution" height="h-[220px]">
+                  <ScoreDonutChart data={distribution} total={rankedRows.length} />
+                </ChartCard>
+              </div>
+
+              <ChartCard title="Batch Comparison" height="h-[200px]">
+                <GroupedBarChart
+                  data={batchComparative}
+                  xKey="batch"
+                  series={[
+                    { key: "avgScore", label: "Avg Score" },
+                    { key: "passRate", label: "Pass Rate" },
+                  ]}
+                  highlightCategory={batches.find((item) => item.id === batchId)?.name || ""}
+                />
+              </ChartCard>
+
+              <article className="overflow-x-auto rounded-2xl border border-border bg-card">
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr>
+                      <Th sortKey="name" sortState={sortState} onSort={handleSort}>Student</Th>
+                      <Th sortKey="rollNo" sortState={sortState} onSort={handleSort}>Roll No</Th>
+                      <Th sortKey="department" sortState={sortState} onSort={handleSort}>Dept</Th>
+                      <Th sortKey="avgScore" sortState={sortState} onSort={handleSort}>Avg Score</Th>
+                      <Th sortKey="rank" sortState={sortState} onSort={handleSort}>Rank</Th>
+                      <Th sortKey="testsTaken" sortState={sortState} onSort={handleSort}>Tests</Th>
+                      <Th sortKey="violations" sortState={sortState} onSort={handleSort}>Violations</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sortedBatchRows.map((row) => (
+                      <tr key={`${row.studentId}-${row.rank}`} className="border-t border-border/70">
+                        <td className="px-4 py-3 font-medium text-text-primary">{row.name}</td>
+                        <td className="px-4 py-3 text-text-secondary">{row.rollNo}</td>
+                        <td className="px-4 py-3"><StatusBadge label={row.department} variant="info" /></td>
+                        <td className="px-4 py-3"><ScoreBadge score={row.avgScore} /></td>
+                        <td className="px-4 py-3">#{row.rank}</td>
+                        <td className="px-4 py-3">{row.testsTaken}</td>
+                        <td className="px-4 py-3">
+                          <button
+                            type="button"
+                            onClick={() => handleViolationClick(row)}
+                            className="rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                            title="View violation details"
+                          >
+                            <ViolationBadge count={row.violations} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                    {sortedBatchRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="px-4 py-8">
+                          <EmptyState
+                            title="No students in this batch"
+                            description="Add students to this batch to see report rows."
+                            action={{ label: "Go to Batch Management", onClick: () => navigate("/admin/batches") }}
+                          />
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </article>
+            </>
+          ) : null}
+
+          {mode === "student" ? (
+            <>
+              {!studentId ? (
+                <EmptyState title="Select a student" description="Choose a student from the context selector to render personal analytics." />
+              ) : (
+                <>
+                  <div className="grid gap-4 lg:grid-cols-[3fr_2fr]">
+                    <ChartCard title="Score Progression" height="h-[220px]">
+                      <AreaTrendChart
+                        data={attemptRows.map((item) => ({ month: formatDateLabel(item.date), score: item.score }))}
+                        xKey="month"
+                        dataKey="score"
+                        name="Score"
+                        refValue={analytics?.metrics?.avgScore}
+                        refLabel="Dept Avg"
+                        color="var(--chart-2)"
+                      />
+                    </ChartCard>
+
+                    <ChartCard
+                      title="Topic Strengths"
+                      height={topicData.length < 3 ? "h-[180px]" : "h-[220px]"}
+                      footer={topicData.length < 3 ? "Fallback to horizontal bars because fewer than 3 topics are available." : ""}
+                    >
+                      {topicData.length < 3 ? <HorizontalBarChart data={topicData} /> : <TopicRadarChart data={topicData} />}
+                    </ChartCard>
+                  </div>
+
+                  <ChartCard title="Topic Breakdown" height="h-[180px]">
+                    <HorizontalBarChart data={topicData} />
+                  </ChartCard>
+
+                  <article className="overflow-x-auto rounded-2xl border border-border bg-card">
+                    <table className="min-w-full text-sm">
+                      <thead>
+                        <tr>
+                          <Th sortKey="test" sortState={sortState} onSort={handleSort}>Test</Th>
+                          <Th sortKey="score" sortState={sortState} onSort={handleSort}>Score</Th>
+                          <Th sortKey="percentile" sortState={sortState} onSort={handleSort}>Percentile</Th>
+                          <Th sortKey="timeTaken" sortState={sortState} onSort={handleSort}>Time Taken</Th>
+                          <Th sortKey="date" sortState={sortState} onSort={handleSort}>Date</Th>
+                          <Th sortKey="status" sortState={sortState} onSort={handleSort}>Status</Th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sortedAttemptRows.map((row) => (
+                          <tr key={row.id} className="border-t border-border/70">
+                            <td className="px-4 py-3 font-medium text-text-primary">{row.test}</td>
+                            <td className="px-4 py-3"><ScoreBadge score={row.score} /></td>
+                            <td className="px-4 py-3">{row.percentile != null ? `${row.percentile.toFixed(1)}%` : "-"}</td>
+                            <td className="px-4 py-3">{Math.round(row.timeTaken / 60)} min</td>
+                            <td className="px-4 py-3 text-text-secondary">{formatDateLabel(row.date)}</td>
+                            <td className="px-4 py-3"><StatusBadge label={row.status} variant={getStatusVariant(row.status)} /></td>
+                          </tr>
+                        ))}
+                        {sortedAttemptRows.length === 0 ? (
+                          <tr>
+                            <td colSpan={6} className="px-4 py-8">
+                              <EmptyState title="No tests attempted yet in the selected scope." description="Once this student submits tests, attempts will appear here." />
+                            </td>
+                          </tr>
+                        ) : null}
+                      </tbody>
+                    </table>
+                  </article>
+                </>
+              )}
+            </>
+          ) : null}
+
+          {!analyticsQuery.isLoading && rankedRows.length === 0 && mode !== "student" ? (
+            <EmptyState
+              title={`No data for ${testId === "all" ? "all tests" : "selected test"} in selected ${mode}.`}
+              description="Try selecting All Tests or switching the context."
+              action={{ label: "Reset filters", onClick: () => updateParams({ test: "all", batch: "", student_id: "" }) }}
+            />
+          ) : null}
+        </section>
+      ) : null}
+      <Dialog
+        open={violationDialog.open}
+        onOpenChange={(open) => setViolationDialog((prev) => ({ ...prev, open }))}
+      >
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Violation Details</DialogTitle>
+            <DialogDescription>
+              {violationDialog.studentName} - exam-time violations captured by proctoring.
+            </DialogDescription>
+          </DialogHeader>
+
+          {violationDialog.events.length === 0 ? (
+            <div className="rounded-xl border border-border bg-background p-4 text-sm text-text-secondary">
+              No detailed violation events available for this student in the current report scope.
+            </div>
+          ) : (
+            <div className="max-h-[55vh] space-y-2 overflow-y-auto pr-1">
+              {violationDialog.events.map((event, index) => (
+                <div key={event.id || `${event.submissionId || "submission"}-${index}`} className="rounded-xl border border-border bg-background p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-sm font-semibold capitalize text-text-primary">{formatViolationType(event.type)}</p>
+                    <p className="text-xs text-text-secondary">{formatDateLabel(event.createdAt)}</p>
+                  </div>
+                  <p className="mt-1 text-xs text-text-secondary">Test: {event.testName || "-"}</p>
+                  {event.metadata ? (
+                    <pre className="mt-2 overflow-x-auto rounded-lg border border-border/70 bg-card p-2 text-[11px] text-text-secondary">{JSON.stringify(event.metadata, null, 2)}</pre>
+                  ) : null}
+                </div>
+              ))}
             </div>
           )}
 
-          {(data?.anomalyAlerts || []).length > 0 ? (
-            <Card className="rounded-2xl border-red-200 bg-red-50/40">
-              <CardHeader>
-                <CardTitle className="text-red-900">Anomaly Alerts</CardTitle>
-                <CardDescription>Potentially suspicious attempts based on score/violation/time patterns.</CardDescription>
-              </CardHeader>
-              <CardContent className="grid gap-2 md:grid-cols-2">
-                {(data?.anomalyAlerts || []).map((alert) => (
-                  <div key={alert.id} className="rounded-lg border border-red-200 bg-white px-3 py-2">
-                    <p className="text-sm font-semibold text-red-900">{alert.label}</p>
-                    <p className="text-xs text-slate-600">{alert.message}</p>
-                    <p className="mt-1 text-xs text-slate-500">Student: {alert.studentName || "-"} • Test: {alert.testName || "-"}</p>
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
-          ) : null}
-
-          <div className="grid gap-4 lg:grid-cols-5">
-            <Card className="rounded-2xl border-slate-200 lg:col-span-3">
-              <CardHeader><CardTitle>{mode === "batch" ? "Score Trend" : mode === "student" ? "Score Progression" : "Score Trend"}</CardTitle></CardHeader>
-              <CardContent>
-                <ResponsiveContainer width="100%" height={220}>
-                  {mode === "batch" ? (
-                    <LineChart data={data?.scoreTrend || []}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                      <XAxis dataKey="month" axisLine={false} tickLine={false} />
-                      <YAxis domain={[0, 100]} axisLine={false} tickLine={false} />
-                      <Tooltip content={<CustomTooltip />} />
-                      <Legend wrapperStyle={{ fontSize: 11 }} iconType="circle" />
-                      <Line type="monotone" dataKey="score" name="Score" stroke="var(--chart-1)" dot={{ r: 5 }} isAnimationActive={false} connectNulls />
-                    </LineChart>
-                  ) : (
-                    <AreaChart data={data?.scoreTrend || []}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                      <XAxis dataKey="month" axisLine={false} tickLine={false} />
-                      <YAxis domain={[0, 100]} axisLine={false} tickLine={false} />
-                      <Tooltip content={<CustomTooltip />} />
-                      <Legend wrapperStyle={{ fontSize: 11 }} iconType="circle" />
-                      {mode === "student" ? <ReferenceLine y={Number(data?.metrics?.avgScore || 0)} stroke="var(--muted-foreground)" strokeDasharray="4 4" /> : null}
-                      <Area type="monotone" dataKey="score" name="Score" stroke="var(--chart-1)" fill="var(--chart-1)" fillOpacity={0.2} isAnimationActive={false} connectNulls dot={{ r: (data?.scoreTrend || []).length === 1 ? 5 : 0 }} />
-                    </AreaChart>
-                  )}
-                </ResponsiveContainer>
-                {(data?.scoreTrend || []).some((row) => row.score == null) ? <p className="mt-2 text-xs text-slate-500">Gaps indicate months with no scheduled tests.</p> : null}
-                {mode === "student" && (data?.scoreTrend || []).length === 1 ? <p className="mt-2 text-xs text-slate-500">Only 1 test taken - trend requires 2+ data points.</p> : null}
-              </CardContent>
-            </Card>
-
-            <Card className="rounded-2xl border-slate-200 lg:col-span-2">
-              <CardHeader><CardTitle>{mode === "batch" ? "Score Distribution" : "Topic Performance"}</CardTitle></CardHeader>
-              <CardContent>
-                <ResponsiveContainer width="100%" height={220}>
-                  {mode === "batch" ? (
-                    <PieChart>
-                      <Tooltip content={<CustomTooltip />} />
-                      <Legend wrapperStyle={{ fontSize: 11 }} iconType="circle" />
-                      <Pie
-                        data={data?.distribution || []}
-                        dataKey="count"
-                        nameKey="range"
-                        innerRadius={55}
-                        outerRadius={85}
-                        isAnimationActive={false}
-                        label
-                      >
-                        {(data?.distribution || []).map((entry, index) => <Cell key={entry.range} fill={CHART_COLORS[index % CHART_COLORS.length]} />)}
-                      </Pie>
-                    </PieChart>
-                  ) : ((data?.topicPerformance || []).length >= 3 ? (
-                    <RadarChart data={data?.topicPerformance || []}>
-                      <PolarGrid />
-                      <PolarAngleAxis dataKey="topic" />
-                      <Tooltip content={<CustomTooltip />} />
-                      <Legend wrapperStyle={{ fontSize: 11 }} iconType="circle" />
-                      <Radar name="Score" dataKey="score" stroke="var(--chart-2)" fill="var(--chart-2)" fillOpacity={0.35} isAnimationActive={false} />
-                    </RadarChart>
-                  ) : (
-                    <BarChart data={data?.topicPerformance || []} layout="vertical">
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                      <XAxis type="number" domain={[0, 100]} axisLine={false} tickLine={false} />
-                      <YAxis dataKey="topic" type="category" axisLine={false} tickLine={false} width={80} />
-                      <Tooltip content={<CustomTooltip />} />
-                      <Bar dataKey="score" name="Score" isAnimationActive={false}>
-                        {(data?.topicPerformance || []).map((entry) => (
-                          <Cell key={entry.topic} fill={entry.score >= 75 ? "var(--chart-2)" : entry.score >= 50 ? "var(--chart-4)" : "var(--chart-5)"} />
-                        ))}
-                      </Bar>
-                    </BarChart>
-                  ))}
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
-          </div>
-
-          <Card className="rounded-2xl border-slate-200">
-            <CardHeader><CardTitle>{mode === "batch" ? "Batch Comparative" : "Department Comparative"}</CardTitle></CardHeader>
-            <CardContent>
-              <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={mode === "batch" ? (data?.batchComparative || []) : (data?.departmentComparative || [])}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                  <XAxis dataKey={mode === "batch" ? "batchName" : "departmentName"} axisLine={false} tickLine={false} />
-                  <YAxis domain={[0, 100]} axisLine={false} tickLine={false} />
-                  <Tooltip content={<CustomTooltip />} />
-                  <Legend wrapperStyle={{ fontSize: 11 }} iconType="circle" />
-                  <Bar dataKey="avgScore" name="Avg Score" fill="var(--chart-1)" isAnimationActive={false} />
-                  <Bar dataKey="passRate" name="Pass Rate" fill="var(--chart-2)" isAnimationActive={false} />
-                  {mode === "department" ? <Bar dataKey="participationRate" name="Participation" fill="var(--chart-3)" isAnimationActive={false} /> : null}
-                </BarChart>
-              </ResponsiveContainer>
-            </CardContent>
-          </Card>
-
-          <DataTable mode={mode} rows={data?.tableRows || []} attemptRows={data?.attemptHistory || []} sortState={sortState} onSortChange={setSortState} />
-        </section>
-      )}
+          <DialogFooter showCloseButton />
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { useNavigate, useParams } from "react-router-dom";
-import { AlertTriangle, Clock3, ShieldAlert } from "lucide-react";
+import { AlertTriangle, Clock3 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -53,8 +53,10 @@ export default function TestEnvironmentPage() {
   const navigate = useNavigate();
   const { attemptId, testId } = useParams();
   const [submitWarningOpen, setSubmitWarningOpen] = useState(false);
+  const [proctoringPaused, setProctoringPaused] = useState(false);
 
   const submitLockRef = useRef(false);
+  const retryDelayRef = useRef(1500);
 
   const {
     attempt_id,
@@ -71,6 +73,7 @@ export default function TestEnvironmentPage() {
     submit_status,
     start_status,
     load_status,
+    last_error,
   } = useSelector((state) => state.test);
 
   const questionId = question_order[current_question_index];
@@ -99,6 +102,23 @@ export default function TestEnvironmentPage() {
     };
   }, [dispatch]);
 
+  useEffect(() => {
+    if (!attempt_id || submit_status === "submitted") {
+      return undefined;
+    }
+
+    const onBeforeUnload = (event) => {
+      event.preventDefault();
+      event.returnValue = "";
+      return "";
+    };
+
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", onBeforeUnload);
+    };
+  }, [attempt_id, submit_status]);
+
   const { flushPendingSaves } = useAttemptAutosave();
 
   const trySubmit = useCallback(async (reason) => {
@@ -106,6 +126,7 @@ export default function TestEnvironmentPage() {
       return;
     }
 
+    setProctoringPaused(true);
     submitLockRef.current = true;
 
     const payload = {
@@ -125,7 +146,8 @@ export default function TestEnvironmentPage() {
 
     try {
       await flushPendingSaves();
-      await dispatch(submitAttempt({ attempt_id, test_id, reason })).unwrap();
+      const submissionResponse = await dispatch(submitAttempt({ attempt_id, test_id, reason })).unwrap();
+      retryDelayRef.current = 1500;
 
       dispatch(setPendingSubmit(null));
 
@@ -137,9 +159,21 @@ export default function TestEnvironmentPage() {
       }
 
       await exitFullscreenIfActive();
-      navigate(`/results/${attempt_id}`, { replace: true });
+      navigate(`/tests/ongoing`, {
+        replace: true,
+        state: {
+          submission: submissionResponse?.submission || submissionResponse || null,
+          summary: submissionResponse?.summary || null,
+          reason,
+        },
+      });
       return;
-    } catch {
+    } catch (error) {
+      const retryAfterSeconds = Number(error?.retryAfterSeconds || 0);
+      retryDelayRef.current = retryAfterSeconds > 0
+        ? retryAfterSeconds * 1000
+        : Math.min(15_000, retryDelayRef.current + 1500);
+      setProctoringPaused(false);
       toast.error("Submit failed. Auto-retry is active.", {
         dismissible: false,
         duration: 3000,
@@ -173,7 +207,7 @@ export default function TestEnvironmentPage() {
     };
 
     if (attempt_id && navigator.onLine) {
-      timer = window.setTimeout(retryPending, 600);
+      timer = window.setTimeout(retryPending, retryDelayRef.current);
     }
 
     const onlineHandler = () => {
@@ -206,7 +240,7 @@ export default function TestEnvironmentPage() {
     },
     onAlreadySubmitted: () => {
       exitFullscreenIfActive().finally(() => {
-        navigate(`/results/${attempt_id}`, { replace: true });
+        navigate(`/submission/${attempt_id}`, { replace: true });
       });
     },
   });
@@ -215,8 +249,15 @@ export default function TestEnvironmentPage() {
     attemptId: attempt_id,
     testId: test_id,
     enabled: Boolean(proctoring_config?.enabled),
+    paused: proctoringPaused || submit_status === "submitting" || submit_status === "submitted",
     threshold: Number(proctoring_config?.threshold || 3),
     fullscreenRequired: Boolean(proctoring_config?.fullscreen_required),
+    tabSwitchMode: String(proctoring_config?.tab_switch || "monitored"),
+    copyPasteMode: String(proctoring_config?.copy_paste || "monitored"),
+    windowBlurEnabled: Boolean(proctoring_config?.window_blur),
+    screenshotDetectionEnabled: Boolean(proctoring_config?.screenshot_detection),
+    rightClickDisabled: Boolean(proctoring_config?.right_click_disabled),
+    devtoolsDetectionEnabled: Boolean(proctoring_config?.devtools_detection),
     onThresholdExceeded: () => {
       trySubmit("violation_threshold_exceeded");
     },
@@ -262,9 +303,18 @@ export default function TestEnvironmentPage() {
     dispatch(setCurrentQuestionIndex(Math.min(question_order.length - 1, current_question_index + 1)));
   };
 
-  const resolvedLoadingState = start_status === "loading" || load_status === "loading" || !currentQuestion;
+  const hasLoadFailure = start_status === "failed" || load_status === "failed";
+  const hasQuestionPayload = Boolean(currentQuestion);
+  const awaitingInitialPayload =
+    (start_status === "idle" && load_status === "idle" && !hasQuestionPayload) ||
+    start_status === "loading" ||
+    load_status === "loading";
+  const hasMissingQuestionPayload =
+    !hasLoadFailure &&
+    !hasQuestionPayload &&
+    (start_status === "ready" || load_status === "ready");
 
-  const remainingColorClass = remainingSeconds <= 10 ? "text-red-700 bg-red-100" : "text-blue-700 bg-blue-100";
+  const remainingColorClass = remainingSeconds <= 10 ? "text-danger bg-danger/15" : "text-primary bg-primary/15";
 
   const title = useMemo(() => {
     if (start_status === "failed" || load_status === "failed") {
@@ -274,17 +324,51 @@ export default function TestEnvironmentPage() {
     return `Question ${current_question_index + 1} of ${question_order.length}`;
   }, [current_question_index, load_status, question_order.length, start_status]);
 
-  if (resolvedLoadingState) {
-    return <div className="grid min-h-screen place-items-center text-slate-600">Loading secure test environment...</div>;
+  if (awaitingInitialPayload) {
+    return <div className="grid min-h-screen place-items-center text-text-secondary">Loading secure test environment...</div>;
+  }
+
+  if (hasLoadFailure) {
+    return (
+      <section className="grid min-h-screen place-items-center bg-muted p-4">
+        <div className="w-full max-w-xl rounded-2xl border border-border bg-card p-6 shadow-sm">
+          <h2 className="text-xl font-semibold text-text-primary">Unable to Load Test Environment</h2>
+          <p className="mt-2 text-sm text-text-secondary">
+            {last_error || "We could not initialize your attempt. Please resume your active test session."}
+          </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Button type="button" onClick={() => navigate("/resume", { replace: true })}>Resume Active Attempt</Button>
+            <Button type="button" variant="outline" onClick={() => navigate("/tests/ongoing", { replace: true })}>Back to Ongoing Tests</Button>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  if (hasMissingQuestionPayload) {
+    return (
+      <section className="grid min-h-screen place-items-center bg-muted p-4">
+        <div className="w-full max-w-xl rounded-2xl border border-border bg-card p-6 shadow-sm">
+          <h2 className="text-xl font-semibold text-text-primary">Session Found But Questions Missing</h2>
+          <p className="mt-2 text-sm text-text-secondary">
+            We found your session, but question data did not load correctly. Please resume again.
+          </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Button type="button" onClick={() => navigate("/resume", { replace: true })}>Resume Active Attempt</Button>
+            <Button type="button" variant="outline" onClick={() => navigate("/tests/ongoing", { replace: true })}>Back to Ongoing Tests</Button>
+          </div>
+        </div>
+      </section>
+    );
   }
 
   return (
-    <section className="grid min-h-screen bg-slate-100 lg:grid-cols-[1fr_340px]">
+    <section className="grid min-h-screen bg-muted lg:grid-cols-[1fr_340px]">
       <div className="p-4 sm:p-6">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-card px-4 py-3 shadow-sm">
           <div>
-            <p className="text-sm font-semibold text-slate-700">{title}</p>
-            <p className="text-xs text-slate-500">Attempt: {attempt_id}</p>
+            <p className="text-sm font-semibold text-text-secondary">{title}</p>
+            <p className="text-xs text-text-secondary">Attempt: {attempt_id}</p>
           </div>
 
           <div className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-lg font-bold ${remainingColorClass}`}>
@@ -294,14 +378,14 @@ export default function TestEnvironmentPage() {
         </div>
 
         {save_status === "error" ? (
-          <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800">
+          <div className="mb-4 rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm font-medium text-warning">
             Saving locally. Changes will sync automatically when connection recovers.
           </div>
         ) : null}
 
-        <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+        <article className="rounded-2xl border border-border bg-card p-5 shadow-sm sm:p-6">
           <div className="mb-4 flex flex-wrap items-start justify-between gap-2">
-            <h2 className="text-2xl font-semibold leading-tight text-slate-900">{currentQuestion?.prompt}</h2>
+            <h2 className="text-2xl font-semibold leading-tight text-text-primary">{currentQuestion?.prompt}</h2>
             <Button
               type="button"
               variant="outline"
@@ -326,7 +410,7 @@ export default function TestEnvironmentPage() {
             <Button type="button" onClick={goNext} disabled={current_question_index >= question_order.length - 1}>Next</Button>
             <Button
               type="button"
-              className="ml-auto bg-blue-700 hover:bg-blue-800"
+              className="ml-auto bg-primary-dark hover:bg-primary-dark"
               disabled={submit_status === "submitting" || submit_status === "submitted"}
               onClick={() => setSubmitWarningOpen(true)}
             >
@@ -334,8 +418,10 @@ export default function TestEnvironmentPage() {
             </Button>
           </div>
 
-          <div className="mt-4 rounded-xl bg-slate-50 p-3 text-xs text-slate-600">
-            Violations: {violations.total}/{Number(proctoring_config?.threshold || 3)}
+          <div className="mt-4 rounded-xl bg-background p-3 text-xs text-text-secondary">
+            {proctoring_config?.enabled
+              ? `Violations: ${violations.total}/${Number(proctoring_config?.threshold || 3)}`
+              : "Proctoring is disabled for this test."}
           </div>
         </article>
       </div>
@@ -351,24 +437,26 @@ export default function TestEnvironmentPage() {
         disableNext={current_question_index >= question_order.length - 1}
       />
 
-      <Dialog open={fullscreenBlocked}>
+      <Dialog open={Boolean(proctoring_config?.enabled && proctoring_config?.fullscreen_required && fullscreenBlocked)}>
         <DialogContent showCloseButton={false} className="max-w-md">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2"><ShieldAlert className="size-5 text-red-600" />Fullscreen Required</DialogTitle>
+            <DialogTitle className="flex items-center gap-2"><AlertTriangle className="size-5 text-warning" />Fullscreen Required</DialogTitle>
             <DialogDescription>
-              Fullscreen mode is mandatory for this test. Re-enter fullscreen to continue.
+              This test requires fullscreen mode. Re-enter fullscreen to continue without triggering violations.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button type="button" onClick={reEnterFullscreen}>Re-enter Fullscreen</Button>
+            <Button type="button" onClick={reEnterFullscreen}>
+              Re-enter Fullscreen
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      <Dialog open={violations.total >= Number(proctoring_config?.threshold || 3)}>
+      <Dialog open={Boolean(proctoring_config?.enabled && violations.total >= Number(proctoring_config?.threshold || 3))}>
         <DialogContent showCloseButton={false} className="max-w-md">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2"><AlertTriangle className="size-5 text-red-600" />Violation Threshold Reached</DialogTitle>
+            <DialogTitle className="flex items-center gap-2"><AlertTriangle className="size-5 text-danger" />Violation Threshold Reached</DialogTitle>
             <DialogDescription>
               Your test is being auto-submitted due to repeated proctoring violations.
             </DialogDescription>
@@ -379,7 +467,7 @@ export default function TestEnvironmentPage() {
       <Dialog open={submitWarningOpen} onOpenChange={setSubmitWarningOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2"><AlertTriangle className="size-5 text-amber-600" />Submit Test?</DialogTitle>
+            <DialogTitle className="flex items-center gap-2"><AlertTriangle className="size-5 text-warning" />Submit Test?</DialogTitle>
             <DialogDescription>
               Once you submit, you cannot edit your answers. Are you sure you want to submit now?
             </DialogDescription>

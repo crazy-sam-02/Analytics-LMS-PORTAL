@@ -71,6 +71,11 @@ const formatRemaining = (ms) => {
   return `${minutes}m ${seconds}s`;
 };
 
+const getAssignedDepartments = (test) => {
+  const ids = Array.isArray(test?.assignedTo) ? test.assignedTo : [];
+  return [...new Set(ids.filter(Boolean).map((id) => String(id)))];
+};
+
 export default function OngoingTestsPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -126,16 +131,21 @@ export default function OngoingTestsPage() {
       return [];
     }
 
-    return rows.map((row) => ({
-      id: row?.submissionId || row?.submission_id || row?.id,
-      testId: row?.testId || row?.test_id || null,
-      title: row?.testName || row?.test_name || row?.title || "Untitled Test",
-      subject: row?.subject || "-",
-      score: Number(row?.score || 0),
-      accuracy: Number(row?.accuracy || 0),
-      submittedAt: row?.submittedAt || row?.submitted_at || null,
-      endDate: row?.endDate || row?.end_date || null,
-    }));
+    return rows.map((row) => {
+      const submissionId = row?.submissionId || row?.submission_id || null;
+      const testId = row?.testId || row?.test_id || null;
+
+      return {
+        submissionId,
+        testId,
+        title: row?.testName || row?.test_name || row?.title || "Untitled Test",
+        subject: row?.subject || "-",
+        score: Number(row?.score || 0),
+        accuracy: Number(row?.accuracy || 0),
+        submittedAt: row?.submittedAt || row?.submitted_at || null,
+        endDate: row?.endDate || row?.end_date || null,
+      };
+    });
   }, [reportsQuery.data]);
 
   useEffect(() => {
@@ -150,59 +160,66 @@ export default function OngoingTestsPage() {
       }
 
       backgroundSubmittedRef.current.add(cacheKey);
-      submitMutation.mutate({ testId: attempt.id, submissionId: attempt.submissionId });
+      submitMutation.mutate({ attemptId: attempt.submissionId, testId: attempt.id, reason: "time_expired" });
     });
   }, [attempts, submitMutation]);
 
   if (!isFetched && isLoading) {
-    return <div className="py-8 text-center text-sm text-slate-500">Loading ongoing tests...</div>;
+    return <div className="py-8 text-center text-sm text-text-secondary">Loading ongoing tests...</div>;
   }
 
   return (
     <section className="space-y-5">
-      <div className="flex items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold text-slate-900">Ongoing Tests</h1>
-        <Badge variant="secondary" className="bg-blue-50 text-blue-700">{attempts.length} Active</Badge>
+      <div className="rounded-2xl border border-primary/20 bg-linear-to-r from-primary/10 via-background to-background px-4 py-4 sm:px-5">
+        <div className="flex items-center justify-between gap-3">
+          <h1 className="text-2xl font-semibold text-text-primary">Ongoing Tests</h1>
+          <Badge variant="secondary" className="bg-primary/15 text-primary">{attempts.length} Active</Badge>
+        </div>
       </div>
 
       {attempts.length === 0 ? (
-        <Card className="rounded-xl border border-dashed border-slate-300 bg-white p-10 text-center">
-          <p className="text-lg font-semibold text-slate-800">No active tests right now</p>
-          <p className="mt-2 text-sm text-slate-500">You are all clear. Come back when a test is active.</p>
+        <Card className="rounded-xl border border-dashed border-border bg-card p-10 text-center">
+          <p className="text-lg font-semibold text-text-primary">No active tests right now</p>
+          <p className="mt-2 text-sm text-text-secondary">You are all clear. Come back when a test is active.</p>
         </Card>
       ) : (
         <div className="space-y-4">
           {attempts.map((test) => (
-            <Card key={test.id} className="rounded-xl border border-slate-200 bg-white p-5">
+            <Card key={test.id} className="rounded-xl border border-border bg-card p-5">
               <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                 <div className="min-w-0">
-                  <p className="truncate text-lg font-semibold text-slate-900">{test.title || test.name || "Untitled Test"}</p>
+                  <p className="truncate text-lg font-semibold text-text-primary">{test.title || test.name || "Untitled Test"}</p>
                   <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <span className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-600">
+                    <span className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-xs text-text-secondary">
                       <Clock3 className="size-3.5" />
                       {formatRemaining(test.remainingMs)}
                     </span>
                     {test.autoSubmitted ? (
-                      <Badge variant="secondary" className="bg-amber-100 text-amber-800">Auto-submitted</Badge>
+                      <Badge variant="secondary" className="bg-warning/15 text-warning">Auto-submitted</Badge>
                     ) : null}
                     {test.isCompleted ? (
-                      <Badge variant="secondary" className="bg-emerald-100 text-emerald-800">Completed</Badge>
+                      <Badge variant="secondary" className="bg-success/15 text-success">Completed</Badge>
                     ) : null}
                     {test.canTryAgain ? (
-                      <Badge variant="secondary" className="bg-blue-100 text-blue-800">
+                      <Badge variant="secondary" className="bg-primary/15 text-primary-dark">
                         Try Again ({test.attemptsUsed}/{test.attemptsAllowed})
+                      </Badge>
+                    ) : null}
+                    {getAssignedDepartments(test).length > 0 ? (
+                      <Badge variant="secondary" className="bg-primary/10 text-primary-dark">
+                        Dept Scope ({getAssignedDepartments(test).length})
                       </Badge>
                     ) : null}
                   </div>
                 </div>
 
                 {!test.autoSubmitted && !test.isCompleted ? (
-                  <Button className="h-10 rounded-lg bg-blue-700 hover:bg-blue-800" onClick={() => setContinueTarget(test)} disabled={startMutation.isPending}>
+                  <Button className="h-10 rounded-lg bg-primary text-primary-foreground hover:bg-primary-dark" onClick={() => setContinueTarget(test)} disabled={startMutation.isPending}>
                     <PlayCircle className="mr-2 size-4" />
                     {test.canTryAgain ? "Attend" : "Continue"}
                   </Button>
                 ) : (
-                  <Badge variant="secondary" className="bg-slate-100 text-slate-700">
+                  <Badge variant="secondary" className="bg-muted text-text-secondary">
                     <CheckCircle2 className="mr-1 size-3.5" />
                     {test.isCompleted ? "Completed" : "Closed"}
                   </Badge>
@@ -210,11 +227,11 @@ export default function OngoingTestsPage() {
               </div>
 
               <div className="mt-4">
-                <div className="mb-1.5 flex items-center justify-between text-xs text-slate-500">
+                <div className="mb-1.5 flex items-center justify-between text-xs text-text-secondary">
                   <span>{test.answered}/{test.totalQuestions || "-"} answered</span>
                   <span>{test.progress}%</span>
                 </div>
-                <Progress value={test.progress} className="h-2 bg-slate-200 **:data-[slot=progress-indicator]:bg-blue-700" />
+                <Progress value={test.progress} className="h-2 bg-muted **:data-[slot=progress-indicator]:bg-primary-dark" />
               </div>
             </Card>
           ))}
@@ -222,44 +239,45 @@ export default function OngoingTestsPage() {
       )}
 
       <div className="flex items-center justify-between gap-3 pt-2">
-        <h2 className="text-xl font-semibold text-slate-900">Completed Tests</h2>
-        <Badge variant="secondary" className="bg-emerald-50 text-emerald-700">{completedTests.length} Completed</Badge>
+        <h2 className="text-xl font-semibold text-text-primary">Completed Tests</h2>
+        <Badge variant="secondary" className="bg-success/10 text-success">{completedTests.length} Completed</Badge>
       </div>
 
       {reportsQuery.isLoading ? (
-        <Card className="rounded-xl border border-slate-200 bg-white p-6 text-center text-sm text-slate-500">
+        <Card className="rounded-xl border border-border bg-card p-6 text-center text-sm text-text-secondary">
           Loading completed tests...
         </Card>
       ) : null}
 
       {!reportsQuery.isLoading && completedTests.length === 0 ? (
-        <Card className="rounded-xl border border-dashed border-slate-300 bg-white p-10 text-center">
-          <p className="text-lg font-semibold text-slate-800">No completed tests yet</p>
-          <p className="mt-2 text-sm text-slate-500">Once you submit a test, it will appear here with marks and answer review.</p>
+        <Card className="rounded-xl border border-dashed border-border bg-card p-10 text-center">
+          <p className="text-lg font-semibold text-text-primary">No completed tests yet</p>
+          <p className="mt-2 text-sm text-text-secondary">Once you submit a test, it will appear here with marks and answer review.</p>
         </Card>
       ) : null}
 
       {!reportsQuery.isLoading && completedTests.length > 0 ? (
         <div className="space-y-4">
-          {completedTests.map((test) => (
+          {completedTests.map((test, index) => (
             (() => {
               const endTime = test.endDate ? new Date(test.endDate).getTime() : Number.NaN;
               const isClosed = Number.isFinite(endTime) ? now >= endTime : true;
+              const canViewResults = Boolean(test.submissionId) && isClosed;
 
               return (
-            <Card key={test.id} className="rounded-xl border border-slate-200 bg-white p-5">
+            <Card key={test.submissionId || test.testId || `result-${index}`} className="rounded-xl border border-border bg-card p-5">
               <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                 <div className="min-w-0">
-                  <p className="truncate text-lg font-semibold text-slate-900">{test.title}</p>
-                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-600">
-                    <span className="rounded-md bg-slate-100 px-2 py-1">Subject: {test.subject}</span>
-                    <span className="rounded-md bg-slate-100 px-2 py-1">Marks: {test.score}</span>
-                    <span className="rounded-md bg-slate-100 px-2 py-1">Accuracy: {Number.isFinite(test.accuracy) ? `${test.accuracy}%` : "-"}</span>
-                    <span className={`rounded-md px-2 py-1 ${isClosed ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>
+                  <p className="truncate text-lg font-semibold text-text-primary">{test.title}</p>
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-text-secondary">
+                    <span className="rounded-md bg-muted px-2 py-1">Subject: {test.subject}</span>
+                    <span className="rounded-md bg-muted px-2 py-1">Marks: {test.score}</span>
+                    <span className="rounded-md bg-muted px-2 py-1">Accuracy: {Number.isFinite(test.accuracy) ? `${test.accuracy}%` : "-"}</span>
+                    <span className={`rounded-md px-2 py-1 ${isClosed ? "bg-success/15 text-success" : "bg-warning/15 text-warning"}`}>
                       {isClosed ? "Test Closed" : "Test Not Closed"}
                     </span>
                     {test.endDate ? (
-                      <span className="rounded-md bg-slate-100 px-2 py-1">Ends: {new Date(test.endDate).toLocaleString()}</span>
+                      <span className="rounded-md bg-muted px-2 py-1">Ends: {new Date(test.endDate).toLocaleString()}</span>
                     ) : null}
                   </div>
                 </div>
@@ -267,8 +285,8 @@ export default function OngoingTestsPage() {
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={() => navigate(`/results/${test.id}`)}
-                  disabled={!test.id || !isClosed}
+                  onClick={() => navigate(`/results/${test.submissionId}`)}
+                  disabled={!canViewResults}
                 >
                   {isClosed ? "View Answers" : "Available After Test Ends"}
                 </Button>

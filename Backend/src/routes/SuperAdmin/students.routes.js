@@ -14,6 +14,8 @@ const {
 	createStudentGlobal,
 	bulkImportStudentsGlobal,
 	getStudentImportJobGlobal,
+	updateStudentGlobal,
+	deleteStudentGlobal,
 } = require("../../controllers/SuperAdmin/students.controller");
 
 const router = express.Router();
@@ -23,5 +25,7 @@ router.post("/", authenticateSuperAdmin, validate(createStudentGlobalSchema), cr
 router.post("/bulk-import", authenticateSuperAdmin, validate(superStudentBulkImportSchema), bulkImportStudentsGlobal);
 router.get("/import-jobs/:jobId", authenticateSuperAdmin, validate(superStudentBulkImportJobParamSchema), getStudentImportJobGlobal);
 router.patch("/:studentId/status", authenticateSuperAdmin, validate(toggleStudentStatusSchema), toggleStudentStatus);
+router.patch("/:studentId", authenticateSuperAdmin, updateStudentGlobal);
+router.delete("/:studentId", authenticateSuperAdmin, deleteStudentGlobal);
 
 module.exports = router;

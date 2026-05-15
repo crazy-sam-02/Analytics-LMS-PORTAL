@@ -70,20 +70,26 @@ export default function AdminCommandPalette({ open, onOpenChange }) {
       return;
     }
 
+    const controller = new AbortController();
     const handle = setTimeout(async () => {
       try {
         setLoading(true);
         setError("");
-        const response = await adminApi.search(query.trim());
+        const response = await adminApi.search(query.trim(), { signal: controller.signal });
         setResults(Array.isArray(response?.data) ? response.data : []);
       } catch (apiError) {
-        setError(apiError?.message || "Search failed.");
+        if (apiError?.name !== "AbortError") {
+          setError(apiError?.message || "Search failed.");
+        }
       } finally {
         setLoading(false);
       }
     }, 300);
 
-    return () => clearTimeout(handle);
+    return () => {
+      controller.abort();
+      clearTimeout(handle);
+    };
   }, [open, query]);
 
   const recentSearches = useMemo(() => readRecentSearches(), [open]);
@@ -129,7 +135,7 @@ export default function AdminCommandPalette({ open, onOpenChange }) {
               {results.map((item) => (
                 <CommandItem key={`${item.type}-${item.id}`} onSelect={() => navigateToResult(item)}>
                   <span>{item.title}</span>
-                  <span className="ml-auto text-xs text-slate-500">{item.subtitle || item.type}</span>
+                  <span className="ml-auto text-xs text-text-secondary">{item.subtitle || item.type}</span>
                 </CommandItem>
               ))}
             </CommandGroup>

@@ -1,4 +1,4 @@
-import { memo, useMemo } from "react";
+import { memo, useCallback, useMemo } from "react";
 import { Outlet } from "react-router-dom";
 import { useDispatch, useSelector } from "react-redux";
 import { useQuery } from "@tanstack/react-query";
@@ -22,29 +22,43 @@ function AppShell() {
   }, [upcomingPayload]);
 
   const sidebarWidthClass = sidebarCollapsed ? "lg:w-12" : "lg:w-60";
+  const handleMobileSidebarChange = useCallback((open) => {
+    dispatch(setMobileSidebarOpen(open));
+  }, [dispatch]);
+  const handleCloseMobileSidebar = useCallback(() => {
+    dispatch(setMobileSidebarOpen(false));
+  }, [dispatch]);
+  const handleToggleSidebar = useCallback(() => {
+    dispatch(toggleSidebar());
+  }, [dispatch]);
+  const handleOpenMobileSidebar = useCallback(() => {
+    dispatch(setMobileSidebarOpen(true));
+  }, [dispatch]);
 
   return (
-    <div className="min-h-screen bg-[#f2f5fb] lg:flex">
+    <div className="min-h-screen bg-linear-to-b from-background via-background to-primary/5 lg:flex">
       <aside className={`hidden shrink-0 lg:block ${sidebarWidthClass}`}>
         <Sidebar collapsed={sidebarCollapsed} upcomingCount={upcomingCount} />
       </aside>
 
-      <Sheet open={mobileSidebarOpen} onOpenChange={(open) => dispatch(setMobileSidebarOpen(open))}>
-        <SheetContent side="left" className="w-72 sm:w-80 p-0" showCloseButton={false}>
-          <Sidebar
-            mobile
-            collapsed={false}
-            upcomingCount={upcomingCount}
-            onNavigate={() => dispatch(setMobileSidebarOpen(false))}
-          />
-        </SheetContent>
+      <Sheet open={mobileSidebarOpen} onOpenChange={handleMobileSidebarChange}>
+        {mobileSidebarOpen ? (
+          <SheetContent side="left" className="w-72 sm:w-80 p-0" showCloseButton={false}>
+            <Sidebar
+              mobile
+              collapsed={false}
+              upcomingCount={upcomingCount}
+              onNavigate={handleCloseMobileSidebar}
+            />
+          </SheetContent>
+        ) : null}
       </Sheet>
 
       <main className="min-w-0 flex-1">
         <Header
           collapsed={sidebarCollapsed}
-          onToggleSidebar={() => dispatch(toggleSidebar())}
-          onOpenMobileSidebar={() => dispatch(setMobileSidebarOpen(true))}
+          onToggleSidebar={handleToggleSidebar}
+          onOpenMobileSidebar={handleOpenMobileSidebar}
         />
         <div className="p-3 sm:p-6 lg:p-7">
           <Outlet />

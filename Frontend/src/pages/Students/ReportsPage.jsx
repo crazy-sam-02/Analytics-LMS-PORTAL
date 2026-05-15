@@ -1,4 +1,4 @@
-import { Suspense, lazy } from "react";
+import { Suspense, lazy, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Download, FileX } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -58,6 +58,7 @@ const shouldRevealCorrectAnswers = (reviewMode, deadline) => {
 export default function ReportsPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const [testFilterOpen, setTestFilterOpen] = useState(false);
   const filters = parseFiltersFromSearch(searchParams);
   const hasSelectedTest = Boolean(filters.test_id);
   const shouldFetchReports = true;
@@ -210,29 +211,37 @@ export default function ReportsPage() {
   const reportCards = [
     { label: "Tests Taken", value: summary?.tests_taken ?? "--" },
     { label: "Avg Score", value: summary?.avg_score != null ? `${toNum(summary.avg_score)}%` : "--" },
-    { label: "Best Score", value: summary?.best_score != null ? `${toNum(summary.best_score)}%` : "--" },
+    { label: "Best Score", value: summary?.best_score != null ? `${toNum(summary.best_score)} Marks` : "--" },
     { label: "Missed Tests", value: summary?.missed_tests ?? "--" },
   ];
 
   return (
     <section className="space-y-5">
       <Card className="space-y-4 p-5">
-        <div className="grid gap-3 md:grid-cols-2">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="text-base font-semibold text-text-primary">Select the test</div>
           <Select
+            open={testFilterOpen}
+            onOpenChange={setTestFilterOpen}
             value={filters.test_id || ALL_TESTS_VALUE}
-            onValueChange={(value) => updateFilter({ test_id: value === ALL_TESTS_VALUE ? "" : value })}
+            onValueChange={(value) => {
+              updateFilter({ test_id: value === ALL_TESTS_VALUE ? "" : value });
+              setTestFilterOpen(false);
+            }}
           >
             <SelectTrigger className="w-full">
               <SelectValue placeholder="Filter by test" />
             </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ALL_TESTS_VALUE}>All tests</SelectItem>
-              {reportTestOptions.map((item) => (
-                <SelectItem key={item.id} value={item.id}>
-                  {item.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
+            {testFilterOpen ? (
+              <SelectContent>
+                <SelectItem value={ALL_TESTS_VALUE}>All tests</SelectItem>
+                {reportTestOptions.map((item) => (
+                  <SelectItem key={item.id} value={item.id}>
+                    {item.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            ) : null}
           </Select>
         </div>
 
@@ -245,7 +254,7 @@ export default function ReportsPage() {
       </Card>
 
       {shouldFetchReports && reportsQuery.isLoading ? (
-        <div className="grid min-h-[40vh] place-items-center text-slate-500">Loading reports...</div>
+        <div className="grid min-h-[40vh] place-items-center text-text-secondary">Loading reports...</div>
       ) : null}
 
       {shouldFetchReports && reportsQuery.isError ? (
@@ -260,17 +269,17 @@ export default function ReportsPage() {
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
             {reportCards.map((item) => (
               <Card key={item.label} className="p-5">
-                <p className="text-xs font-semibold tracking-wide text-slate-500 uppercase">{item.label}</p>
-                <p className="mt-2 text-2xl font-bold text-slate-900">{item.value}</p>
+                <p className="text-xs font-semibold tracking-wide text-text-secondary uppercase">{item.label}</p>
+                <p className="mt-2 text-2xl font-bold text-text-primary">{item.value}</p>
               </Card>
             ))}
           </div>
 
-          <Suspense fallback={<div className="rounded-xl border border-slate-100 bg-white p-5 text-slate-500">Loading chart...</div>}>
+          <Suspense fallback={<div className="rounded-xl border border-border bg-card p-5 text-text-secondary">Loading chart...</div>}>
             <ReportsLineChart data={lineData} />
           </Suspense>
 
-          <Suspense fallback={<div className="rounded-xl border border-slate-100 bg-white p-5 text-slate-500">Loading chart...</div>}>
+          <Suspense fallback={<div className="rounded-xl border border-border bg-card p-5 text-text-secondary">Loading chart...</div>}>
             {showBarFallback ? <ReportsBarChart data={topicData} /> : <ReportsRadarChart data={topicData} />}
           </Suspense>
         </>
@@ -281,8 +290,8 @@ export default function ReportsPage() {
           <Card className="p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <p className="text-xs font-semibold tracking-wide text-slate-500 uppercase">Selected Test</p>
-                <p className="mt-2 text-lg font-semibold text-slate-900">{selectedTestName}</p>
+                <p className="text-xs font-semibold tracking-wide text-text-secondary uppercase">Selected Test</p>
+                <p className="mt-2 text-lg font-semibold text-text-primary">{selectedTestName}</p>
               </div>
               <Button type="button" variant="outline" disabled={!selectedAttemptId} onClick={() => navigate(`/results/${selectedAttemptId}`)}>
                 View All Answers & Scores
@@ -291,33 +300,33 @@ export default function ReportsPage() {
           </Card>
 
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <Card className="p-5"><p className="text-xs font-semibold tracking-wide text-slate-500 uppercase">Total Marks</p><p className="mt-2 text-2xl font-bold text-slate-900">{byTestSummary.totalMarks ?? "--"}</p></Card>
-            <Card className="p-5"><p className="text-xs font-semibold tracking-wide text-slate-500 uppercase">Obtained Marks</p><p className="mt-2 text-2xl font-bold text-slate-900">{byTestSummary.obtainedMarks ?? "--"}</p></Card>
-            <Card className="p-5"><p className="text-xs font-semibold tracking-wide text-slate-500 uppercase">Percentage</p><p className="mt-2 text-2xl font-bold text-slate-900">{byTestSummary.percentage != null ? `${toNum(byTestSummary.percentage)}%` : "--"}</p></Card>
-            <Card className="p-5"><p className="text-xs font-semibold tracking-wide text-slate-500 uppercase">Percentile</p><p className="mt-2 text-2xl font-bold text-slate-900">{byTestSummary.percentile != null ? `${toNum(byTestSummary.percentile)}%` : "--"}</p></Card>
+            <Card className="p-5"><p className="text-xs font-semibold tracking-wide text-text-secondary uppercase">Total Marks</p><p className="mt-2 text-2xl font-bold text-text-primary">{byTestSummary.totalMarks ?? "--"}</p></Card>
+            <Card className="p-5"><p className="text-xs font-semibold tracking-wide text-text-secondary uppercase">Obtained Marks</p><p className="mt-2 text-2xl font-bold text-text-primary">{byTestSummary.obtainedMarks ?? "--"}</p></Card>
+            <Card className="p-5"><p className="text-xs font-semibold tracking-wide text-text-secondary uppercase">Percentage</p><p className="mt-2 text-2xl font-bold text-text-primary">{byTestSummary.percentage != null ? `${toNum(byTestSummary.percentage)}%` : "--"}</p></Card>
+            <Card className="p-5"><p className="text-xs font-semibold tracking-wide text-text-secondary uppercase">Percentile</p><p className="mt-2 text-2xl font-bold text-text-primary">{byTestSummary.percentile != null ? `${toNum(byTestSummary.percentile)}%` : "--"}</p></Card>
           </div>
 
           <div className="grid gap-4 md:grid-cols-2">
             <Card className="p-5">
-              <p className="text-xs font-semibold tracking-wide text-slate-500 uppercase">Total Time</p>
-              <p className="mt-2 text-xl font-semibold text-slate-900">{byTestSummary.totalTime ?? "--"}</p>
+              <p className="text-xs font-semibold tracking-wide text-text-secondary uppercase">Total Time</p>
+              <p className="mt-2 text-xl font-semibold text-text-primary">{byTestSummary.totalTime ?? "--"}</p>
             </Card>
             <Card className="p-5">
-              <p className="text-xs font-semibold tracking-wide text-slate-500 uppercase">Avg Time / Question</p>
-              <p className="mt-2 text-xl font-semibold text-slate-900">{byTestSummary.avgTimePerQuestion ?? "--"}</p>
+              <p className="text-xs font-semibold tracking-wide text-text-secondary uppercase">Avg Time / Question</p>
+              <p className="mt-2 text-xl font-semibold text-text-primary">{byTestSummary.avgTimePerQuestion ?? "--"}</p>
             </Card>
           </div>
 
           {!canShowCorrectAnswers ? (
-            <Alert className="border-amber-300 bg-amber-50 text-amber-800">
+            <Alert className="border-warning/30 bg-warning/10 text-warning">
               <AlertTitle>Answer key restricted</AlertTitle>
               <AlertDescription>Correct answers are hidden due to this test's review mode.</AlertDescription>
             </Alert>
           ) : null}
 
           <Card className="overflow-hidden">
-            <div className="border-b border-slate-100 px-5 py-4">
-              <h3 className="text-lg font-semibold text-slate-900">Question-level Report</h3>
+            <div className="border-b border-border px-5 py-4">
+              <h3 className="text-lg font-semibold text-text-primary">Question-level Report</h3>
             </div>
 
             {Array.isArray(questionRows) && questionRows.length > 0 ? (
@@ -345,7 +354,7 @@ export default function ReportsPage() {
               </Table>
             ) : (
               <div className="p-6">
-                <Empty className="border border-slate-100">
+                <Empty className="border border-border">
                   <EmptyMedia variant="icon">
                     <FileX className="size-4" />
                   </EmptyMedia>

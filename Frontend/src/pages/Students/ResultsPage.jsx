@@ -100,13 +100,13 @@ export default function ResultsPage() {
   );
 
   if (resultQuery.isLoading) {
-    return <div className="grid min-h-[60vh] place-items-center text-slate-500">Loading result...</div>;
+    return <div className="grid min-h-[60vh] place-items-center text-text-secondary">Loading result...</div>;
   }
 
   if (resultQuery.error?.status === 403) {
     return (
       <section className="space-y-5">
-        <Alert variant="destructive" className="border-red-200 bg-red-50 text-red-700">
+        <Alert variant="destructive" className="border-danger/30 bg-danger/10 text-danger">
           <AlertCircle className="h-4 w-4" />
           <AlertTitle>Access denied</AlertTitle>
           <AlertDescription>You do not have access</AlertDescription>
@@ -128,9 +128,11 @@ export default function ResultsPage() {
   }
 
   return (
-    <section className="space-y-5">
+    <>
+    <header className="flex items-center h-20 font-bold text-4xl max-w-full justify-center bg-primary-dark text-primary-foreground">Results</header>
+    <section className="space-y-5 mt-20">
       {violationSubmitted ? (
-        <Alert className="border-amber-300 bg-amber-50 text-amber-800">
+        <Alert className="border-warning/30 bg-warning/10 text-warning">
           <ShieldAlert className="h-4 w-4" />
           <AlertTitle>Submitted due to proctoring violation</AlertTitle>
           <AlertDescription>Your attempt was auto-submitted after crossing the allowed violation threshold.</AlertDescription>
@@ -139,16 +141,16 @@ export default function ResultsPage() {
 
       <div className="grid gap-4 md:grid-cols-3">
         <Card className="p-5">
-          <p className="text-xs font-semibold tracking-wide text-slate-500 uppercase">Score</p>
-          <p className="mt-2 text-3xl font-bold text-slate-900">{score}</p>
+          <p className="text-xs font-semibold tracking-wide text-text-secondary uppercase">Score</p>
+          <p className="mt-2 text-3xl font-bold text-text-primary">{score}</p>
         </Card>
         <Card className="p-5">
-          <p className="text-xs font-semibold tracking-wide text-slate-500 uppercase">Percentile</p>
-          <p className="mt-2 text-3xl font-bold text-blue-700">{percentile}%</p>
+          <p className="text-xs font-semibold tracking-wide text-text-secondary uppercase">Percentile</p>
+          <p className="mt-2 text-3xl font-bold text-primary">{percentile}%</p>
         </Card>
         <Card className="p-5">
-          <p className="text-xs font-semibold tracking-wide text-slate-500 uppercase">Time Taken</p>
-          <p className="mt-2 text-3xl font-bold text-slate-900">{formatDuration(timeTaken)}</p>
+          <p className="text-xs font-semibold tracking-wide text-text-secondary uppercase">Time Taken</p>
+          <p className="mt-2 text-3xl font-bold text-text-primary">{formatDuration(timeTaken)}</p>
         </Card>
       </div>
 
@@ -156,12 +158,12 @@ export default function ResultsPage() {
 
       {!showFullDetails ? (
         <Card className="p-6">
-          <h2 className="text-lg font-semibold text-slate-900">Result Summary</h2>
-          <p className="mt-2 text-sm text-slate-600">
+          <h2 className="text-lg font-semibold text-text-primary">Result Summary</h2>
+          <p className="mt-2 text-sm text-text-secondary">
             Answers are hidden until the test end time is completed.
           </p>
           {endDate ? (
-            <p className="mt-1 text-xs text-slate-500">Available after: {new Date(endDate).toLocaleString()}</p>
+            <p className="mt-1 text-xs text-text-secondary">Available after: {new Date(endDate).toLocaleString()}</p>
           ) : null}
         </Card>
       ) : null}
@@ -170,8 +172,8 @@ export default function ResultsPage() {
         <Card className="p-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h2 className="text-lg font-semibold text-slate-900">Detailed Review</h2>
-              <p className="mt-1 text-sm text-slate-600">View question-wise answers and marks once the test period has ended.</p>
+              <h2 className="text-lg font-semibold text-text-primary">Detailed Review</h2>
+              <p className="mt-1 text-sm text-text-secondary">View question-wise answers and marks once the test period has ended.</p>
             </div>
             <Button type="button" onClick={() => setShowAnswers((prev) => !prev)}>
               {showAnswers ? "Hide Answers" : "View Answers"}
@@ -182,13 +184,13 @@ export default function ResultsPage() {
 
       {showFullDetails && showAnswers ? (
         <Card className="overflow-hidden p-0">
-          <div className="border-b border-slate-100 px-5 py-4">
-            <h2 className="text-lg font-semibold text-slate-900">Question Breakdown</h2>
+          <div className="border-b border-border px-5 py-4">
+            <h2 className="text-lg font-semibold text-text-primary">Question Breakdown</h2>
           </div>
 
           {breakdown.length === 0 ? (
             <div className="p-6">
-              <Empty className="border border-slate-100">
+              <Empty className="border border-border">
                 <EmptyHeader>
                   <EmptyTitle>No Question Breakdown</EmptyTitle>
                   <EmptyDescription>Question-level details are not available for this attempt.</EmptyDescription>
@@ -200,22 +202,22 @@ export default function ResultsPage() {
               {breakdown.map((item, index) => (
                 <article key={item.id} className="space-y-3 px-5 py-4">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-sm font-semibold text-slate-900">Q{index + 1}. {item.prompt}</p>
-                    <p className="text-xs font-semibold text-slate-500">{item.topic}</p>
+                    <p className="text-sm font-semibold text-text-primary">Q{index + 1}. {item.prompt}</p>
+                    <p className="text-xs font-semibold text-text-secondary">{item.topic}</p>
                   </div>
 
                   <div className="grid gap-2 md:grid-cols-3">
-                    <div className="rounded-lg bg-slate-50 p-3">
-                      <p className="text-[11px] font-semibold tracking-wide text-slate-500 uppercase">Your answer</p>
-                      <p className="mt-1 text-sm text-slate-800">{String(item.studentAnswer || "Not answered")}</p>
+                    <div className="rounded-lg bg-background p-3">
+                      <p className="text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Your answer</p>
+                      <p className="mt-1 text-sm text-text-primary">{String(item.studentAnswer || "Not answered")}</p>
                     </div>
-                    <div className="rounded-lg bg-slate-50 p-3">
-                      <p className="text-[11px] font-semibold tracking-wide text-slate-500 uppercase">Correct answer</p>
-                      <p className="mt-1 text-sm text-slate-800">{String(item.correctAnswer || "-")}</p>
+                    <div className="rounded-lg bg-background p-3">
+                      <p className="text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Correct answer</p>
+                      <p className="mt-1 text-sm text-text-primary">{String(item.correctAnswer || "-")}</p>
                     </div>
-                    <div className="rounded-lg bg-slate-50 p-3">
-                      <p className="text-[11px] font-semibold tracking-wide text-slate-500 uppercase">Marks</p>
-                      <p className="mt-1 text-sm font-semibold text-slate-900">
+                    <div className="rounded-lg bg-background p-3">
+                      <p className="text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Marks</p>
+                      <p className="mt-1 text-sm font-semibold text-text-primary">
                         {item.marks}
                         {item.totalMarks > 0 ? ` / ${item.totalMarks}` : ""}
                       </p>
@@ -229,8 +231,9 @@ export default function ResultsPage() {
       ) : null}
 
        <div className="flex justify-center">
-        <Button type="button" className="bg-blue-700 text-white p-6" onClick={() => navigate("/tests/ongoing")}>Return to Home</Button>
+        <Button type="button" className="bg-primary-dark text-primary-foreground p-6" onClick={() => navigate("/tests/ongoing")}>Return to Home</Button>
       </div> 
     </section>
+    </>
   );
 }

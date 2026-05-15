@@ -24,14 +24,25 @@ export default function TypedConfirmDialog({
   onConfirm,
 }) {
   const [typedText, setTypedText] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
     if (!open) {
       setTypedText("");
+      setIsLoading(false);
     }
   }, [open]);
 
   const canConfirm = useMemo(() => typedText.trim() === String(expectedText || ""), [expectedText, typedText]);
+
+  const handleConfirm = async () => {
+    setIsLoading(true);
+    try {
+      await onConfirm?.(typedText.trim());
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
@@ -41,18 +52,23 @@ export default function TypedConfirmDialog({
           <AlertDialogDescription>{description}</AlertDialogDescription>
         </AlertDialogHeader>
         <div className="space-y-2">
-          <p className="text-xs text-slate-500">Required: <strong>{expectedText}</strong></p>
+          <p className="text-xs text-text-secondary">Required: <strong>{expectedText}</strong></p>
           <Label htmlFor="typed-confirm-input">{inputLabel}</Label>
-          <Input id="typed-confirm-input" value={typedText} onChange={(event) => setTypedText(event.target.value)} />
+          <Input 
+            id="typed-confirm-input" 
+            value={typedText} 
+            onChange={(event) => setTypedText(event.target.value)}
+            disabled={isLoading}
+          />
         </div>
         <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogCancel disabled={isLoading}>Cancel</AlertDialogCancel>
           <AlertDialogAction
-            className={confirmVariant === "destructive" ? "bg-red-600 hover:bg-red-700" : ""}
-            disabled={!canConfirm}
-            onClick={() => onConfirm?.(typedText.trim())}
+            className={confirmVariant === "destructive" ? "bg-danger hover:bg-danger/90" : ""}
+            disabled={!canConfirm || isLoading}
+            onClick={handleConfirm}
           >
-            {confirmLabel}
+            {isLoading ? "Processing..." : confirmLabel}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

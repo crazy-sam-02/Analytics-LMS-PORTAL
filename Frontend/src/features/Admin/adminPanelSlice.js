@@ -19,8 +19,8 @@ export const createAdminTest = createAsyncThunk("adminPanel/createTest", async (
   return adminApi.createTest(payload);
 });
 
-export const duplicateAdminTest = createAsyncThunk("adminPanel/duplicateTest", async (testId) => {
-  return adminApi.duplicateTest(testId);
+export const updateAdminTest = createAsyncThunk("adminPanel/updateTest", async ({ testId, payload }) => {
+  return adminApi.updateTest(testId, payload);
 });
 
 export const publishAdminTest = createAsyncThunk("adminPanel/publishTest", async (testId) => {
@@ -102,8 +102,8 @@ const adminPanelSlice = createSlice({
       .addCase(createAdminTest.fulfilled, (state, action) => {
         state.tests.data = [action.payload, ...state.tests.data];
       })
-      .addCase(duplicateAdminTest.fulfilled, (state, action) => {
-        state.tests.data = [action.payload, ...state.tests.data];
+      .addCase(updateAdminTest.fulfilled, (state, action) => {
+        state.tests.data = state.tests.data.map((test) => (test.id === action.payload.id ? action.payload : test));
       })
       .addCase(publishAdminTest.fulfilled, (state, action) => {
         state.tests.data = state.tests.data.map((test) => (test.id === action.payload.id ? action.payload : test));
@@ -131,6 +131,21 @@ const adminPanelSlice = createSlice({
       .addCase(addQuestionBankItem.fulfilled, (state, action) => {
         state.questionBank.data = [action.payload, ...state.questionBank.data];
       })
+      .addCase(addQuestionBankItem.rejected, (state, action) => {
+        state.questionBank.loading = false;
+        state.questionBank.error = action.error.message;
+      })
+      .addCase(fetchBatches.pending, (state) => {
+        state.batches.loading = true;
+      })
+      .addCase(fetchBatches.fulfilled, (state, action) => {
+        state.batches.loading = false;
+        state.batches.data = action.payload.data || [];
+      })
+      .addCase(fetchBatches.rejected, (state, action) => {
+        state.batches.loading = false;
+        state.batches.error = action.error.message;
+      })
       .addCase(fetchDepartments.pending, (state) => {
         state.departments.loading = true;
       })
@@ -141,13 +156,6 @@ const adminPanelSlice = createSlice({
       .addCase(fetchDepartments.rejected, (state, action) => {
         state.departments.loading = false;
         state.departments.error = action.error.message;
-      })
-      .addCase(fetchBatches.pending, (state) => {
-        state.batches.loading = true;
-      })
-      .addCase(fetchBatches.fulfilled, (state, action) => {
-        state.batches.loading = false;
-        state.batches.data = action.payload || [];
       })
       .addCase(fetchStudents.pending, (state) => {
         state.students.loading = true;

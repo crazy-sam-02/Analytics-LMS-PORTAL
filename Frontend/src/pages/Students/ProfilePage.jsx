@@ -72,7 +72,7 @@ export default function ProfilePage() {
   }
 
   if (profileQuery.isError) {
-    return <div className="py-10 text-center text-sm text-slate-500">{profileQuery.error?.message || "Unable to load profile."}</div>;
+    return <div className="py-10 text-center text-sm text-text-secondary">{profileQuery.error?.message || "Unable to load profile."}</div>;
   }
 
   return (
@@ -81,57 +81,57 @@ export default function ProfilePage() {
         <div className="mx-auto flex flex-col items-center gap-3">
           <Avatar size="lg" className="size-24 rounded-2xl">
             <AvatarImage src={avatarDisplayUrl} alt="Profile avatar" className="rounded-2xl object-cover" />
-            <AvatarFallback className="rounded-2xl bg-blue-100 text-blue-700">
+            <AvatarFallback className="rounded-2xl bg-primary/15 text-primary">
               <UserRound className="size-8" />
             </AvatarFallback>
           </Avatar>
 
-          <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700">
+          <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs font-semibold text-text-secondary">
             <Upload className="size-3.5" />
             {uploading ? "Uploading..." : "Upload Avatar"}
             <input type="file" accept="image/png,image/jpeg" className="hidden" disabled={uploading} onChange={onAvatarSelected} />
           </label>
-          <p className="text-xs text-slate-500">JPG/PNG only, max 2MB, auto-cropped to square.</p>
+          <p className="text-xs text-text-secondary">JPG/PNG only, max 2MB, auto-cropped to square.</p>
         </div>
 
-        <h2 className="mt-4 text-center text-2xl font-semibold tracking-tight text-slate-900">{user?.fullName || user?.name || "Student"}</h2>
-        <p className="text-center text-sm text-slate-500">{user?.rollNumber || user?.studentId || "-"}</p>
+        <h2 className="mt-4 text-center text-2xl font-semibold tracking-tight text-text-primary">{user?.fullName || user?.name || "Student"}</h2>
+        <p className="text-center text-sm text-text-secondary">{user?.rollNumber || user?.studentId || "-"}</p>
 
         <div className="mt-6 space-y-3 text-sm">
-          <div className="flex items-center gap-2 rounded-xl bg-[#f8fafd] p-3 text-slate-600"><Mail className="size-4" /> {user?.email || "-"}</div>
-          <div className="flex items-center gap-2 rounded-xl bg-[#f8fafd] p-3 text-slate-600"><GraduationCap className="size-4" /> {user?.department?.name || user?.department || "Department"}</div>
+          <div className="flex items-center gap-2 rounded-xl bg-background p-3 text-text-secondary"><Mail className="size-4" /> {user?.email || "-"}</div>
+          <div className="flex items-center gap-2 rounded-xl bg-background p-3 text-text-secondary"><GraduationCap className="size-4" /> {user?.department?.name || user?.department || "Department"}</div>
         </div>
       </article>
 
       <article className={`${ui.card} ${ui.cardPaddingLg}`}>
-        <h3 className="text-2xl font-semibold tracking-tight text-slate-900">Profile Details</h3>
-        <p className="mt-1 text-sm text-slate-500">Read-only academic identity details from your institution records.</p>
+        <h3 className="text-2xl font-semibold tracking-tight text-text-primary">Profile Details</h3>
+        <p className="mt-1 text-sm text-text-secondary">Read-only academic identity details from your institution records.</p>
 
         <div className="mt-5 grid gap-4">
           <div className="grid gap-4 md:grid-cols-2">
-            <div className="rounded-xl border border-slate-200 bg-[#f8fafd] p-3">
-              <p className="text-[11px] font-semibold tracking-wide text-slate-500 uppercase">Name</p>
-              <p className="mt-1 text-sm font-medium text-slate-800">{user?.fullName || user?.name || "-"}</p>
+            <div className="rounded-xl border border-border bg-background p-3">
+              <p className="text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Name</p>
+              <p className="mt-1 text-sm font-medium text-text-primary">{user?.fullName || user?.name || "-"}</p>
             </div>
-            <div className="rounded-xl border border-slate-200 bg-[#f8fafd] p-3">
-              <p className="text-[11px] font-semibold tracking-wide text-slate-500 uppercase">Email</p>
-              <p className="mt-1 text-sm font-medium text-slate-800">{user?.email || "-"}</p>
+            <div className="rounded-xl border border-border bg-background p-3">
+              <p className="text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Email</p>
+              <p className="mt-1 text-sm font-medium text-text-primary">{user?.email || "-"}</p>
             </div>
-            <div className="rounded-xl border border-slate-200 bg-[#f8fafd] p-3">
-              <p className="text-[11px] font-semibold tracking-wide text-slate-500 uppercase">Roll Number</p>
-              <p className="mt-1 text-sm font-medium text-slate-800">{user?.rollNumber || user?.studentId || "-"}</p>
+            <div className="rounded-xl border border-border bg-background p-3">
+              <p className="text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Roll Number</p>
+              <p className="mt-1 text-sm font-medium text-text-primary">{user?.rollNumber || user?.studentId || "-"}</p>
             </div>
-            <div className="rounded-xl border border-slate-200 bg-[#f8fafd] p-3">
-              <p className="text-[11px] font-semibold tracking-wide text-slate-500 uppercase">College</p>
-              <p className="mt-1 text-sm font-medium text-slate-800">{user?.college?.name || user?.college || "-"}</p>
+            <div className="rounded-xl border border-border bg-background p-3">
+              <p className="text-[11px] font-semibold tracking-wide text-text-secondary uppercase">College</p>
+              <p className="mt-1 text-sm font-medium text-text-primary">{user?.college?.name || user?.college || "-"}</p>
             </div>
-            <div className="rounded-xl border border-slate-200 bg-[#f8fafd] p-3">
-              <p className="text-[11px] font-semibold tracking-wide text-slate-500 uppercase">Department</p>
-              <p className="mt-1 text-sm font-medium text-slate-800">{user?.department?.name || user?.department || "-"}</p>
+            <div className="rounded-xl border border-border bg-background p-3">
+              <p className="text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Department</p>
+              <p className="mt-1 text-sm font-medium text-text-primary">{user?.department?.name || user?.department || "-"}</p>
             </div>
-            <div className="rounded-xl border border-slate-200 bg-[#f8fafd] p-3">
-              <p className="text-[11px] font-semibold tracking-wide text-slate-500 uppercase">Batch</p>
-              <p className="mt-1 text-sm font-medium text-slate-800">{user?.batch?.name || user?.batch || "-"}</p>
+            <div className="rounded-xl border border-border bg-background p-3">
+              <p className="text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Batch</p>
+              <p className="mt-1 text-sm font-medium text-text-primary">{user?.batch?.name || user?.batch || "-"}</p>
             </div>
           </div>
         </div>

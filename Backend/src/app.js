@@ -3,15 +3,15 @@ const helmet = require("helmet");
 const cors = require("cors");
 const cookieParser = require("cookie-parser");
 const morgan = require("morgan");
-const rateLimit = require("express-rate-limit");
+const compression = require("compression");
 
 const env = require("./config/env");
+const { getRedisHealthSnapshot } = require("./config/redis");
 const studentAuthRoutes = require("./routes/Students/auth.routes");
 const studentDashboardRoutes = require("./routes/Students/dashboard.routes");
 const studentTestsRoutes = require("./routes/Students/tests.routes");
 const studentTestsCompatRoutes = require("./routes/Students/tests-compat.routes");
 const studentEventsRoutes = require("./routes/Students/events.routes");
-const studentNotificationsRoutes = require("./routes/Students/notifications.routes");
 const studentReportsRoutes = require("./routes/Students/reports.routes");
 const studentLeaderboardRoutes = require("./routes/Students/leaderboard.routes");
 const studentProfileRoutes = require("./routes/Students/profile.routes");
@@ -29,7 +29,6 @@ const adminReportsRoutes = require("./routes/Admin/reports.routes");
 const adminJobsRoutes = require("./routes/Admin/jobs.routes");
 const adminSearchRoutes = require("./routes/Admin/search.routes");
 const adminSettingsRoutes = require("./routes/Admin/settings.routes");
-const adminAuditLogsRoutes = require("./routes/Admin/audit-logs.routes");
 const superAdminAuthRoutes = require("./routes/SuperAdmin/auth.routes");
 const superAdminDashboardRoutes = require("./routes/SuperAdmin/dashboard.routes");
 const superAdminCollegesRoutes = require("./routes/SuperAdmin/colleges.routes");
@@ -44,22 +43,129 @@ const superAdminAnalyticsRoutes = require("./routes/SuperAdmin/analytics.routes"
 const superAdminAuditLogsRoutes = require("./routes/SuperAdmin/audit-logs.routes");
 const superAdminSettingsRoutes = require("./routes/SuperAdmin/settings.routes");
 const superAdminHealthRoutes = require("./routes/SuperAdmin/health.routes");
+const superAdminQuestionBankRoutes = require("./routes/SuperAdmin/question-bank.routes");
+const superAdminSubjectsRoutes = require("./routes/SuperAdmin/subjects.routes");
 const { recordApiMetric } = require("./services/api-metrics.service");
+const { createRateLimiter, authKeyByIp } = require("./middleware/rate-limit");
+const { createResponseCache, createResponseCacheInvalidationHook } = require("./middleware/response-cache");
 const { notFound, errorHandler } = require("./middleware/error-handler");
+const { setupCompleteValidationSystem } = require("./config/validation-integration.setup");
 
 const app = express();
+app.set("trust proxy", 1);
+
+const authStrictLimiter = createRateLimiter({
+  scope: "auth-login",
+  routeLabel: "/api/*/auth/login",
+  windowMs: env.rateLimit.authLoginWindowMs,
+  max: env.rateLimit.authLoginMax,
+  keySelector: authKeyByIp,
+  message: "Too many login attempts. Try again in a few minutes.",
+});
+
+const authRefreshLimiter = createRateLimiter({
+  scope: "auth-refresh",
+  routeLabel: "/api/*/auth/refresh",
+  windowMs: env.rateLimit.authRefreshWindowMs,
+  max: env.rateLimit.authRefreshMax,
+  keySelector: authKeyByIp,
+  message: "Too many token refresh attempts. Please retry shortly.",
+});
+
+const generalApiLimiter = createRateLimiter({
+  scope: "api-general",
+  routeLabel: "/api/*",
+  windowMs: env.rateLimit.generalApiWindowMs,
+  max: env.rateLimit.generalApiMax,
+  skip: (req) => req.path === "/health",
+  message: "Too many requests. Please slow down and try again.",
+});
+
+const adminReportsCache = createResponseCache({
+  scope: "admin-reports",
+  enabled: env.responseCache.enabled,
+  ttlSeconds: env.responseCache.adminReportsTtlSeconds,
+  tagsBuilder: (req) => [
+    "admin-reports:all",
+    req.admin?.collegeId ? `admin-reports:college:${req.admin.collegeId}` : null,
+  ],
+});
+
+const superAnalyticsCache = createResponseCache({
+  scope: "super-analytics",
+  enabled: env.responseCache.enabled,
+  ttlSeconds: env.responseCache.superAnalyticsTtlSeconds,
+  tagsBuilder: () => ["super-analytics:all"],
+});
+
+const studentDashboardCache = createResponseCache({
+  scope: "student-dashboard",
+  enabled: env.responseCache.enabled,
+  ttlSeconds: env.responseCache.studentDashboardTtlSeconds,
+  tagsBuilder: (req) => [
+    "student-dashboard:all",
+    req.user?.id ? `student-dashboard:user:${req.user.id}` : null,
+    req.user?.collegeId ? `student-dashboard:college:${req.user.collegeId}` : null,
+  ],
+});
+
+const studentTestsCache = createResponseCache({
+  scope: "student-tests",
+  enabled: env.responseCache.enabled,
+  ttlSeconds: env.responseCache.studentTestsTtlSeconds,
+  tagsBuilder: (req) => [
+    "student-tests:all",
+    req.user?.id ? `student-tests:user:${req.user.id}` : null,
+    req.user?.collegeId ? `student-tests:college:${req.user.collegeId}` : null,
+  ],
+});
+
+const adminDashboardCache = createResponseCache({
+  scope: "admin-dashboard",
+  enabled: env.responseCache.enabled,
+  ttlSeconds: env.responseCache.adminDashboardTtlSeconds,
+  tagsBuilder: (req) => [
+    "admin-dashboard:all",
+    req.admin?.collegeId ? `admin-dashboard:college:${req.admin.collegeId}` : null,
+  ],
+});
+
+const superDashboardCache = createResponseCache({
+  scope: "super-dashboard",
+  enabled: env.responseCache.enabled,
+  ttlSeconds: env.responseCache.superDashboardTtlSeconds,
+  tagsBuilder: () => ["super-dashboard:all"],
+});
+
+// Cache system health checks for 15s — prevents redundant DB/Redis/disk
+// probes when multiple super admins have the dashboard open.
+const systemHealthCache = createResponseCache({
+  scope: "system-health",
+  enabled: env.responseCache.enabled,
+  ttlSeconds: 15,
+  tagsBuilder: () => ["system-health:all"],
+});
+
+const allowedOrigins = env.frontendOrigins || [env.frontendOrigin].filter(Boolean);
 
 app.use(
   cors({
-    origin: env.frontendOrigin,
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      return callback(new Error("Not allowed by CORS"));
+    },
     credentials: true,
   })
 );
 app.use(helmet());
+app.use(compression());
 app.use(morgan("dev"));
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
+app.use(createResponseCacheInvalidationHook());
 
 app.use((req, res, next) => {
   const start = process.hrtime.bigint();
@@ -73,58 +179,99 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(
-  "/api/auth",
-  rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 50,
-    standardHeaders: true,
-    legacyHeaders: false,
-  }),
-  studentAuthRoutes
-);
+app.use("/api", generalApiLimiter);
 
-app.use(
-  "/api/admin/auth",
-  rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 50,
-    standardHeaders: true,
-    legacyHeaders: false,
-  }),
-  adminAuthRoutes
-);
+app.use("/api/auth/login", authStrictLimiter);
+app.use("/api/admin/auth/login", authStrictLimiter);
+app.use("/api/super-admin/auth/login", authStrictLimiter);
+app.use("/api/superadmin/auth/login", authStrictLimiter);
 
-app.use(
-  "/api/super-admin/auth",
-  rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 50,
-    standardHeaders: true,
-    legacyHeaders: false,
-  }),
-  superAdminAuthRoutes
-);
+app.use("/api/auth/refresh", authRefreshLimiter);
+app.use("/api/admin/auth/refresh", authRefreshLimiter);
+app.use("/api/super-admin/auth/refresh", authRefreshLimiter);
+app.use("/api/superadmin/auth/refresh", authRefreshLimiter);
 
-app.use(
-  "/api",
-  rateLimit({
-    windowMs: 60 * 1000,
-    max: 200,
-    standardHeaders: true,
-    legacyHeaders: false,
-  })
-);
+app.use("/api/admin/reports/summary", adminReportsCache);
+app.use("/api/admin/reports/charts", adminReportsCache);
+app.use("/api/admin/reports/table", adminReportsCache);
+app.use("/api/admin/reports/analytics", adminReportsCache);
+app.use("/api/admin/reports/student/:studentId", adminReportsCache);
+app.use("/api/super-admin/analytics", superAnalyticsCache);
+app.use("/api/superadmin/analytics", superAnalyticsCache);
+app.use("/api/dashboard/summary", studentDashboardCache);
+app.use("/api/tests/ongoing", studentTestsCache);
+app.use("/api/tests/upcoming", studentTestsCache);
+app.use("/api/admin/dashboard/summary", adminDashboardCache);
+app.use("/api/super-admin/dashboard/summary", superDashboardCache);
+app.use("/api/superadmin/dashboard/summary", superDashboardCache);
+app.use("/api/super-admin/system/health", systemHealthCache);
+app.use("/api/superadmin/system/health", systemHealthCache);
 
-app.get("/api/health", (_req, res) => {
-  res.status(200).json({ status: "ok" });
+app.use("/api/auth", studentAuthRoutes);
+app.use("/api/admin/auth", adminAuthRoutes);
+app.use("/api/super-admin/auth", superAdminAuthRoutes);
+app.use("/api/superadmin/auth", superAdminAuthRoutes);
+
+app.use((req, res, next) => {
+  if (req.method !== "GET") {
+    return next();
+  }
+
+  if (req.path.startsWith("/api/tests/") || req.path.startsWith("/api/attempts/")) {
+    res.setHeader("Cache-Control", "no-store");
+    return next();
+  }
+
+  const cacheablePrefixes = [
+    "/api/dashboard",
+    "/api/leaderboard",
+    "/api/events",
+    "/api/reports",
+    "/api/admin/dashboard",
+    "/api/admin/reports",
+    "/api/super-admin/dashboard",
+    "/api/super-admin/analytics",
+    "/api/superadmin/dashboard",
+    "/api/superadmin/analytics",
+  ];
+
+  if (cacheablePrefixes.some((prefix) => req.path.startsWith(prefix))) {
+    res.setHeader("Cache-Control", "private, max-age=15, stale-while-revalidate=30");
+  }
+
+  return next();
+});
+
+app.get("/api/health", async (_req, res) => {
+  const checks = {};
+  try {
+    await require("mongoose").connection.db.admin().ping();
+    checks.mongodb = "ok";
+  } catch {
+    checks.mongodb = "down";
+  }
+
+  const redisHealth = await getRedisHealthSnapshot();
+  checks.redis = redisHealth.status;
+
+  const healthy = checks.mongodb === "ok" && checks.redis !== "down";
+  res.status(healthy ? 200 : 503).json({
+    status: healthy ? "ok" : "degraded",
+    checks,
+    redis: {
+      configured: redisHealth.configured,
+      available: redisHealth.available,
+      latencyMs: redisHealth.latencyMs,
+      error: redisHealth.error,
+    },
+    uptime: Math.floor(process.uptime()),
+  });
 });
 
 app.use("/api/dashboard", studentDashboardRoutes);
 app.use("/api/tests", studentTestsRoutes);
 app.use("/api", studentTestsCompatRoutes);
 app.use("/api/events", studentEventsRoutes);
-app.use("/api/notifications", studentNotificationsRoutes);
 app.use("/api/reports", studentReportsRoutes);
 app.use("/api/leaderboard", studentLeaderboardRoutes);
 app.use("/api/profile", studentProfileRoutes);
@@ -143,7 +290,6 @@ app.use("/api/admin/reports", adminReportsRoutes);
 app.use("/api/admin/jobs", adminJobsRoutes);
 app.use("/api/admin/search", adminSearchRoutes);
 app.use("/api/admin/settings", adminSettingsRoutes);
-app.use("/api/admin/audit-logs", adminAuditLogsRoutes);
 
 app.use("/api/super-admin/dashboard", superAdminDashboardRoutes);
 app.use("/api/super-admin/colleges", superAdminCollegesRoutes);
@@ -158,6 +304,9 @@ app.use("/api/super-admin/analytics", superAdminAnalyticsRoutes);
 app.use("/api/super-admin/audit-logs", superAdminAuditLogsRoutes);
 app.use("/api/super-admin/settings", superAdminSettingsRoutes);
 app.use("/api/super-admin/system", superAdminHealthRoutes);
+app.use("/api/super-admin/question-bank", superAdminQuestionBankRoutes);
+app.use("/api/super-admin/questions", superAdminQuestionBankRoutes);
+app.use("/api/super-admin/subjects", superAdminSubjectsRoutes);
 
 // Endpoint aliases for clients that use /superadmin instead of /super-admin.
 app.use("/api/superadmin/auth", superAdminAuthRoutes);
@@ -174,8 +323,20 @@ app.use("/api/superadmin/analytics", superAdminAnalyticsRoutes);
 app.use("/api/superadmin/logs", superAdminAuditLogsRoutes);
 app.use("/api/superadmin/settings", superAdminSettingsRoutes);
 app.use("/api/superadmin/system", superAdminHealthRoutes);
+app.use("/api/superadmin/question-bank", superAdminQuestionBankRoutes);
+app.use("/api/superadmin/questions", superAdminQuestionBankRoutes);
+app.use("/api/superadmin/subjects", superAdminSubjectsRoutes);
 
 app.use(notFound);
 app.use(errorHandler);
+
+// Validation integration setup (registers monitoring routes and alerts)
+try {
+  setupCompleteValidationSystem(app);
+} catch (e) {
+  // Log and continue; do not prevent app from starting
+  // eslint-disable-next-line no-console
+  console.error("Validation integration setup failed:", e && e.message ? e.message : e);
+}
 
 module.exports = app;

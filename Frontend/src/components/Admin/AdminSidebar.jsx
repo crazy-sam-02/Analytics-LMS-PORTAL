@@ -10,7 +10,6 @@ import {
   CalendarDays,
   BarChart3,
   Settings,
-  ScrollText,
   LogOut,
   Shield,
   ChevronLeft,
@@ -31,7 +30,6 @@ const navItems = [
   { to: "/admin/students", label: "Students", icon: Users, permission: ADMIN_PERMISSIONS.MANAGE_STUDENTS },
   { to: "/admin/events", label: "Events", icon: CalendarDays, permission: ADMIN_PERMISSIONS.MANAGE_EVENTS },
   { to: "/admin/reports", label: "Reports", icon: BarChart3, permission: ADMIN_PERMISSIONS.VIEW_REPORTS },
-  { to: "/admin/audit-logs", label: "Audit Logs", icon: ScrollText, permission: ADMIN_PERMISSIONS.VIEW_REPORTS },
   { to: "/admin/settings", label: "Settings", icon: Settings },
 ];
 
@@ -62,19 +60,19 @@ export default function AdminSidebar() {
       }`}
     >
       <div className={`mb-6 flex items-center ${collapsed ? "justify-center" : "justify-between"}`}>
-        <div className="grid size-10 place-items-center rounded-xl bg-primary text-white shadow-md shadow-primary/40">
+        <div className="grid size-10 place-items-center rounded-xl bg-sidebar-primary text-sidebar-primary-foreground shadow-md shadow-primary/40">
           <Shield className="size-5" />
         </div>
         {!collapsed ? (
           <div className="ml-3 flex-1">
-            <p className="text-xl leading-none font-semibold tracking-tight text-white">LMS Admin</p>
-            <p className="mt-1 text-[11px] tracking-wide text-white/70 uppercase">College Control Center</p>
+            <p className="text-xl leading-none font-semibold tracking-tight text-sidebar-foreground">LMS Admin</p>
+            <p className="mt-1 text-[11px] tracking-wide text-sidebar-foreground/70 uppercase">College Control Center</p>
           </div>
         ) : null}
         <button
           type="button"
           onClick={() => dispatch(toggleSidebar())}
-          className="grid size-8 place-items-center rounded-lg border border-white/25 text-white/80 hover:bg-white/10"
+          className="grid size-8 place-items-center rounded-lg border border-sidebar-foreground/25 text-sidebar-foreground/80 hover:bg-sidebar-accent"
           aria-label="Toggle sidebar"
         >
           <ChevronLeft className={`size-4 transition-transform ${collapsed ? "rotate-180" : ""}`} />
@@ -92,8 +90,8 @@ export default function AdminSidebar() {
               className={({ isActive }) =>
                 `group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
                   isActive
-                    ? "bg-primary text-white shadow-sm shadow-primary/35 ring-1 ring-white/20"
-                    : "text-white/80 hover:bg-white/10 hover:text-white"
+                    ? "bg-sidebar-primary text-sidebar-primary-foreground shadow-sm shadow-primary/35 ring-1 ring-sidebar-ring/30"
+                    : "text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground"
                 }`
               }
               title={collapsed ? item.label : undefined}
@@ -108,7 +106,7 @@ export default function AdminSidebar() {
       <button
         type="button"
         onClick={() => setLogoutOpen(true)}
-        className="mt-auto flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-white/25 bg-white/5 text-sm font-medium text-white/90 transition hover:bg-white/10"
+        className="mt-auto flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-sidebar-border bg-sidebar-accent/30 text-sm font-medium text-sidebar-foreground transition hover:bg-sidebar-accent/50"
         title={collapsed ? "Logout" : undefined}
       >
         <LogOut className="size-4" />

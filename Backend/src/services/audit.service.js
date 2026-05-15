@@ -1,4 +1,4 @@
-const prisma = require("../config/db");
+const models = require("../models");
 
 const createAuditLog = async ({
   action,
@@ -11,7 +11,10 @@ const createAuditLog = async ({
   beforeState = null,
   afterState = null,
 }) => {
-  return prisma.auditLog.create({
+  const m = await models.init();
+  const AuditLog = m.dbClient.auditLog;
+  
+  return AuditLog.create({
     data: {
       action,
       targetType,

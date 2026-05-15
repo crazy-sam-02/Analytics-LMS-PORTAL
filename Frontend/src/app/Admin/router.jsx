@@ -7,14 +7,12 @@ import AdminPortalLayout from "@/components/Admin/AdminPortalLayout";
 import AdminLoginPage from "@/pages/Admin/LoginPage";
 import AdminDashboardPage from "@/pages/Admin/DashboardPage";
 import ManageTestsPage from "@/pages/Admin/ManageTestsPage";
-import LiveMonitoringPage from "@/pages/Admin/LiveMonitoringPage";
 import QuestionBankPage from "@/pages/Admin/QuestionBankPage";
 import BatchesPage from "@/pages/Admin/BatchesPage";
 import StudentsPage from "@/pages/Admin/StudentsPage";
 import EventsPage from "@/pages/Admin/EventsPage";
 import ReportsPage from "@/pages/Admin/ReportsPage";
 import AdminSettingsPage from "@/pages/Admin/SettingsPage";
-import AuditLogsPage from "@/pages/Admin/AuditLogsPage";
 import usePermission from "@/hooks/usePermission";
 import PermissionDenied from "@/components/Admin/PermissionDenied";
 import { ADMIN_PERMISSIONS } from "@/features/Admin/adminPermissions";
@@ -37,7 +35,7 @@ function AdminAuthBootstrap() {
   }, [dispatch]);
 
   if (!initialized) {
-    return <div className="grid min-h-screen place-items-center text-slate-500">Initializing admin session...</div>;
+    return <div className="grid min-h-screen place-items-center text-text-secondary">Initializing admin session...</div>;
   }
 
   return <Outlet />;
@@ -70,7 +68,6 @@ const router = createBrowserRouter([
               { path: "/admin", element: <Navigate to="/admin/dashboard" replace /> },
               { path: "/admin/dashboard", element: <AdminDashboardPage /> },
               { path: "/admin/tests", element: <ManageTestsPage /> },
-              { path: "/admin/tests/:testId/monitor", element: <LiveMonitoringPage /> },
               {
                 element: <PermissionRoute permission={ADMIN_PERMISSIONS.MANAGE_QUESTIONS} action="access question bank" />,
                 children: [{ path: "/admin/question-bank", element: <QuestionBankPage /> }],
@@ -90,10 +87,6 @@ const router = createBrowserRouter([
               {
                 element: <PermissionRoute permission={ADMIN_PERMISSIONS.VIEW_REPORTS} action="view reports" />,
                 children: [{ path: "/admin/reports", element: <ReportsPage /> }],
-              },
-              {
-                element: <PermissionRoute permission={ADMIN_PERMISSIONS.VIEW_REPORTS} action="view audit logs" />,
-                children: [{ path: "/admin/audit-logs", element: <AuditLogsPage /> }],
               },
               { path: "/admin/settings", element: <AdminSettingsPage /> },
             ],

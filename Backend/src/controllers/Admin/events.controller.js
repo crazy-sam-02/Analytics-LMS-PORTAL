@@ -1,6 +1,14 @@
-const prisma = require("../../config/db");
+const models = require("../../models");
 const { asyncHandler, ApiError } = require("../../utils/http");
 const { createAuditLog } = require("../../services/audit.service");
+const { uploadImageBuffer } = require("../../services/cloudinary.service");
+const {
+  buildEventFeedKey,
+  getCachedEventFeed,
+  setCachedEventFeed,
+  invalidateEventFeedCache,
+  clearRemainingSeats,
+} = require("../../services/event-cache.service");
 
 const stringifyCsv = (headers, rows) => {
   const serialized = [headers.join(",")];
@@ -17,7 +25,42 @@ const stringifyCsv = (headers, rows) => {
   return serialized.join("\n");
 };
 
+const buildEventUpdateData = (body, uploadedImage = null) => {
+  const data = {};
+  const copyStringFields = ["title", "description", "eventType", "location", "registrationUrl", "visibilityScope"];
+
+  copyStringFields.forEach((field) => {
+    if (Object.prototype.hasOwnProperty.call(body, field)) {
+      data[field] = body[field] || null;
+    }
+  });
+
+  if (body.startsAt) data.startsAt = new Date(body.startsAt);
+  if (Object.prototype.hasOwnProperty.call(body, "endsAt")) data.endsAt = body.endsAt ? new Date(body.endsAt) : null;
+  if (Object.prototype.hasOwnProperty.call(body, "eventDate")) data.eventDate = body.eventDate ? new Date(body.eventDate) : data.startsAt;
+  if (Object.prototype.hasOwnProperty.call(body, "registrationDeadline")) {
+    data.registrationDeadline = body.registrationDeadline ? new Date(body.registrationDeadline) : null;
+  }
+  if (Object.prototype.hasOwnProperty.call(body, "registrationLimit") || Object.prototype.hasOwnProperty.call(body, "maxParticipants")) {
+    data.registrationLimit = Number(body.maxParticipants ?? body.registrationLimit);
+  }
+  if (Object.prototype.hasOwnProperty.call(body, "registrationFields")) {
+    data.registrationFields = Array.isArray(body.registrationFields) ? body.registrationFields : [];
+  }
+  if (Object.prototype.hasOwnProperty.call(data, "visibilityScope")) {
+    data.isInterCollege = data.visibilityScope === "INTER_COLLEGE";
+  }
+  if (uploadedImage) {
+    data.imageUrl = uploadedImage.url;
+    data.imagePublicId = uploadedImage.publicId;
+  }
+
+  return data;
+};
+
 const createEvent = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const collegeId = req.collegeId;
 
   const maxParticipants = Number(req.body.maxParticipants ?? req.body.registrationLimit ?? 0);
@@ -33,7 +76,15 @@ const createEvent = asyncHandler(async (req, res) => {
     throw new ApiError(422, "max_participants must be at least 1");
   }
 
-  const event = await prisma.event.create({
+  const uploadedImage = req.file
+    ? await uploadImageBuffer(req.file.buffer, {
+        folder: "events",
+        publicIdPrefix: `event-${collegeId}`,
+        mimeType: req.file.mimetype,
+      })
+    : null;
+
+  const event = await db.event.create({
     data: {
       title: req.body.title,
       description: req.body.description,
@@ -45,9 +96,13 @@ const createEvent = asyncHandler(async (req, res) => {
       location: req.body.location || null,
       registrationLimit: maxParticipants,
       registrationUrl: req.body.registrationUrl || null,
+      visibilityScope: req.body.visibilityScope || "COLLEGE_ONLY",
+      isInterCollege: req.body.visibilityScope === "INTER_COLLEGE",
       registrationFields: Array.isArray(req.body.registrationFields) ? req.body.registrationFields : [],
       registrants: [],
       isCancelled: false,
+      imageUrl: uploadedImage?.url || null,
+      imagePublicId: uploadedImage?.publicId || null,
       collegeId,
       createdByAdminId: req.admin.id,
     },
@@ -63,25 +118,28 @@ const createEvent = asyncHandler(async (req, res) => {
       title: event.title,
       startsAt: event.startsAt,
       registrationLimit: event.registrationLimit,
+      imageUrl: event.imageUrl || null,
     },
   });
 
-  await prisma.notification.create({
-    data: {
-      title: "Event Created",
-      message: `Event \"${event.title}\" has been published.`,
-      collegeId,
-      adminId: req.admin.id,
-    },
-  });
+  await invalidateEventFeedCache();
 
   res.status(201).json(event);
 });
 
 const getEvents = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const collegeId = req.collegeId;
+  const cacheKey = buildEventFeedKey("admin", { collegeId });
 
-  const events = await prisma.event.findMany({
+  const cached = await getCachedEventFeed(cacheKey);
+  if (cached) {
+    res.setHeader("X-Event-Cache", "HIT");
+    return res.status(200).json(cached);
+  }
+
+  const events = await db.event.findMany({
     where: { collegeId },
     orderBy: { startsAt: "asc" },
   });
@@ -95,14 +153,108 @@ const getEvents = asyncHandler(async (req, res) => {
     };
   });
 
+  await setCachedEventFeed(cacheKey, withParticipants);
+  res.setHeader("X-Event-Cache", "MISS");
   res.status(200).json(withParticipants);
 });
 
-const getEventRegistrants = asyncHandler(async (req, res) => {
+const updateEvent = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const collegeId = req.collegeId;
   const { eventId } = req.params;
 
-  const event = await prisma.event.findFirst({
+  const event = await db.event.findFirst({
+    where: { id: eventId, collegeId },
+  });
+
+  if (!event) {
+    throw new ApiError(404, "Event not found");
+  }
+
+  const uploadedImage = req.file
+    ? await uploadImageBuffer(req.file.buffer, {
+        folder: "events",
+        publicIdPrefix: `event-${collegeId}`,
+        mimeType: req.file.mimetype,
+      })
+    : null;
+
+  const updated = await db.event.update({
+    where: { id: eventId },
+    data: buildEventUpdateData(req.body, uploadedImage),
+  });
+
+  await createAuditLog({
+    action: "ADMIN_EVENT_UPDATED",
+    targetType: "EVENT",
+    targetId: eventId,
+    collegeId,
+    adminId: req.admin.id,
+    beforeState: {
+      title: event.title,
+      startsAt: event.startsAt,
+      registrationLimit: event.registrationLimit,
+      imageUrl: event.imageUrl || null,
+    },
+    afterState: {
+      title: updated.title,
+      startsAt: updated.startsAt,
+      registrationLimit: updated.registrationLimit,
+      imageUrl: updated.imageUrl || null,
+    },
+  });
+
+  await clearRemainingSeats(eventId);
+  await invalidateEventFeedCache();
+
+  res.status(200).json(updated);
+});
+
+const deleteEvent = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
+  const collegeId = req.collegeId;
+  const { eventId } = req.params;
+
+  const event = await db.event.findFirst({
+    where: { id: eventId, collegeId },
+  });
+
+  if (!event) {
+    throw new ApiError(404, "Event not found");
+  }
+
+  await db.event.delete({
+    where: { id: eventId },
+  });
+
+  await createAuditLog({
+    action: "ADMIN_EVENT_DELETED",
+    targetType: "EVENT",
+    targetId: eventId,
+    collegeId,
+    adminId: req.admin.id,
+    beforeState: {
+      title: event.title,
+      startsAt: event.startsAt,
+      registrantCount: Array.isArray(event.registrants) ? event.registrants.length : 0,
+    },
+  });
+
+  await clearRemainingSeats(eventId);
+  await invalidateEventFeedCache();
+
+  res.status(200).json({ message: "Event deleted", eventId });
+});
+
+const getEventRegistrants = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
+  const collegeId = req.collegeId;
+  const { eventId } = req.params;
+
+  const event = await db.event.findFirst({
     where: { id: eventId, collegeId },
   });
 
@@ -113,7 +265,7 @@ const getEventRegistrants = asyncHandler(async (req, res) => {
   const registrants = Array.isArray(event.registrants) ? event.registrants : [];
   const studentIds = registrants.map((item) => item.studentId).filter(Boolean);
   const students = studentIds.length
-    ? await prisma.student.findMany({
+    ? await db.student.findMany({
         where: {
           id: { in: studentIds },
           collegeId,
@@ -143,10 +295,12 @@ const getEventRegistrants = asyncHandler(async (req, res) => {
 });
 
 const exportEventRegistrants = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const collegeId = req.collegeId;
   const { eventId } = req.params;
 
-  const event = await prisma.event.findFirst({
+  const event = await db.event.findFirst({
     where: { id: eventId, collegeId },
   });
 
@@ -173,11 +327,13 @@ const exportEventRegistrants = asyncHandler(async (req, res) => {
 });
 
 const cancelEvent = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const collegeId = req.collegeId;
   const { eventId } = req.params;
   const { reason } = req.body;
 
-  const event = await prisma.event.findFirst({
+  const event = await db.event.findFirst({
     where: { id: eventId, collegeId },
   });
 
@@ -185,7 +341,7 @@ const cancelEvent = asyncHandler(async (req, res) => {
     throw new ApiError(404, "Event not found");
   }
 
-  const updated = await prisma.event.update({
+  const updated = await db.event.update({
     where: { id: eventId },
     data: {
       isCancelled: true,
@@ -193,19 +349,6 @@ const cancelEvent = asyncHandler(async (req, res) => {
       cancelledAt: new Date(),
     },
   });
-
-  const registrants = Array.isArray(event.registrants) ? event.registrants : [];
-  if (registrants.length > 0) {
-    await prisma.notification.createMany({
-      data: registrants.map((item) => ({
-        title: "Event Cancelled",
-        message: `Event \"${event.title}\" has been cancelled. Reason: ${reason}`,
-        collegeId,
-        userId: item.studentId,
-      })),
-      skipDuplicates: true,
-    });
-  }
 
   await createAuditLog({
     action: "ADMIN_EVENT_CANCELLED",
@@ -222,12 +365,17 @@ const cancelEvent = asyncHandler(async (req, res) => {
     },
   });
 
-  res.status(200).json({ message: "Event cancelled and students notified", event: updated });
+  await clearRemainingSeats(eventId);
+  await invalidateEventFeedCache();
+
+  res.status(200).json({ message: "Event cancelled", event: updated });
 });
 
 module.exports = {
   createEvent,
   getEvents,
+  updateEvent,
+  deleteEvent,
   getEventRegistrants,
   exportEventRegistrants,
   cancelEvent,

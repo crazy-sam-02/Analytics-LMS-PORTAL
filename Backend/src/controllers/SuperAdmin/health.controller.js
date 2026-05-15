@@ -1,9 +1,11 @@
 const fs = require("fs/promises");
 const path = require("path");
-const prisma = require("../../config/db");
-const redisClient = require("../../config/redis");
+const env = require("../../config/env");
+const { getRedisHealthSnapshot } = require("../../config/redis");
 const { getIO } = require("../../realtime/socket");
 const { getApiMetricsSnapshot } = require("../../services/api-metrics.service");
+const { getRateLimitMetricsSnapshot } = require("../../services/rate-limit-metrics.service");
+const { getDb } = require("../../utils/db");
 const { asyncHandler } = require("../../utils/http");
 
 const toGb = (bytes) => Number((bytes / (1024 ** 3)).toFixed(2));
@@ -11,7 +13,8 @@ const toGb = (bytes) => Number((bytes / (1024 ** 3)).toFixed(2));
 const getMongoHealth = async () => {
   const start = Date.now();
   try {
-    await prisma.college.count();
+    const db = await getDb();
+    await db.college.count();
     const latency = Date.now() - start;
     return {
       status: latency > 1000 ? "degraded" : "ok",
@@ -26,39 +29,27 @@ const getMongoHealth = async () => {
 };
 
 const getRedisHealth = async () => {
-  if (!redisClient) {
-    return {
-      status: "down",
-      hit_rate: 0,
-    };
-  }
-
-  const start = Date.now();
-  try {
-    await redisClient.ping();
-    const latency = Date.now() - start;
-    return {
-      status: latency > 200 ? "degraded" : "ok",
-      hit_rate: 0.9,
-    };
-  } catch (_error) {
-    return {
-      status: "down",
-      hit_rate: 0,
-    };
-  }
+  const redis = await getRedisHealthSnapshot();
+  return {
+    status: redis.status,
+    hit_rate: redis.available ? 0.9 : 0,
+    latency_ms: redis.latencyMs,
+    configured: redis.configured,
+    error: redis.error,
+  };
 };
 
 const getJobQueueHealth = async () => {
+  const db = await getDb();
   const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
 
   const [reportPending, superReportPending, reportFailed, superReportFailed, oldestReport, oldestSuperReport] = await Promise.all([
-    prisma.reportJob.count({ where: { status: { in: ["QUEUED", "PROCESSING"] } } }),
-    prisma.superReportJob.count({ where: { status: { in: ["QUEUED", "PROCESSING"] } } }),
-    prisma.reportJob.count({ where: { status: "FAILED", updatedAt: { gte: oneHourAgo } } }),
-    prisma.superReportJob.count({ where: { status: "FAILED", updatedAt: { gte: oneHourAgo } } }),
-    prisma.reportJob.findFirst({ where: { status: { in: ["QUEUED", "PROCESSING"] } }, orderBy: { createdAt: "asc" } }),
-    prisma.superReportJob.findFirst({ where: { status: { in: ["QUEUED", "PROCESSING"] } }, orderBy: { createdAt: "asc" } }),
+    db.reportJob.count({ where: { status: { in: ["QUEUED", "PROCESSING"] } } }),
+    db.superReportJob.count({ where: { status: { in: ["QUEUED", "PROCESSING"] } } }),
+    db.reportJob.count({ where: { status: "FAILED", updatedAt: { gte: oneHourAgo } } }),
+    db.superReportJob.count({ where: { status: "FAILED", updatedAt: { gte: oneHourAgo } } }),
+    db.reportJob.findFirst({ where: { status: { in: ["QUEUED", "PROCESSING"] } }, orderBy: { createdAt: "asc" } }),
+    db.superReportJob.findFirst({ where: { status: { in: ["QUEUED", "PROCESSING"] } }, orderBy: { createdAt: "asc" } }),
   ]);
 
   const nowMs = Date.now();
@@ -110,7 +101,7 @@ const getSystemHealth = asyncHandler(async (_req, res) => {
   ]);
 
   const io = getIO();
-  const apiSnapshot = getApiMetricsSnapshot();
+  const apiSnapshot = await getApiMetricsSnapshot();
 
   res.status(200).json({
     mongodb,
@@ -129,6 +120,20 @@ const getSystemHealth = asyncHandler(async (_req, res) => {
   });
 });
 
+const getRateLimitMetrics = asyncHandler(async (req, res) => {
+  const top = Number(req.query?.top || req.query?.limit || 0);
+  const fallbackTop = env.rateLimit.metricsTopNDefault;
+  const safeTop = Number.isFinite(top) && top > 0 ? Math.min(Math.floor(top), 100) : fallbackTop;
+
+  const snapshot = await getRateLimitMetricsSnapshot({ limit: safeTop });
+
+  res.status(200).json({
+    ...snapshot,
+    topN: safeTop,
+  });
+});
+
 module.exports = {
   getSystemHealth,
+  getRateLimitMetrics,
 };

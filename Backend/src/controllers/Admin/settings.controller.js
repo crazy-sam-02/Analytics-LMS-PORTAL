@@ -1,16 +1,23 @@
 const bcrypt = require("bcrypt");
-const prisma = require("../../config/db");
+const models = require("../../models");
 const { createAuditLog } = require("../../services/audit.service");
+const {
+  SYSTEM_DEFAULT_TEST_SETTINGS,
+  normalizeTestType,
+  normalizeProctoringPreset,
+} = require("../../services/test-config.service");
 const { asyncHandler, ApiError } = require("../../utils/http");
 
 const settingsKey = (collegeId) => `college.${collegeId}.admin.defaults`;
 
 const defaultSettings = {
   defaultTestConfig: {
-    durationMins: 60,
-    attemptsAllowed: 1,
-    violationThreshold: 3,
-    evaluationRule: "BEST_ATTEMPT",
+    durationMins: SYSTEM_DEFAULT_TEST_SETTINGS.durationMins,
+    attemptsAllowed: SYSTEM_DEFAULT_TEST_SETTINGS.attemptsAllowed,
+    violationThreshold: SYSTEM_DEFAULT_TEST_SETTINGS.proctoringConfig.violationThreshold,
+    evaluationRule: SYSTEM_DEFAULT_TEST_SETTINGS.evaluationRule,
+    testType: SYSTEM_DEFAULT_TEST_SETTINGS.testType,
+    proctoringPreset: SYSTEM_DEFAULT_TEST_SETTINGS.proctoringPreset,
   },
   collegeSettings: {
     allowBatchArchive: true,
@@ -19,11 +26,32 @@ const defaultSettings = {
   },
 };
 
+const mergeWithDefaultSettings = (value = {}) => ({
+  defaultTestConfig: {
+    ...defaultSettings.defaultTestConfig,
+    ...(value?.defaultTestConfig || {}),
+    testType: normalizeTestType(
+      value?.defaultTestConfig?.testType,
+      defaultSettings.defaultTestConfig.testType
+    ),
+    proctoringPreset: normalizeProctoringPreset(
+      value?.defaultTestConfig?.proctoringPreset,
+      defaultSettings.defaultTestConfig.proctoringPreset
+    ),
+  },
+  collegeSettings: {
+    ...defaultSettings.collegeSettings,
+    ...(value?.collegeSettings || {}),
+  },
+});
+
 const getAdminSettings = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const key = settingsKey(req.collegeId);
 
   const [profile, collegeSettings] = await Promise.all([
-    prisma.admin.findFirst({
+    db.admin.findFirst({
       where: {
         id: req.admin.id,
         collegeId: req.collegeId,
@@ -33,7 +61,7 @@ const getAdminSettings = asyncHandler(async (req, res) => {
         department: true,
       },
     }),
-    prisma.platformSetting.findUnique({ where: { key } }),
+    db.platformSetting.findUnique({ where: { key } }),
   ]);
 
   if (!profile) {
@@ -50,28 +78,29 @@ const getAdminSettings = asyncHandler(async (req, res) => {
       college: profile.college,
       department: profile.department,
     },
-    settings: collegeSettings?.value || defaultSettings,
+    settings: mergeWithDefaultSettings(collegeSettings?.value || {}),
   });
 });
 
 const updateAdminSettings = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const key = settingsKey(req.collegeId);
-  const existing = await prisma.platformSetting.findUnique({ where: { key } });
+  const existing = await db.platformSetting.findUnique({ where: { key } });
 
-  const nextValue = {
+  const nextValue = mergeWithDefaultSettings({
+    ...existing?.value,
     defaultTestConfig: {
-      ...defaultSettings.defaultTestConfig,
       ...(existing?.value?.defaultTestConfig || {}),
       ...(req.body.defaultTestConfig || {}),
     },
     collegeSettings: {
-      ...defaultSettings.collegeSettings,
       ...(existing?.value?.collegeSettings || {}),
       ...(req.body.collegeSettings || {}),
     },
-  };
+  });
 
-  const updated = await prisma.platformSetting.upsert({
+  const updated = await db.platformSetting.upsert({
     where: { key },
     update: {
       value: nextValue,
@@ -101,9 +130,11 @@ const updateAdminSettings = asyncHandler(async (req, res) => {
 });
 
 const changeAdminPassword = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const { currentPassword, newPassword } = req.body;
 
-  const admin = await prisma.admin.findFirst({
+  const admin = await db.admin.findFirst({
     where: {
       id: req.admin.id,
       collegeId: req.collegeId,
@@ -120,7 +151,7 @@ const changeAdminPassword = asyncHandler(async (req, res) => {
   }
 
   const nextHash = await bcrypt.hash(newPassword, 10);
-  await prisma.admin.update({
+  await db.admin.update({
     where: { id: admin.id },
     data: { passwordHash: nextHash },
   });

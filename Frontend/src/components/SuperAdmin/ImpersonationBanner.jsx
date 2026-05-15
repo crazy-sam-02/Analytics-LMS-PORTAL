@@ -23,14 +23,14 @@ export default function ImpersonationBanner() {
   if (!session?.active) return null;
 
   return (
-    <div className="border-b border-amber-300 bg-amber-100 px-4 py-2 text-sm text-amber-900">
+    <div className="border-b border-warning/30 bg-warning/15 px-4 py-2 text-sm text-warning">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p>
           <strong>Impersonation mode</strong> Viewing as: {session.targetName || "Unknown"} ({session.targetRole || "user"}) - All writes are disabled.
         </p>
         <button
           type="button"
-          className="rounded-md border border-amber-400 px-2 py-1 text-xs font-semibold hover:bg-amber-200"
+          className="rounded-md border border-warning/40 px-2 py-1 text-xs font-semibold hover:bg-warning/20"
           onClick={() => {
             localStorage.removeItem(STORAGE_KEY);
             setSession(null);

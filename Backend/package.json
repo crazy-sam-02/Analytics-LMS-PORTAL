@@ -8,17 +8,27 @@
     "start": "node src/server.js",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "db:seed": "node scripts/mongo/seed.js",
-    "test": "echo \"No tests configured\""
+    "load:exam-start": "k6 run scripts/load/exam-start-spike.k6.js",
+    "load:exam-start:strict": "k6 run -e EXPECT_STATUS=200,201 scripts/load/exam-start-spike.k6.js",
+    "load:exam-start:win": "\"C:\\Program Files\\k6\\k6.exe\" run scripts/load/exam-start-spike.k6.js",
+    "load:exam-start:win:strict": "\"C:\\Program Files\\k6\\k6.exe\" run -e EXPECT_STATUS=200,201 scripts/load/exam-start-spike.k6.js",
+    "load:exam-start:docker": "docker run --rm -i -v \"%cd%:/work\" -w /work grafana/k6 run -e BASE_URL=http://host.docker.internal:5000 scripts/load/exam-start-spike.k6.js",
+    "load:exam-start:docker:strict": "docker run --rm -i -v \"%cd%:/work\" -w /work grafana/k6 run -e BASE_URL=http://host.docker.internal:5000 -e EXPECT_STATUS=200,201 scripts/load/exam-start-spike.k6.js",
+    "db:migrate:admin-access-profiles": "node scripts/mongo/backfill-admin-access-profiles.js",
+    "db:migrate:objectid-ids": "node scripts/mongo/migrate-objectid-ids.js",
+    "db:create-indexes": "node scripts/mongo/create-indexes.js",
+    "test": "jest --runInBand"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@socket.io/redis-adapter": "^8.3.0",
     "bcrypt": "^6.0.0",
     "bullmq": "^5.58.5",
     "cloudinary": "^2.9.0",
+    "compression": "^1.8.1",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^17.4.1",
@@ -30,6 +40,7 @@
     "mongoose": "^8.14.3",
     "morgan": "^1.10.0",
     "multer": "^2.1.1",
+    "puppeteer": "^24.42.0",
     "socket.io": "^4.8.3",
     "zod": "^3.24.2"
   },
@@ -37,6 +48,7 @@
     "@eslint/js": "^10.0.1",
     "eslint": "^10.2.0",
     "globals": "^17.4.0",
+    "jest": "^29.7.0",
     "nodemon": "^3.1.10"
   }
 }

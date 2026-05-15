@@ -1,41 +1,16 @@
-const prisma = require("../../config/db");
+const models = require("../../models");
 const { ApiError, asyncHandler } = require("../../utils/http");
 
-const DEFAULT_SUBJECTS = [
-  "Quantitative Aptitude",
-  "Verbal Ability",
-  "Logical Reasoning",
-  "Non-Verbal Reasoning",
-  "Coding",
-  "General Aptitude",
-];
-
-const ensureDefaultSubjects = async (collegeId) => {
-  const existing = await prisma.subject.findMany({
-    where: { collegeId },
-    select: { id: true },
-    take: 1,
-  });
-
-  if (existing.length > 0) {
-    return;
-  }
-
-  await prisma.subject.createMany({
-    data: DEFAULT_SUBJECTS.map((name) => ({
-      name,
-      collegeId,
-    })),
-    skipDuplicates: true,
-  });
-};
-
 const getSubjects = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const collegeId = req.collegeId;
-  await ensureDefaultSubjects(collegeId);
 
-  const subjects = await prisma.subject.findMany({
+  const subjects = await db.subject.findMany({
     where: { collegeId },
+    include: {
+      createdByAdmin: true,
+    },
     orderBy: { updatedAt: "desc" },
   });
 
@@ -43,7 +18,7 @@ const getSubjects = asyncHandler(async (req, res) => {
   const counts = subjectIds.length
     ? await Promise.all(
         subjectIds.map((subjectId) =>
-          prisma.questionBank.count({
+          db.questionBank.count({
             where: { collegeId, subjectId, isActive: { not: false } },
           })
         )
@@ -60,6 +35,8 @@ const getSubjects = asyncHandler(async (req, res) => {
 });
 
 const createSubject = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const collegeId = req.collegeId;
   const name = String(req.body?.name || "").trim();
 
@@ -67,7 +44,7 @@ const createSubject = asyncHandler(async (req, res) => {
     throw new ApiError(422, "Subject name is required");
   }
 
-  const exists = await prisma.subject.findFirst({
+  const exists = await db.subject.findFirst({
     where: {
       collegeId,
       name: { equals: name, mode: "insensitive" },
@@ -78,7 +55,7 @@ const createSubject = asyncHandler(async (req, res) => {
     throw new ApiError(409, "Subject already exists");
   }
 
-  const subject = await prisma.subject.create({
+  const subject = await db.subject.create({
     data: {
       collegeId,
       name,
@@ -90,10 +67,12 @@ const createSubject = asyncHandler(async (req, res) => {
 });
 
 const deleteSubject = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const collegeId = req.collegeId;
   const { id } = req.params;
 
-  const subject = await prisma.subject.findFirst({
+  const subject = await db.subject.findFirst({
     where: { id, collegeId },
   });
 
@@ -101,7 +80,7 @@ const deleteSubject = asyncHandler(async (req, res) => {
     throw new ApiError(404, "Subject not found");
   }
 
-  const linkedQuestions = await prisma.questionBank.count({
+  const linkedQuestions = await db.questionBank.count({
     where: { collegeId, subjectId: id },
   });
 
@@ -109,7 +88,7 @@ const deleteSubject = asyncHandler(async (req, res) => {
     throw new ApiError(409, "Cannot delete subject with existing questions", { questionCount: linkedQuestions }, "SUBJECT_IN_USE");
   }
 
-  await prisma.subject.delete({ where: { id } });
+  await db.subject.delete({ where: { id } });
 
   res.status(200).json({ message: "Subject deleted" });
 });

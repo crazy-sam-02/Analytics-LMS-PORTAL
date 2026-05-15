@@ -1,0 +1,222 @@
+const bcrypt = require("bcrypt");
+const models = require("../models");
+const { ApiError } = require("../utils/http");
+const { createAuditLog } = require("./audit.service");
+
+const createStudentPassword = (fullName, enrollNumber) => {
+  const nameLetters = String(fullName || "").replace(/[^a-zA-Z]/g, "");
+  const baseName = (nameLetters.slice(0, 3) || "Stu").padEnd(3, "x");
+  const namePart = `${baseName.charAt(0).toUpperCase()}${baseName.slice(1).toLowerCase()}`;
+
+  const enrollDigits = String(enrollNumber || "").replace(/\D/g, "");
+  if (enrollDigits.length < 3) {
+    throw new ApiError(400, "Enroll number must contain at least 3 digits");
+  }
+
+  return `${namePart}@${enrollDigits.slice(-3)}`;
+};
+
+const generateUniqueStudentId = async (db, collegeId, seedValue = "") => {
+  const seedDigits = String(seedValue || "").replace(/\D/g, "");
+  const suffix = (seedDigits.slice(-4) || `${Date.now()}`.slice(-4)).padStart(4, "0");
+
+  let index = 0;
+  while (index < 500) {
+    const candidate = index === 0 ? `STD-${suffix}` : `STD-${suffix}-${String(index).padStart(2, "0")}`;
+    const exists = await db.student.findFirst({ where: { collegeId, studentId: candidate }, select: { id: true } });
+    if (!exists) return candidate;
+    index += 1;
+  }
+
+  throw new ApiError(500, "Unable to generate unique student id");
+};
+
+const parseCsv = (csvText) => {
+  const rows = String(csvText || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (rows.length === 0) return [];
+
+  const headers = rows[0].split(",").map((value) => value.trim().toLowerCase());
+  return rows.slice(1).map((line, rowIndex) => {
+    const values = line.split(",").map((value) => value.trim());
+    const record = { __row: rowIndex + 2 };
+    headers.forEach((key, index) => {
+      record[key] = values[index] || "";
+    });
+    return record;
+  });
+};
+
+const processBulkImportJob = async ({ jobId, collegeId, adminId, csvData }, db) => {
+  const rows = parseCsv(csvData);
+  const result = { created: 0, failed: 0, duplicates: 0, errors: [] };
+
+  try {
+    await db.reportJob.update({ where: { id: jobId }, data: { status: "PROCESSING" } });
+
+    for (const row of rows) {
+      const fullName = row.fullname || row.name || "";
+      const email = row.email || "";
+      const requestedStudentId = row.studentid || row.student_id || "";
+      const enrollNumber = row.enrollnumber || row.enroll_number || requestedStudentId;
+      const departmentName = row.department || row.departmentname || "";
+      const batchName = row.batch || row.batchname || "";
+
+      if (!fullName || !email || !departmentName || !enrollNumber) {
+        result.failed += 1;
+        result.errors.push({ row: row.__row, reason: "Missing required columns" });
+        continue;
+      }
+
+      const duplicateEmail = await db.student.findFirst({ where: { collegeId, email } });
+
+      const duplicateStudentId = requestedStudentId
+        ? await db.student.findFirst({ where: { collegeId, studentId: requestedStudentId } })
+        : null;
+
+      if (duplicateEmail || duplicateStudentId) {
+        result.duplicates += 1;
+        result.errors.push({ row: row.__row, reason: duplicateEmail ? "Duplicate email" : "Duplicate student id" });
+        continue;
+      }
+
+      const department = await db.department.findFirst({ where: { collegeId, name: { equals: departmentName, mode: "insensitive" } } });
+      if (!department) {
+        result.failed += 1;
+        result.errors.push({ row: row.__row, reason: "Invalid department" });
+        continue;
+      }
+
+      const batch = batchName
+        ? await db.batch.findFirst({ where: { collegeId, departmentId: department.id, name: { equals: batchName, mode: "insensitive" } } })
+        : null;
+
+      const generatedPassword = createStudentPassword(fullName, enrollNumber);
+      const passwordHash = await bcrypt.hash(generatedPassword, 10);
+      const studentId = requestedStudentId || (await generateUniqueStudentId(db, collegeId, enrollNumber));
+
+      await db.student.create({ data: { fullName, email, studentId, passwordHash, collegeId, departmentId: department.id, batchId: batch?.id || null } });
+
+      result.created += 1;
+    }
+
+    await db.reportJob.update({ where: { id: jobId }, data: { status: "COMPLETED", filters: { type: "STUDENT_IMPORT", result, completedAt: new Date().toISOString() } } });
+
+    await createAuditLog({ action: "ADMIN_STUDENT_BULK_IMPORT_COMPLETED", targetType: "STUDENT_IMPORT", targetId: jobId, collegeId, adminId, afterState: result });
+  } catch (error) {
+    await db.reportJob.update({ where: { id: jobId }, data: { status: "FAILED", filters: { type: "STUDENT_IMPORT", result, failedAt: new Date().toISOString(), error: error?.message || "Unknown failure" } } });
+  }
+};
+
+const listStudents = async (collegeId, opts = {}) => {
+  const m = await models.init();
+  const db = m.dbClient;
+  const page = Number(opts.page || 1);
+  const limit = Number(opts.limit || 20);
+
+  const where = {
+    collegeId,
+    ...(opts.departmentId ? { departmentId: opts.departmentId } : {}),
+    ...(opts.batchId ? { batchId: opts.batchId } : {}),
+    ...(opts.search
+      ? { OR: [{ fullName: { contains: opts.search, mode: "insensitive" } }, { email: { contains: opts.search, mode: "insensitive" } }] }
+      : {}),
+  };
+
+  const [total, data] = await Promise.all([
+    db.student.count({ where }),
+    db.student.findMany({ where, include: { batch: true, department: true, _count: { select: { submissions: true } } }, orderBy: { createdAt: "desc" }, skip: (page - 1) * limit, take: limit }),
+  ]);
+
+  return { data, total, page, limit };
+};
+
+const createStudent = async (collegeId, adminId, payload) => {
+  const m = await models.init();
+  const db = m.dbClient;
+  const { fullName, email, department, enrollNumber, batch: batchId } = payload;
+  const generatedStudentId = await generateUniqueStudentId(db, collegeId, enrollNumber);
+
+  const [duplicateEmail] = await Promise.all([db.student.findFirst({ where: { collegeId, email } })]);
+  if (duplicateEmail) throw new ApiError(409, "Student with this email already exists");
+
+  const departmentRecord = await db.department.findFirst({ where: { collegeId, name: { equals: department, mode: "insensitive" } } });
+  if (!departmentRecord) throw new ApiError(404, "Department not found");
+
+  const plainPassword = createStudentPassword(fullName, enrollNumber);
+  const passwordHash = await bcrypt.hash(plainPassword, 10);
+
+  let batchRecord = null;
+  if (batchId) {
+    batchRecord = await db.batch.findFirst({ where: { id: batchId, collegeId, departmentId: departmentRecord.id } });
+    if (!batchRecord) throw new ApiError(404, "Batch not found in the selected department");
+  }
+
+  const student = await db.student.create({ data: { fullName, email, studentId: generatedStudentId, passwordHash, collegeId, departmentId: departmentRecord.id, batchId: batchRecord?.id || null }, include: { department: true, batch: true } });
+
+  await createAuditLog({ action: "ADMIN_STUDENT_CREATED", targetType: "STUDENT", targetId: student.id, collegeId, adminId, afterState: { email: student.email, studentId: student.studentId, departmentId: student.departmentId } });
+
+  return { student, credentials: { identifier: student.email, studentId: student.studentId, password: plainPassword } };
+};
+
+const getStudentPerformance = async (collegeId, studentId) => {
+  const m = await models.init();
+  const db = m.dbClient;
+  const student = await db.student.findFirst({ where: { id: studentId, collegeId }, include: { submissions: { include: { test: { select: { title: true, subject: true } } }, orderBy: { createdAt: "desc" } } } });
+  return student;
+};
+
+const getStudentProfile = async (collegeId, studentId) => {
+  const m = await models.init();
+  const db = m.dbClient;
+  const student = await db.student.findFirst({ where: { id: studentId, collegeId }, include: { batch: true, department: true, _count: { select: { submissions: true } } } });
+  if (!student) throw new ApiError(404, "Student not found");
+  return student;
+};
+
+const assignStudentToBatch = async (collegeId, adminId, studentId, batchId) => {
+  const m = await models.init();
+  const db = m.dbClient;
+  const [batch, student] = await Promise.all([db.batch.findFirst({ where: { id: batchId, collegeId } }), db.student.findFirst({ where: { id: studentId, collegeId } })]);
+  if (!batch || !student) throw new ApiError(404, "Student or batch not found");
+
+  const updated = await db.student.update({ where: { id: studentId }, data: { batchId, departmentId: batch.departmentId } });
+
+  await createAuditLog({ action: "ADMIN_STUDENT_BATCH_ASSIGNED", targetType: "STUDENT", targetId: studentId, collegeId, adminId, afterState: { batchId, departmentId: batch.departmentId } });
+
+  return updated;
+};
+
+const bulkImportStudents = async (collegeId, adminId, csvData) => {
+  const m = await models.init();
+  const db = m.dbClient;
+
+  const job = await db.reportJob.create({ data: { type: "STUDENT_IMPORT", status: "QUEUED", collegeId, adminId, filters: { startedAt: new Date().toISOString() } } });
+
+  setTimeout(() => {
+    processBulkImportJob({ jobId: job.id, collegeId, adminId, csvData }, db);
+  }, 0);
+
+  return { jobId: job.id, status: job.status };
+};
+
+const getStudentImportJob = async (collegeId, jobId) => {
+  const m = await models.init();
+  const db = m.dbClient;
+  const job = await db.reportJob.findFirst({ where: { id: jobId, collegeId, type: "STUDENT_IMPORT" } });
+  if (!job) throw new ApiError(404, "Import job not found");
+  return { jobId: job.id, status: String(job.status || "QUEUED").toLowerCase(), result: job.filters?.result || null, error: job.filters?.error || null };
+};
+
+module.exports = {
+  listStudents,
+  createStudent,
+  getStudentPerformance,
+  getStudentProfile,
+  assignStudentToBatch,
+  bulkImportStudents,
+  getStudentImportJob,
+};

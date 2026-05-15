@@ -1,4 +1,4 @@
-const prisma = require("../../config/db");
+const models = require("../../models");
 const bcrypt = require("bcrypt");
 const { createAuditLog } = require("../../services/audit.service");
 const { ApiError, asyncHandler } = require("../../utils/http");
@@ -17,13 +17,15 @@ const createStudentPassword = (fullName, enrollNumber) => {
 };
 
 const generateUniqueStudentId = async (collegeId, seedValue = "") => {
+  const m = await models.init();
+  const db = m.dbClient;
   const seedDigits = String(seedValue || "").replace(/\D/g, "");
   const suffix = (seedDigits.slice(-4) || `${Date.now()}`.slice(-4)).padStart(4, "0");
 
   let index = 0;
   while (index < 500) {
     const candidate = index === 0 ? `STD-${suffix}` : `STD-${suffix}-${String(index).padStart(2, "0")}`;
-    const exists = await prisma.student.findFirst({
+    const exists = await db.student.findFirst({
       where: {
         collegeId,
         studentId: candidate,
@@ -73,6 +75,8 @@ const getRowValue = (row, aliases = []) => {
 };
 
 const processBulkImportJob = async ({ jobId, collegeId, superAdminId, csvData }) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const rows = parseCsv(csvData);
   const result = {
     created: 0,
@@ -82,7 +86,7 @@ const processBulkImportJob = async ({ jobId, collegeId, superAdminId, csvData })
   };
 
   try {
-    await prisma.reportJob.update({
+    await db.reportJob.update({
       where: { id: jobId },
       data: {
         status: "PROCESSING",
@@ -103,7 +107,7 @@ const processBulkImportJob = async ({ jobId, collegeId, superAdminId, csvData })
         continue;
       }
 
-      const duplicateEmail = await prisma.student.findFirst({
+      const duplicateEmail = await db.student.findFirst({
         where: {
           collegeId,
           email,
@@ -111,7 +115,7 @@ const processBulkImportJob = async ({ jobId, collegeId, superAdminId, csvData })
       });
 
       const duplicateStudentId = requestedStudentId
-        ? await prisma.student.findFirst({
+        ? await db.student.findFirst({
             where: {
               collegeId,
               studentId: requestedStudentId,
@@ -125,14 +129,14 @@ const processBulkImportJob = async ({ jobId, collegeId, superAdminId, csvData })
         continue;
       }
 
-      const departmentById = await prisma.department.findFirst({
+      const departmentById = await db.department.findFirst({
         where: {
           id: departmentLookup,
           collegeId,
         },
       });
 
-      const department = departmentById || await prisma.department.findFirst({
+      const department = departmentById || await db.department.findFirst({
         where: {
           collegeId,
           name: {
@@ -150,7 +154,7 @@ const processBulkImportJob = async ({ jobId, collegeId, superAdminId, csvData })
 
       let batch = null;
       if (batchLookup) {
-        const batchById = await prisma.batch.findFirst({
+        const batchById = await db.batch.findFirst({
           where: {
             id: batchLookup,
             collegeId,
@@ -158,7 +162,7 @@ const processBulkImportJob = async ({ jobId, collegeId, superAdminId, csvData })
           },
         });
 
-        batch = batchById || await prisma.batch.findFirst({
+        batch = batchById || await db.batch.findFirst({
           where: {
             collegeId,
             departmentId: department.id,
@@ -174,7 +178,7 @@ const processBulkImportJob = async ({ jobId, collegeId, superAdminId, csvData })
       const passwordHash = await bcrypt.hash(generatedPassword, 10);
       const studentId = requestedStudentId || await generateUniqueStudentId(collegeId, enrollNumber);
 
-      await prisma.student.create({
+      await db.student.create({
         data: {
           fullName,
           email,
@@ -189,7 +193,7 @@ const processBulkImportJob = async ({ jobId, collegeId, superAdminId, csvData })
       result.created += 1;
     }
 
-    await prisma.reportJob.update({
+    await db.reportJob.update({
       where: { id: jobId },
       data: {
         status: "COMPLETED",
@@ -211,7 +215,7 @@ const processBulkImportJob = async ({ jobId, collegeId, superAdminId, csvData })
       afterState: result,
     });
   } catch (error) {
-    await prisma.reportJob.update({
+    await db.reportJob.update({
       where: { id: jobId },
       data: {
         status: "FAILED",
@@ -228,6 +232,8 @@ const processBulkImportJob = async ({ jobId, collegeId, superAdminId, csvData })
 };
 
 const getStudentsGlobal = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const page = Number(req.query.page || 1);
   const limit = Number(req.query.limit || 20);
   const search = (req.query.search || "").trim();
@@ -249,7 +255,7 @@ const getStudentsGlobal = asyncHandler(async (req, res) => {
   };
 
   const [items, total] = await Promise.all([
-    prisma.student.findMany({
+    db.student.findMany({
       where,
       include: {
         college: true,
@@ -260,7 +266,7 @@ const getStudentsGlobal = asyncHandler(async (req, res) => {
       skip: (page - 1) * limit,
       take: limit,
     }),
-    prisma.student.count({ where }),
+    db.student.count({ where }),
   ]);
 
   res.status(200).json({
@@ -275,8 +281,10 @@ const getStudentsGlobal = asyncHandler(async (req, res) => {
 });
 
 const toggleStudentStatus = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const { studentId } = req.params;
-  const existing = await prisma.student.findUnique({ where: { id: studentId } });
+  const existing = await db.student.findUnique({ where: { id: studentId } });
 
   if (!existing) {
     throw new ApiError(404, "Student not found");
@@ -289,7 +297,7 @@ const toggleStudentStatus = asyncHandler(async (req, res) => {
     }
   }
 
-  const student = await prisma.student.update({
+  const student = await db.student.update({
     where: { id: studentId },
     data: { isActive: req.body.isActive },
   });
@@ -308,26 +316,28 @@ const toggleStudentStatus = asyncHandler(async (req, res) => {
 });
 
 const createStudentGlobal = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const superAdminId = req.superAdmin.id;
   const { fullName, email, enrollNumber, collegeId, departmentId, department, batchId } = req.body;
 
-  const college = await prisma.college.findUnique({ where: { id: collegeId } });
+  const college = await db.college.findUnique({ where: { id: collegeId } });
   if (!college || !college.isActive) {
     throw new ApiError(400, "Student cannot be created for inactive or missing college");
   }
 
-  const duplicateEmail = await prisma.student.findFirst({ where: { collegeId, email } });
+  const duplicateEmail = await db.student.findFirst({ where: { collegeId, email } });
   if (duplicateEmail) {
     throw new ApiError(409, "Student with this email already exists");
   }
 
   let departmentRecord = null;
   if (departmentId) {
-    departmentRecord = await prisma.department.findFirst({ where: { id: departmentId, collegeId } });
+    departmentRecord = await db.department.findFirst({ where: { id: departmentId, collegeId } });
   }
 
   if (!departmentRecord && department) {
-    departmentRecord = await prisma.department.findFirst({
+    departmentRecord = await db.department.findFirst({
       where: {
         collegeId,
         name: {
@@ -344,7 +354,7 @@ const createStudentGlobal = asyncHandler(async (req, res) => {
 
   let resolvedBatchId = null;
   if (batchId) {
-    const batch = await prisma.batch.findFirst({
+    const batch = await db.batch.findFirst({
       where: {
         id: batchId,
         collegeId,
@@ -363,7 +373,7 @@ const createStudentGlobal = asyncHandler(async (req, res) => {
   const plainPassword = createStudentPassword(fullName, enrollNumber);
   const passwordHash = await bcrypt.hash(plainPassword, 10);
 
-  const student = await prisma.student.create({
+  const student = await db.student.create({
     data: {
       fullName,
       email,
@@ -405,15 +415,17 @@ const createStudentGlobal = asyncHandler(async (req, res) => {
 });
 
 const bulkImportStudentsGlobal = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const { csvData, collegeId } = req.body;
   const superAdminId = req.superAdmin.id;
 
-  const college = await prisma.college.findUnique({ where: { id: collegeId } });
+  const college = await db.college.findUnique({ where: { id: collegeId } });
   if (!college || !college.isActive) {
     throw new ApiError(400, "Import target college is inactive or missing");
   }
 
-  const job = await prisma.reportJob.create({
+  const job = await db.reportJob.create({
     data: {
       type: "STUDENT_IMPORT",
       status: "QUEUED",
@@ -442,9 +454,11 @@ const bulkImportStudentsGlobal = asyncHandler(async (req, res) => {
 });
 
 const getStudentImportJobGlobal = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const { jobId } = req.params;
 
-  const job = await prisma.reportJob.findFirst({
+  const job = await db.reportJob.findFirst({
     where: {
       id: jobId,
       type: "STUDENT_IMPORT",
@@ -463,10 +477,97 @@ const getStudentImportJobGlobal = asyncHandler(async (req, res) => {
   });
 });
 
+const updateStudentGlobal = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
+  const { studentId } = req.params;
+  const { fullName, email, enrollNumber, collegeId, departmentId, batchId, batchIds } = req.body;
+
+  const existing = await db.student.findUnique({ where: { id: studentId } });
+  if (!existing) {
+    throw new ApiError(404, "Student not found");
+  }
+
+  if (email && email !== existing.email) {
+    const duplicate = await db.student.findFirst({
+      where: { collegeId: collegeId || existing.collegeId, email },
+    });
+    if (duplicate) {
+      throw new ApiError(409, "Student with this email already exists");
+    }
+  }
+
+  const updateData = {
+    ...(fullName && { fullName }),
+    ...(email && { email }),
+    ...(enrollNumber && { enrollNumber }),
+    ...(collegeId && { collegeId }),
+    ...(departmentId && { departmentId }),
+  };
+
+  // Handle batch assignment (add to array if single batchId provided, or replace if batchIds array provided)
+  if (batchId !== undefined) {
+    const currentBatchIds = Array.isArray(existing.batchIds) ? existing.batchIds : [];
+    const newBatchIds = [...new Set([...currentBatchIds, batchId])]; // Add to array, avoid duplicates
+    updateData.batchIds = newBatchIds;
+  } else if (batchIds !== undefined) {
+    updateData.batchIds = Array.isArray(batchIds) ? batchIds : [];
+  }
+
+  const student = await db.student.update({
+    where: { id: studentId },
+    data: updateData,
+  });
+
+  await createAuditLog({
+    action: "SUPER_ADMIN_UPDATE_STUDENT",
+    targetType: "STUDENT",
+    targetId: student.id,
+    collegeId: student.collegeId,
+    superAdminId: req.superAdmin.id,
+    beforeState: existing,
+    afterState: student,
+  });
+
+  res.status(200).json(student);
+});
+
+const deleteStudentGlobal = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
+  const { studentId } = req.params;
+  const existing = await db.student.findUnique({ where: { id: studentId } });
+
+  if (!existing) {
+    throw new ApiError(404, "Student not found");
+  }
+
+  const expectedConfirmation = `DELETE ${existing.studentId || existing.id}`;
+  if (req.body?.confirmationText !== expectedConfirmation) {
+    throw new ApiError(400, `Typed acknowledgment mismatch. Expected: ${expectedConfirmation}`);
+  }
+
+  await db.student.delete({ where: { id: studentId } });
+
+  await createAuditLog({
+    action: "SUPER_ADMIN_DELETE_STUDENT",
+    targetType: "STUDENT",
+    targetId: existing.id,
+    collegeId: existing.collegeId,
+    superAdminId: req.superAdmin.id,
+    beforeState: existing,
+    afterState: null,
+  });
+
+  res.status(200).json({ id: studentId });
+});
+
 module.exports = {
   getStudentsGlobal,
   toggleStudentStatus,
   createStudentGlobal,
   bulkImportStudentsGlobal,
   getStudentImportJobGlobal,
+  updateStudentGlobal,
+  deleteStudentGlobal,
 };

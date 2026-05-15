@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useDispatch, useSelector } from "react-redux";
 import { createSuperAdminUser, fetchSuperAdmins, fetchSuperColleges } from "@/features/SuperAdmin/superAdminPanelSlice";
 import { superAdminApi } from "@/services/api";
@@ -54,7 +55,7 @@ export default function AdminsPage() {
   const dispatch = useDispatch();
   const admins = useSelector((state) => state.superAdminPanel.admins);
   const colleges = useSelector((state) => state.superAdminPanel.colleges);
-  const [form, setForm] = useState({ fullName: "", email: "", employeeId: "", password: "", collegeId: "" });
+  const [form, setForm] = useState({ fullName: "", email: "", employeeId: "", password: "", collegeId: "", departmentId: "", accessProfile: "EDITOR" });
   const [pendingAction, setPendingAction] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [importCsv, setImportCsv] = useState(IMPORT_SAMPLE);
@@ -62,11 +63,47 @@ export default function AdminsPage() {
   const [importFileName, setImportFileName] = useState("");
   const [isImporting, setIsImporting] = useState(false);
   const [importResult, setImportResult] = useState(null);
+  const [updatingProfileId, setUpdatingProfileId] = useState("");
+  const [filters, setFilters] = useState({
+    search: "",
+    collegeId: "",
+    status: "all",
+  });
+
+  const buildAdminsQuery = () => {
+    const params = new URLSearchParams();
+    params.set("page", "1");
+    params.set("limit", "100");
+
+    if (filters.search.trim()) {
+      params.set("search", filters.search.trim());
+    }
+    if (filters.collegeId) {
+      params.set("collegeId", filters.collegeId);
+    }
+    if (filters.status && filters.status !== "all") {
+      params.set("status", filters.status);
+    }
+
+    return `?${params.toString()}`;
+  };
+
+  const loadAdmins = () => dispatch(fetchSuperAdmins(buildAdminsQuery()));
 
   useEffect(() => {
-    dispatch(fetchSuperAdmins());
+    loadAdmins();
     dispatch(fetchSuperColleges());
   }, [dispatch]);
+
+  const departmentsQuery = useQuery({
+    queryKey: ["super-admins-departments", form.collegeId],
+    queryFn: () => superAdminApi.getDepartments(`?limit=100&collegeId=${encodeURIComponent(form.collegeId)}`),
+    enabled: Boolean(form.collegeId),
+  });
+
+  const departments = useMemo(() => departmentsQuery.data?.data || [], [departmentsQuery.data]);
+
+  const getAdminId = (admin) => admin?._id || admin?.id || "";
 
   const save = async () => {
     const payload = {
@@ -75,9 +112,11 @@ export default function AdminsPage() {
       employeeId: form.employeeId.trim(),
       password: form.password,
       collegeId: form.collegeId,
+      departmentId: form.departmentId,
+      accessProfile: form.accessProfile,
     };
 
-    if (!payload.fullName || !payload.email || !payload.employeeId || !payload.password || !payload.collegeId) {
+    if (!payload.fullName || !payload.email || !payload.employeeId || !payload.password || !payload.collegeId || !payload.departmentId) {
       toast.error("Please fill all required fields before creating admin.");
       return;
     }
@@ -91,8 +130,8 @@ export default function AdminsPage() {
       setIsSubmitting(true);
       await dispatch(createSuperAdminUser(payload)).unwrap();
       toast.success("Admin created successfully.");
-      setForm({ fullName: "", email: "", employeeId: "", password: "", collegeId: "" });
-      dispatch(fetchSuperAdmins());
+      setForm({ fullName: "", email: "", employeeId: "", password: "", collegeId: "", departmentId: "", accessProfile: "EDITOR" });
+      loadAdmins();
     } catch (error) {
       toast.error(error?.message || "Unable to create admin.");
     } finally {
@@ -102,12 +141,30 @@ export default function AdminsPage() {
 
   const deactivate = async (adminId, confirmationText) => {
     await superAdminApi.deactivateAdmin(adminId, { confirmationText });
-    dispatch(fetchSuperAdmins());
+    loadAdmins();
+  };
+
+  const reactivate = async (adminId) => {
+    await superAdminApi.updateAdmin(adminId, { isActive: true });
+    loadAdmins();
   };
 
   const resetPassword = async (adminId) => {
     await superAdminApi.resetAdminPassword(adminId, { password: "Admin@12345" });
-    dispatch(fetchSuperAdmins());
+    loadAdmins();
+  };
+
+  const updateAccessProfile = async (adminId, accessProfile) => {
+    try {
+      setUpdatingProfileId(adminId);
+      await superAdminApi.updateAdmin(adminId, { accessProfile });
+      toast.success("Admin access profile updated.");
+      loadAdmins();
+    } catch (error) {
+      toast.error(error?.message || "Unable to update admin access profile.");
+    } finally {
+      setUpdatingProfileId("");
+    }
   };
 
   const openResetConfirm = (admin) => {
@@ -130,14 +187,30 @@ export default function AdminsPage() {
     });
   };
 
+  const openReactivateConfirm = (admin) => {
+    setPendingAction({
+      type: "reactivate",
+      admin,
+      title: "Reactivate Admin",
+      description: `Reactivate ${admin.fullName}? They will be able to sign in again.`,
+      confirmLabel: "Reactivate",
+      confirmVariant: "default",
+    });
+  };
+
   const confirmPendingAction = async () => {
-    if (!pendingAction?.admin?.id) {
+    const adminId = getAdminId(pendingAction?.admin);
+    if (!adminId) {
       setPendingAction(null);
       return;
     }
 
     if (pendingAction.type === "reset") {
-      await resetPassword(pendingAction.admin.id);
+      await resetPassword(adminId);
+    }
+
+    if (pendingAction.type === "reactivate") {
+      await reactivate(adminId);
     }
 
     setPendingAction(null);
@@ -223,7 +296,7 @@ export default function AdminsPage() {
       });
       setImportResult(payload?.result || null);
       toast.success("Admin import completed");
-      dispatch(fetchSuperAdmins());
+      loadAdmins();
     } catch (error) {
       toast.error(error?.message || "Admin import failed");
     } finally {
@@ -233,26 +306,45 @@ export default function AdminsPage() {
 
   return (
     <div className="space-y-6">
-      <Card className="rounded-2xl border-slate-200">
+      <Card className="rounded-2xl border-border">
         <CardHeader><CardTitle>Create Admin</CardTitle></CardHeader>
         <CardContent className="grid gap-3 sm:grid-cols-3">
           <Input placeholder="Full Name" value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} />
           <Input placeholder="Email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
           <Input placeholder="Employee ID" value={form.employeeId} onChange={(e) => setForm({ ...form, employeeId: e.target.value })} />
           <Input placeholder="Password" value={form.password} type="password" onChange={(e) => setForm({ ...form, password: e.target.value })} />
-          <select className="h-8 rounded-lg border border-slate-200 px-2" value={form.collegeId} onChange={(e) => setForm({ ...form, collegeId: e.target.value })}>
+          <select
+            className="h-8 rounded-lg border border-border px-2"
+            value={form.collegeId}
+            onChange={(e) => setForm({ ...form, collegeId: e.target.value, departmentId: "" })}
+          >
             <option value="">Select college</option>
             {colleges.filter((college) => college?.isActive !== false).map((college) => (
               <option key={college.id} value={college.id}>{college.name}</option>
             ))}
           </select>
-          <Button className="sm:col-span-3 bg-blue-500 hover:bg-blue-600" onClick={save} disabled={isSubmitting}>
+          <select
+            className="h-8 rounded-lg border border-border px-2"
+            value={form.departmentId}
+            onChange={(e) => setForm({ ...form, departmentId: e.target.value })}
+            disabled={!form.collegeId}
+          >
+            <option value="">Select department</option>
+            {departments.map((department) => (
+              <option key={department.id} value={department.id}>{department.name}</option>
+            ))}
+          </select>
+          <select className="h-8 rounded-lg border border-border px-2" value={form.accessProfile} onChange={(e) => setForm({ ...form, accessProfile: e.target.value })}>
+            <option value="EDITOR">Can Edit</option>
+            <option value="VIEW_ONLY">View Only</option>
+          </select>
+          <Button className="sm:col-span-3 bg-primary/100 hover:bg-primary" onClick={save} disabled={isSubmitting}>
             {isSubmitting ? "Creating..." : "Create Admin"}
           </Button>
         </CardContent>
       </Card>
 
-      <Card className="rounded-2xl border-slate-200">
+      <Card className="rounded-2xl border-border">
         <CardHeader>
           <CardTitle>Bulk Import Admins</CardTitle>
           <CardDescription>Upload Excel/CSV and map each admin to a college by collegeId, collegeCode, or collegeName.</CardDescription>
@@ -260,7 +352,7 @@ export default function AdminsPage() {
         <CardContent className="space-y-3">
           <div className="grid gap-3 sm:grid-cols-3">
             <select
-              className="h-10 rounded-lg border border-slate-200 px-2"
+              className="h-10 rounded-lg border border-border px-2"
               value={importDefaultCollegeId}
               onChange={(event) => setImportDefaultCollegeId(event.target.value)}
             >
@@ -270,12 +362,12 @@ export default function AdminsPage() {
               ))}
             </select>
             <Input type="file" accept=".csv,.xlsx,.xls" onChange={handleImportFile} />
-            <Button variant="outline" onClick={() => { setImportCsv(IMPORT_SAMPLE); setImportFileName(""); setImportResult(null); }}>
+            <Button className="bg-primary py-5 text-white hover:bg-primary text-sm" onClick={() => { setImportCsv(IMPORT_SAMPLE); setImportFileName(""); setImportResult(null); }}>
               Reset Sample
             </Button>
           </div>
 
-          <p className="text-xs text-slate-500">
+          <p className="text-xs text-text-secondary">
             Required columns: fullName, email, employeeId. Optional: password, department, collegeId, collegeCode, collegeName.
             {importFileName ? ` Loaded file: ${importFileName}` : ""}
           </p>
@@ -286,17 +378,17 @@ export default function AdminsPage() {
             onChange={(event) => setImportCsv(event.target.value)}
           />
 
-          <Button className="bg-blue-500 hover:bg-blue-600" onClick={startBulkImport} disabled={isImporting}>
+          <Button className="bg-primary/100 hover:bg-primary" onClick={startBulkImport} disabled={isImporting}>
             {isImporting ? "Importing..." : "Start Import"}
           </Button>
 
           {importResult ? (
-            <div className="rounded-xl border border-slate-200 p-3 text-sm text-slate-700">
+            <div className="rounded-xl border border-border p-3 text-sm text-text-secondary">
               <p>Created: {importResult.created || 0}</p>
               <p>Duplicates: {importResult.duplicates || 0}</p>
               <p>Failed: {importResult.failed || 0}</p>
               {Array.isArray(importResult.errors) && importResult.errors.length > 0 ? (
-                <p className="mt-2 text-xs text-slate-500">
+                <p className="mt-2 text-xs text-text-secondary">
                   Latest errors: {importResult.errors.slice(0, 5).map((item) => `Row ${item.row}: ${item.reason}`).join(" | ")}
                 </p>
               ) : null}
@@ -305,18 +397,82 @@ export default function AdminsPage() {
         </CardContent>
       </Card>
 
-      <Card className="rounded-2xl border-slate-200">
+      <Card className="rounded-2xl border-border">
         <CardHeader><CardTitle>Admins</CardTitle></CardHeader>
-        <CardContent className="space-y-2">
+        <CardContent className="space-y-3">
+          <div className="grid gap-3 sm:grid-cols-4">
+            <Input
+              className="sm:col-span-2"
+              placeholder="Search by name, email, or employee id"
+              value={filters.search}
+              onChange={(event) => setFilters((prev) => ({ ...prev, search: event.target.value }))}
+            />
+
+            <select
+              className="h-10 rounded-lg border border-border px-2"
+              value={filters.collegeId}
+              onChange={(event) => setFilters((prev) => ({ ...prev, collegeId: event.target.value }))}
+            >
+              <option value="">All colleges</option>
+              {colleges.map((college) => (
+                <option key={college.id} value={college.id}>{college.name}</option>
+              ))}
+            </select>
+
+            <select
+              className="h-10 rounded-lg border border-border px-2"
+              value={filters.status}
+              onChange={(event) => setFilters((prev) => ({ ...prev, status: event.target.value }))}
+            >
+              <option value="all">All status</option>
+              <option value="active">Active</option>
+              <option value="inactive">Inactive</option>
+            </select>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <Button className="bg-primary/100 hover:bg-primary" onClick={loadAdmins}>Search</Button>
+            <Button
+              className="bg-red-500/100 hover:bg-red-500 text-white"
+              onClick={() => {
+                setFilters({ search: "", collegeId: "", status: "all" });
+                dispatch(fetchSuperAdmins("?page=1&limit=100"));
+              }}
+            >
+              Reset Filters
+            </Button>
+          </div>
+
           {admins.map((admin) => (
-            <div key={admin.id} className="flex flex-wrap items-center justify-between rounded-xl border border-slate-200 px-3 py-2 gap-2">
+            <div key={getAdminId(admin)} className="flex flex-wrap items-center justify-between rounded-xl border border-border px-3 py-2 gap-2">
               <div>
-                <p className="font-medium text-slate-800">{admin.fullName}</p>
-                <p className="text-xs text-slate-500">{admin.email} • {admin.employeeId} • {admin.college?.name}</p>
+                <p className="font-medium text-text-primary">{admin.fullName}</p>
+                <p className="text-xs text-text-secondary">{admin.email} • {admin.employeeId} • {admin.college?.name}</p>
+                <div className="mt-1 flex flex-wrap items-center gap-2">
+                  <span className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-semibold ${admin.isActive ? "bg-green-500/10 text-green-600" : "bg-red-500/10 text-red-600"}`}>
+                    {admin.isActive ? "Active" : "Inactive"}
+                  </span>
+                  <span className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-semibold ${String(admin.accessProfile || "EDITOR") === "VIEW_ONLY" ? "bg-blue-500/10 text-blue-600" : "bg-amber-500/10 text-amber-700"}`}>
+                    {String(admin.accessProfile || "EDITOR") === "VIEW_ONLY" ? "View Only" : "Can Edit"}
+                  </span>
+                </div>
               </div>
               <div className="flex gap-2">
-                <Button size="sm" variant="outline" onClick={() => openResetConfirm(admin)}>Reset Password</Button>
-                <Button size="sm" variant="outline" onClick={() => openDeactivateConfirm(admin)} disabled={!admin.isActive}>{admin.isActive ? "Deactivate" : "Disabled"}</Button>
+                <select
+                  className="h-8 rounded-lg border border-border px-2 text-xs"
+                  value={admin.accessProfile || "EDITOR"}
+                  disabled={updatingProfileId === getAdminId(admin)}
+                  onChange={(event) => updateAccessProfile(getAdminId(admin), event.target.value)}
+                >
+                  <option value="EDITOR">Can Edit</option>
+                  <option value="VIEW_ONLY">View Only</option>
+                </select>
+                <Button size="sm" className="bg-primary/100 hover:bg-primary" onClick={() => openResetConfirm(admin)}>Reset Password</Button>
+                {admin.isActive ? (
+                  <Button size="sm" variant="destructive" onClick={() => openDeactivateConfirm(admin)}>Deactivate</Button>
+                ) : (
+                  <Button size="sm" className="bg-primary/100 hover:bg-primary" onClick={() => openReactivateConfirm(admin)}>Reactivate</Button>
+                )}
               </div>
             </div>
           ))}
@@ -324,7 +480,7 @@ export default function AdminsPage() {
       </Card>
 
       <ConfirmActionDialog
-        open={Boolean(pendingAction && pendingAction.type === "reset")}
+        open={Boolean(pendingAction && (pendingAction.type === "reset" || pendingAction.type === "reactivate"))}
         onOpenChange={(open) => !open && setPendingAction(null)}
         title={pendingAction?.title || "Confirm Action"}
         description={pendingAction?.description || "Please confirm this action."}
@@ -338,13 +494,14 @@ export default function AdminsPage() {
         onOpenChange={(open) => !open && setPendingAction(null)}
         title="Typed Confirmation Required"
         description={`This will immediately disable ${pendingAction?.admin?.fullName || "this admin"}. Type the confirmation text to proceed.`}
-        expectedText={`DEACTIVATE ${pendingAction?.admin?.employeeId || pendingAction?.admin?.id || ""}`}
+        expectedText={`DEACTIVATE ${pendingAction?.admin?.employeeId || getAdminId(pendingAction?.admin) || ""}`}
         inputLabel="Type the exact phrase"
         confirmLabel="Deactivate"
         confirmVariant="destructive"
         onConfirm={async (typedText) => {
-          if (pendingAction?.admin?.id) {
-            await deactivate(pendingAction.admin.id, typedText);
+          const adminId = getAdminId(pendingAction?.admin);
+          if (adminId) {
+            await deactivate(adminId, typedText);
           }
           setPendingAction(null);
         }}

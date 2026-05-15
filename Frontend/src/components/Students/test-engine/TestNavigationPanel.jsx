@@ -23,13 +23,13 @@ export function TestNavigationPanel({
   const answeredCount = questionOrder.filter((questionId) => hasAnswer(answers[questionId])).length;
 
   return (
-    <aside className="border-l border-slate-200 bg-slate-50 p-4">
-      <p className="mb-3 text-xs font-semibold tracking-[0.12em] text-slate-600 uppercase">Question Palette</p>
+    <aside className="border-l border-border bg-background p-4">
+      <p className="mb-3 text-xs font-semibold tracking-[0.12em] text-text-secondary uppercase">Question Palette</p>
 
-      <div className="mb-4 rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600">
-        <p>Answered: <span className="font-semibold text-emerald-700">{answeredCount}</span></p>
+      <div className="mb-4 rounded-xl border border-border bg-card p-3 text-xs text-text-secondary">
+        <p>Answered: <span className="font-semibold text-success">{answeredCount}</span></p>
         <p>Unanswered: <span className="font-semibold text-rose-700">{questionOrder.length - answeredCount}</span></p>
-        <p>Marked: <span className="font-semibold text-amber-700">{markedSet.size}</span></p>
+        <p>Marked: <span className="font-semibold text-warning">{markedSet.size}</span></p>
       </div>
 
       <div className="grid grid-cols-5 gap-2">
@@ -44,12 +44,12 @@ export function TestNavigationPanel({
               onClick={() => onJump(index)}
               className={`grid h-9 place-items-center rounded-lg border text-xs font-semibold transition ${
                 index === currentIndex
-                  ? "border-blue-600 bg-blue-600 text-white"
+                  ? "border-primary bg-primary text-primary-foreground"
                   : marked
-                    ? "border-amber-500 bg-amber-50 text-amber-700"
+                    ? "border-warning/50 bg-warning/10 text-warning"
                     : answered
-                      ? "border-emerald-500 bg-emerald-50 text-emerald-700"
-                      : "border-slate-300 bg-white text-slate-700"
+                      ? "border-success/50 bg-success/10 text-success"
+                      : "border-border bg-card text-text-secondary"
               }`}
             >
               {index + 1}

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -19,6 +20,17 @@ export default function ConfirmActionDialog({
   confirmVariant = "default",
   onConfirm,
 }) {
+  const [isLoading, setIsLoading] = useState(false);
+
+  const handleConfirm = async () => {
+    setIsLoading(true);
+    try {
+      await onConfirm?.();
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
@@ -27,9 +39,9 @@ export default function ConfirmActionDialog({
           <AlertDialogDescription>{description}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel>{cancelLabel}</AlertDialogCancel>
-          <AlertDialogAction variant={confirmVariant} onClick={onConfirm}>
-            {confirmLabel}
+          <AlertDialogCancel disabled={isLoading}>{cancelLabel}</AlertDialogCancel>
+          <AlertDialogAction variant={confirmVariant} onClick={handleConfirm} disabled={isLoading}>
+            {isLoading ? "Processing..." : confirmLabel}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

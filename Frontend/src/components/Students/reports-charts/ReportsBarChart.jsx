@@ -21,7 +21,7 @@ export function ReportsBarChart({ data = [] }) {
   if (normalized.length === 0) {
     return (
       <Card className="p-5">
-        <Empty className="border border-slate-100">
+        <Empty className="border border-border">
           <EmptyHeader>
             <EmptyTitle>No Topic Data</EmptyTitle>
             <EmptyDescription>At least one completed test is needed for topic bars.</EmptyDescription>
@@ -33,14 +33,14 @@ export function ReportsBarChart({ data = [] }) {
 
   return (
     <Card className="min-w-0 p-5">
-      <h3 className="text-base font-semibold text-slate-900">Topic-wise Performance</h3>
+      <h3 className="text-base font-semibold text-text-primary">Topic-wise Performance</h3>
       <div className="mt-4 h-64 w-full min-w-0">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={normalized} margin={{ top: 8, right: 12, left: -16, bottom: 0 }}>
             <XAxis dataKey="topic" tick={{ fontSize: 11 }} interval={0} angle={-15} textAnchor="end" height={48} />
             <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} />
             <Tooltip formatter={(value) => [`${value}%`, "Score"]} />
-            <Bar dataKey="value" fill="#1d4ed8" radius={[6, 6, 0, 0]} />
+            <Bar dataKey="value" fill="var(--primary-dark)" radius={[6, 6, 0, 0]} />
           </BarChart>
         </ResponsiveContainer>
       </div>

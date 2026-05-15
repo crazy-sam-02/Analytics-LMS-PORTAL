@@ -19,7 +19,7 @@ export function MCQMultiQuestion({ question, answer, onChange, disabled }) {
         <label
           key={String(option)}
           className={`flex cursor-pointer items-center gap-3 rounded-xl border px-4 py-3 transition ${
-            selected.includes(option) ? "border-blue-500 bg-blue-50" : "border-slate-200 bg-white"
+            selected.includes(option) ? "border-primary bg-primary/10" : "border-border bg-card"
           } ${disabled ? "cursor-not-allowed opacity-70" : ""}`}
         >
           <input
@@ -28,7 +28,7 @@ export function MCQMultiQuestion({ question, answer, onChange, disabled }) {
             disabled={disabled}
             onChange={() => toggleOption(option)}
           />
-          <span className="text-slate-800">{option}</span>
+          <span className="text-text-primary">{option}</span>
         </label>
       ))}
     </div>

@@ -282,23 +282,23 @@ export default function LeaderboardPage() {
       <div className="grid gap-4 md:grid-cols-3">
         <Card className="flex items-center gap-3 p-5">
           <div className="grid size-10 place-items-center rounded-xl bg-yellow-100 text-yellow-600"><Crown className="size-5" /></div>
-          <div>
-            <p className="text-xs tracking-wide text-slate-500 uppercase">Top Rank</p>
-            <p className="text-lg font-semibold text-slate-900">#{topHundred[0]?.rank || "-"}</p>
+          <div className="flex flex-col items-center">
+            <p className="text-xs tracking-wide text-text-secondary uppercase">Top Rank</p>
+            <p className="text-lg font-semibold text-text-primary">#{topHundred[0]?.rank || "-"}</p>
           </div>
         </Card>
         <Card className="flex items-center gap-3 p-5">
-          <div className="grid size-10 place-items-center rounded-xl bg-blue-100 text-blue-700"><Trophy className="size-5" /></div>
-          <div>
-            <p className="text-xs tracking-wide text-slate-500 uppercase">Highest Score</p>
-            <p className="text-lg font-semibold text-slate-900">{topHundred[0]?.score ?? "-"}</p>
+          <div className="grid size-10 place-items-center rounded-xl bg-primary/15 text-primary"><Trophy className="size-5" /></div>
+          <div className="flex flex-col items-center">
+            <p className="text-xs tracking-wide text-text-secondary uppercase">Highest Score</p>
+            <p className="text-lg font-semibold text-text-primary">{topHundred[0]?.score ?? "-"}</p>
           </div>
         </Card>
         <Card className="flex items-center gap-3 p-5">
           <div className="grid size-10 place-items-center rounded-xl bg-indigo-100 text-indigo-700"><Medal className="size-5" /></div>
-          <div>
-            <p className="text-xs tracking-wide text-slate-500 uppercase">Visible Entries</p>
-            <p className="text-lg font-semibold text-slate-900">{displayRows.filter((row) => row.kind === "row").length}</p>
+          <div className="flex flex-col items-center">
+            <p className="text-xs tracking-wide text-text-secondary uppercase">Visible Entries</p>
+            <p className="text-lg font-semibold text-text-primary">{displayRows.filter((row) => row.kind === "row").length}</p>
           </div>
         </Card>
       </div>
@@ -351,7 +351,7 @@ export default function LeaderboardPage() {
           <button
             type="button"
             onClick={() => setFocusMyPosition((prev) => !prev)}
-            className="h-10 rounded-md border border-slate-200 px-3 text-sm font-medium text-slate-700"
+            className="h-10 rounded-md border border-border px-3 text-sm font-medium text-text-secondary"
             disabled={!currentStudentRow}
           >
             {focusMyPosition ? "Show Full List" : "Focus My Position"}
@@ -364,7 +364,7 @@ export default function LeaderboardPage() {
                 rowVirtualizer.scrollToIndex(currentStudentDisplayIndex, { align: "center" });
               }
             }}
-            className="h-10 rounded-md border border-slate-200 px-3 text-sm font-medium text-slate-700"
+            className="h-10 rounded-md border border-border px-3 text-sm font-medium text-text-secondary"
             disabled={currentStudentDisplayIndex < 0}
           >
             Jump To Me
@@ -372,25 +372,25 @@ export default function LeaderboardPage() {
         </div>
 
         {requiresTestSelection && !hasSelectedTest ? (
-          <p className="text-sm text-slate-500">Choose a test from the dropdown to load per-test rankings.</p>
+          <p className="text-sm text-text-secondary">Choose a test from the dropdown to load per-test rankings.</p>
         ) : null}
 
         {requiresTestSelection && hasSelectedTest ? (
-          <p className="text-sm text-slate-600">
-            Viewing leaderboard for <span className="font-semibold text-slate-900">{selectedTestName}</span>
+          <p className="text-sm text-text-secondary">
+            Viewing leaderboard for <span className="font-semibold text-text-primary">{selectedTestName}</span>
           </p>
         ) : null}
       </Card>
 
       {showNotAttempted ? (
-        <Alert className="border-amber-300 bg-amber-50 text-amber-800">
+        <Alert className="border-warning/30 bg-warning/10 text-warning">
           <AlertTitle>Per test status</AlertTitle>
           <AlertDescription>You did not attempt this test.</AlertDescription>
         </Alert>
       ) : null}
 
       {shouldFetchLeaderboard && leaderboardQuery.isLoading ? (
-        <div className="grid min-h-[40vh] place-items-center text-slate-500">Loading leaderboard...</div>
+        <div className="grid min-h-[40vh] place-items-center text-text-secondary">Loading leaderboard...</div>
       ) : null}
 
       {shouldFetchLeaderboard && leaderboardQuery.isError ? (
@@ -402,7 +402,7 @@ export default function LeaderboardPage() {
 
       {!leaderboardQuery.isLoading && !leaderboardQuery.isError && shouldFetchLeaderboard && displayRows.length === 0 ? (
         <Card className="p-6">
-          <Empty className="border border-slate-100">
+          <Empty className="border border-border">
             <EmptyHeader>
               <EmptyTitle>{normalizeText(searchText) ? "No matching students" : "No rankings yet"}</EmptyTitle>
               <EmptyDescription>
@@ -418,7 +418,7 @@ export default function LeaderboardPage() {
       {!leaderboardQuery.isLoading && !leaderboardQuery.isError && shouldFetchLeaderboard && displayRows.length > 0 ? (
         <Card className="overflow-hidden">
           <div className="overflow-x-auto">
-          <div className="grid w-max min-w-full grid-cols-[88px_1.4fr_1fr_110px_120px] gap-3 border-b border-slate-100 bg-slate-50 px-4 py-3 text-xs font-semibold tracking-wide text-slate-600 uppercase">
+          <div className="grid w-max min-w-full grid-cols-[88px_1.4fr_1fr_110px_120px] gap-3 border-b border-border bg-background px-4 py-3 text-xs font-semibold tracking-wide text-text-secondary uppercase">
             <p>Rank</p>
             <p>Student</p>
             <p>Department</p>
@@ -435,7 +435,7 @@ export default function LeaderboardPage() {
                   return (
                     <div
                       key={row.id}
-                      className="absolute left-0 top-0 flex w-full items-center justify-center px-4 text-xs font-medium tracking-wide text-slate-500 uppercase"
+                      className="absolute left-0 top-0 flex w-full items-center justify-center px-4 text-xs font-medium tracking-wide text-text-secondary uppercase"
                       style={{ height: `${virtualRow.size}px`, transform: `translateY(${virtualRow.start}px)` }}
                     >
                       Your Position
@@ -448,16 +448,16 @@ export default function LeaderboardPage() {
                 return (
                   <div
                     key={`${row.id}-${row.rank}`}
-                    className={`absolute left-0 top-0 grid w-full grid-cols-[88px_1.4fr_1fr_110px_120px] gap-3 border-b border-slate-100 px-4 py-3 text-sm ${
-                      isCurrent ? "bg-blue-50" : "bg-white"
+                    className={`absolute left-0 top-0 grid w-full grid-cols-[88px_1.4fr_1fr_110px_120px] gap-3 border-b border-border px-4 py-3 text-sm ${
+                      isCurrent ? "bg-primary/10" : "bg-card"
                     }`}
                     style={{ height: `${virtualRow.size}px`, transform: `translateY(${virtualRow.start}px)` }}
                   >
-                    <p className="font-semibold text-blue-700">#{row.rank}</p>
-                    <p className="font-medium text-slate-900">{maskStudentName(row.fullName)} {isCurrent ? "(You)" : ""}</p>
-                    <p className="text-slate-600">{row.department}</p>
-                    <p className="font-semibold text-slate-800">{row.score}</p>
-                    <p className="text-slate-600">{formatPercentage(row.percentage)}</p>
+                    <p className="font-semibold text-primary">#{row.rank}</p>
+                    <p className="font-medium text-text-primary">{maskStudentName(row.fullName)} {isCurrent ? "(You)" : ""}</p>
+                    <p className="text-text-secondary">{row.department}</p>
+                    <p className="font-semibold text-text-primary">{row.score}</p>
+                    <p className="text-text-secondary">{formatPercentage(row.percentage)}</p>
                   </div>
                 );
               })}
@@ -469,7 +469,7 @@ export default function LeaderboardPage() {
 
       {!shouldFetchLeaderboard ? (
         <Card className="p-6">
-          <Empty className="border border-slate-100">
+          <Empty className="border border-border">
             <EmptyHeader>
               <EmptyTitle>Select a test</EmptyTitle>
               <EmptyDescription>Per-test leaderboard needs a test selection from the dropdown above.</EmptyDescription>
@@ -479,7 +479,7 @@ export default function LeaderboardPage() {
       ) : null}
 
       {!currentStudentRow && shouldFetchLeaderboard ? (
-        <Card className="p-4 text-sm text-slate-600">No attempts found for your profile yet. You will appear here after your first submission.</Card>
+        <Card className="p-4 text-sm text-text-secondary">No attempts found for your profile yet. You will appear here after your first submission.</Card>
       ) : null}
     </section>
   );

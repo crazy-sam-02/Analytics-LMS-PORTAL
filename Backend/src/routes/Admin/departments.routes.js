@@ -1,10 +1,11 @@
 const express = require("express");
 const { authenticateAdmin } = require("../../middleware/auth");
-const { requirePermission } = require("../../middleware/permissions");
-const { getDepartments } = require("../../controllers/Admin/departments.controller");
+const { requireAnyPermission } = require("../../middleware/permissions");
+const departmentsValidationController = require("../../controllers/Admin/departments-with-validation.controller");
+const departmentsController = require("../../controllers/Admin/departments.controller");
 
 const router = express.Router();
 
-router.get("/", authenticateAdmin, requirePermission("manage_batches"), getDepartments);
+router.get("/", authenticateAdmin, requireAnyPermission("manage_batches", "view_batches"), departmentsValidationController.getDepartments);
 
 module.exports = router;

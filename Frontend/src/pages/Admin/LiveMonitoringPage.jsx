@@ -21,10 +21,20 @@ import {
 } from "@/components/ui/alert-dialog";
 
 const statusTone = {
-  ONLINE: "text-emerald-700",
-  UNSTABLE: "text-amber-700",
-  OFFLINE: "text-slate-500",
+  ONLINE: "text-success",
+  UNSTABLE: "text-warning",
+  OFFLINE: "text-text-secondary",
 };
+
+const formatLimiterLabel = (label) =>
+  String(label || "unknown")
+    .replace(/^student-exam-/, "")
+    .split("-")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+
+const formatMetricTimestamp = (value) => (value ? new Date(value).toLocaleString() : "-");
 
 export default function LiveMonitoringPage() {
   const { testId } = useParams();
@@ -120,6 +130,17 @@ export default function LiveMonitoringPage() {
   });
 
   const activeStudents = useMemo(() => studentRows.length, [studentRows]);
+  const rateLimits = monitorQuery.data?.rateLimits || {
+    totalBlocked: 0,
+    topScopes: [],
+    topRoutes: [],
+    topActors: [],
+    generatedAt: null,
+    windowHours: 24,
+    collegeScoped: true,
+  };
+  const hottestLimiter = rateLimits.topScopes?.[0] || null;
+  const hottestActor = rateLimits.topActors?.[0] || null;
 
   const forceSubmit = async () => {
     if (!forceDialog.row?.submissionId || !forceDialog.reason.trim()) return;
@@ -144,7 +165,7 @@ export default function LiveMonitoringPage() {
   };
 
   const renderRow = (row) => (
-    <tr key={row.submissionId} className="border-b border-slate-100">
+    <tr key={row.submissionId} className="border-b border-border">
       <td className="px-3 py-2">{row.name}</td>
       <td className="px-3 py-2">{row.department}</td>
       <td className="px-3 py-2">{row.progress}%</td>
@@ -164,11 +185,11 @@ export default function LiveMonitoringPage() {
     <div className="space-y-6">
       <section className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold text-slate-900">Live Test Monitoring</h1>
-          <p className="text-sm text-slate-500">Socket-first real-time monitoring for active attempts.</p>
+          <h1 className="text-2xl font-semibold text-text-primary">Live Test Monitoring</h1>
+          <p className="text-sm text-text-secondary">Socket-first real-time monitoring for active attempts.</p>
         </div>
         <div className="flex items-center gap-2">
-          <span className={`text-xs font-semibold ${socketHealthy ? "text-emerald-700" : "text-amber-700"}`}>
+          <span className={`text-xs font-semibold ${socketHealthy ? "text-success" : "text-warning"}`}>
             {socketHealthy ? "Socket Connected" : "Fallback Polling"}
           </span>
           <Button variant="outline" onClick={() => navigate("/admin/tests")}>Back to Tests</Button>
@@ -176,12 +197,102 @@ export default function LiveMonitoringPage() {
       </section>
 
       <div className="grid gap-4 md:grid-cols-3">
-        <Card className="rounded-2xl border-slate-200"><CardContent className="p-4"><p className="text-xs text-slate-500">Active Students</p><p className="text-2xl font-semibold">{activeStudents}</p></CardContent></Card>
-        <Card className="rounded-2xl border-slate-200"><CardContent className="p-4"><p className="text-xs text-slate-500">Test</p><p className="text-base font-semibold">{monitorQuery.data?.test?.title || "-"}</p></CardContent></Card>
-        <Card className="rounded-2xl border-slate-200"><CardContent className="p-4"><p className="text-xs text-slate-500">Question Count</p><p className="text-2xl font-semibold">{monitorQuery.data?.test?.questionCount || 0}</p></CardContent></Card>
+        <Card className="rounded-2xl border-border"><CardContent className="p-4"><p className="text-xs text-text-secondary">Active Students</p><p className="text-2xl font-semibold">{activeStudents}</p></CardContent></Card>
+        <Card className="rounded-2xl border-border"><CardContent className="p-4"><p className="text-xs text-text-secondary">Test</p><p className="text-base font-semibold">{monitorQuery.data?.test?.title || "-"}</p></CardContent></Card>
+        <Card className="rounded-2xl border-border"><CardContent className="p-4"><p className="text-xs text-text-secondary">Question Count</p><p className="text-2xl font-semibold">{monitorQuery.data?.test?.questionCount || 0}</p></CardContent></Card>
       </div>
 
-      <Card className="rounded-2xl border-slate-200">
+      <div className="grid gap-4 xl:grid-cols-[1.2fr_1fr]">
+        <Card className="rounded-2xl border-border">
+          <CardHeader>
+            <CardTitle>Exam API Pressure</CardTitle>
+            <p className="text-sm text-text-secondary">
+              {rateLimits.collegeScoped ? "College-scoped" : "Global"} blocked exam limiter hits in the last {rateLimits.windowHours || 24}h.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-3">
+              <div className="rounded-xl border border-border bg-background px-3 py-3">
+                <p className="text-xs text-text-secondary">Blocked Requests</p>
+                <p className="mt-1 text-2xl font-semibold text-text-primary">{Number(rateLimits.totalBlocked || 0)}</p>
+              </div>
+              <div className="rounded-xl border border-border bg-background px-3 py-3">
+                <p className="text-xs text-text-secondary">Hottest Limiter</p>
+                <p className="mt-1 text-sm font-semibold text-text-primary">{hottestLimiter ? formatLimiterLabel(hottestLimiter.label) : "No limiter pressure"}</p>
+                <p className="text-xs text-text-secondary">{hottestLimiter ? `${hottestLimiter.blocked} blocked` : "No blocked requests recorded"}</p>
+              </div>
+              <div className="rounded-xl border border-border bg-background px-3 py-3">
+                <p className="text-xs text-text-secondary">Last Updated</p>
+                <p className="mt-1 text-sm font-semibold text-text-primary">{formatMetricTimestamp(rateLimits.generatedAt)}</p>
+              </div>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="rounded-xl border border-border bg-background px-3 py-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Top Limiters</p>
+                {rateLimits.topScopes?.length ? (
+                  <div className="mt-3 space-y-2">
+                    {rateLimits.topScopes.map((item) => (
+                      <div key={item.label} className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 text-sm">
+                        <span className="font-medium text-text-primary">{formatLimiterLabel(item.label)}</span>
+                        <span className="text-text-secondary">{item.blocked}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-3 text-sm text-text-secondary">No exam limiter hits recorded for this window.</p>
+                )}
+              </div>
+
+              <div className="rounded-xl border border-border bg-background px-3 py-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Top Blocked Routes</p>
+                {rateLimits.topRoutes?.length ? (
+                  <div className="mt-3 space-y-2">
+                    {rateLimits.topRoutes.map((item) => (
+                      <div key={item.label} className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 text-sm">
+                        <span className="font-mono text-xs text-text-primary">{item.label}</span>
+                        <span className="text-text-secondary">{item.blocked}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-3 text-sm text-text-secondary">No blocked exam routes yet.</p>
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-2xl border-border">
+          <CardHeader>
+            <CardTitle>Blocked Clients</CardTitle>
+            <p className="text-sm text-text-secondary">Anonymized actors with the highest blocked exam traffic.</p>
+          </CardHeader>
+          <CardContent>
+            {rateLimits.topActors?.length ? (
+              <div className="space-y-2">
+                {rateLimits.topActors.map((item) => (
+                  <div key={item.label} className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="font-mono text-xs text-warning">{item.label}</p>
+                      <p className="text-sm font-semibold text-warning">{item.blocked}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-text-secondary">No blocked actors recorded for exam rate limits.</p>
+            )}
+            {hottestActor ? (
+              <p className="mt-3 text-xs text-text-secondary">
+                Highest blocked actor right now: {hottestActor.label} with {hottestActor.blocked} blocked requests.
+              </p>
+            ) : null}
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card className="rounded-2xl border-border">
         <CardHeader>
           <CardTitle>Student Activity</CardTitle>
         </CardHeader>
@@ -189,7 +300,7 @@ export default function LiveMonitoringPage() {
           <div ref={parentRef} className={virtualized ? "max-h-112 overflow-y-auto" : ""}>
             <table className="w-full border-collapse text-sm">
               <thead>
-                <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
+                <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-text-secondary">
                   <th className="px-3 py-2">Name</th>
                   <th className="px-3 py-2">Department</th>
                   <th className="px-3 py-2">Progress</th>

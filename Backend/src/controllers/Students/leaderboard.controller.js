@@ -1,13 +1,19 @@
-const prisma = require("../../config/db");
-const redisClient = require("../../config/redis");
+const models = require("../../models");
+const { redisClient, isRedisAvailable } = require("../../config/redis");
 const { asyncHandler } = require("../../utils/http");
 
+const normalizeIdList = (values = []) =>
+  [...new Set(values.filter(Boolean).map((value) => String(value)))];
+
 const getLeaderboard = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
   const view = String(req.query.view || "overall").trim().toLowerCase();
   const testId = String(req.query.testId || req.query.test_id || "").trim();
   const collegeId = req.query.collegeId || req.user.collegeId;
   const departmentId = req.query.departmentId || req.user.departmentId;
-  const batchId = req.query.batchId || req.user.batchId;
+  const userBatchIds = normalizeIdList(req.user.batchIds || []);
+  const batchId = req.query.batchId || (userBatchIds.length > 0 ? userBatchIds[0] : req.user.batchId);
   const page = Math.max(1, Number(req.query.page || 1));
   const limit = Math.min(1000, Math.max(1, Number(req.query.limit || 200)));
 
@@ -23,8 +29,88 @@ const getLeaderboard = asyncHandler(async (req, res) => {
     });
   }
 
-  const cacheKey = `leaderboard:${view}:${collegeId}:${departmentId}:${batchId}:${testId || "all"}:${page}:${limit}`;
-  if (redisClient) {
+  let scopedView = view;
+  let scopedDepartmentId = departmentId || null;
+  let scopedBatchIds = normalizeIdList(batchId ? [batchId] : []);
+
+  if (testId) {
+    const test = await db.test.findUnique({
+      where: { id: testId },
+      include: {
+        batchAssignments: {
+          select: { batchId: true },
+        },
+      },
+    });
+
+    if (!test || String(test.collegeId || "") !== String(collegeId || "")) {
+      return res.status(200).json({
+        data: [],
+        pagination: {
+          page,
+          limit,
+          total: 0,
+          totalPages: 0,
+        },
+      });
+    }
+
+    const assignmentMethod = String(test.assignmentMethod || "").trim().toLowerCase();
+    const testBatchIds = normalizeIdList([
+      test.batchId,
+      ...(Array.isArray(test.batchAssignments)
+        ? test.batchAssignments.map((item) => item?.batchId)
+        : []),
+    ]);
+    const testDepartmentIds = normalizeIdList([
+      test.departmentId,
+      ...(Array.isArray(test.assignedTo) ? test.assignedTo : []),
+    ]);
+
+    const shouldScopeByBatch = assignmentMethod === "batch_wise"
+      || (!assignmentMethod && testBatchIds.length > 0);
+    const shouldScopeByDepartment = assignmentMethod === "department_wise"
+      || (!assignmentMethod && testDepartmentIds.length > 0);
+
+    if (shouldScopeByBatch) {
+      scopedView = "batch_wise";
+      scopedBatchIds = testBatchIds.length > 0
+        ? userBatchIds.filter((id) => testBatchIds.includes(id))
+        : userBatchIds;
+      if (scopedBatchIds.length === 0) {
+        return res.status(200).json({
+          data: [],
+          pagination: {
+            page,
+            limit,
+            total: 0,
+            totalPages: 0,
+          },
+        });
+      }
+    } else if (shouldScopeByDepartment) {
+      scopedView = "department_wise";
+      scopedDepartmentId = req.user?.departmentId || departmentId || null;
+      if (!scopedDepartmentId || (testDepartmentIds.length > 0 && !testDepartmentIds.includes(String(scopedDepartmentId)))) {
+        return res.status(200).json({
+          data: [],
+          pagination: {
+            page,
+            limit,
+            total: 0,
+            totalPages: 0,
+          },
+        });
+      }
+    } else {
+      scopedView = "overall";
+      scopedDepartmentId = departmentId || null;
+      scopedBatchIds = normalizeIdList(batchId ? [batchId] : []);
+    }
+  }
+
+  const cacheKey = `leaderboard:${scopedView}:${collegeId}:${scopedDepartmentId || "all"}:${(scopedBatchIds.join("-") || "all")}:${testId || "all"}:${page}:${limit}`;
+  if (isRedisAvailable()) {
     const cached = await redisClient.get(cacheKey);
     if (cached) {
       return res.status(200).json(JSON.parse(cached));
@@ -32,16 +118,39 @@ const getLeaderboard = asyncHandler(async (req, res) => {
   }
 
   const userWhere = { collegeId };
-  if (view === "department_wise") {
-    userWhere.departmentId = departmentId;
+  if (scopedView === "department_wise") {
+    if (!scopedDepartmentId) {
+      return res.status(200).json({
+        data: [],
+        pagination: {
+          page,
+          limit,
+          total: 0,
+          totalPages: 0,
+        },
+      });
+    }
+    userWhere.departmentId = scopedDepartmentId;
   }
-  if (view === "batch_wise") {
-    userWhere.batchId = batchId;
+  if (scopedView === "batch_wise") {
+    if (!scopedBatchIds.length) {
+      return res.status(200).json({
+        data: [],
+        pagination: {
+          page,
+          limit,
+          total: 0,
+          totalPages: 0,
+        },
+      });
+    }
+    userWhere.batchIds = { in: scopedBatchIds };
   }
 
   const where = {
     status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
     user: userWhere,
+    test: { collegeId },
   };
 
   if (testId) {
@@ -49,8 +158,8 @@ const getLeaderboard = asyncHandler(async (req, res) => {
   }
 
   const [total, submissions] = await Promise.all([
-    prisma.submission.count({ where }),
-    prisma.submission.findMany({
+    db.submission.count({ where }),
+    db.submission.findMany({
       where,
       include: {
         user: {
@@ -74,8 +183,10 @@ const getLeaderboard = asyncHandler(async (req, res) => {
     }),
   ]);
 
+  const rows = submissions.filter((entry) => entry?.user && entry?.test);
+
   const payload = {
-    data: submissions.map((entry, index) => ({
+    data: rows.map((entry, index) => ({
       rank: (page - 1) * limit + index + 1,
       id: entry.id,
       userId: entry.user.id,
@@ -92,12 +203,12 @@ const getLeaderboard = asyncHandler(async (req, res) => {
     pagination: {
       page,
       limit,
-      total,
-      totalPages: Math.ceil(total / limit),
+      total: rows.length !== submissions.length ? rows.length : total,
+      totalPages: Math.ceil((rows.length !== submissions.length ? rows.length : total) / limit),
     },
   };
 
-  if (redisClient) {
+  if (isRedisAvailable()) {
     await redisClient.set(cacheKey, JSON.stringify(payload), "EX", 120);
   }
 

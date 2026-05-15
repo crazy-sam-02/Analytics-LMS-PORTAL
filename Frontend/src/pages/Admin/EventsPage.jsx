@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Pencil, Trash2, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 import { adminApi } from "@/services/api";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -8,34 +9,84 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import SkeletonBlock from "@/components/common/SkeletonBlock";
+import { validateImageFile } from "@/lib/image";
+import { optimizeCloudinaryImage } from "@/lib/cloudinary";
 
 const EVENT_TYPES = ["Workshop", "Hackathon", "Symposium", "Other"];
 const EVENT_PAGE_SIZE = 8;
 const REGISTRANT_PAGE_SIZE = 10;
+const EMPTY_FORM = {
+  title: "",
+  description: "",
+  eventType: "Workshop",
+  visibilityScope: "COLLEGE_ONLY",
+  feeType: "free",
+  registrationFee: "",
+  startsAt: "",
+  endsAt: "",
+  eventDate: "",
+  registrationDeadline: "",
+  location: "",
+  registrationLimit: 100,
+  registrationUrl: "",
+  registrationFields: [],
+};
+
+const toDateTimeLocalValue = (value) => {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const offsetDate = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return offsetDate.toISOString().slice(0, 16);
+};
+
+const toDateInputValue = (value) => {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const offsetDate = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return offsetDate.toISOString().slice(0, 10);
+};
+
+const getEventStatus = (event) => {
+  if (event?.isCancelled) return "CANCELLED";
+  const endValue = event?.endsAt || event?.eventDate || event?.startsAt;
+  const endDate = endValue ? new Date(endValue) : null;
+  if (endDate && !Number.isNaN(endDate.getTime()) && endDate < new Date()) return "EXPIRED";
+  return "ACTIVE";
+};
+
+const extractFeeDetails = (event) => {
+  const feeField = Array.isArray(event?.registrationFields)
+    ? event.registrationFields.find((field) => field?.key === "registration_fee")
+    : null;
+  const feeType = feeField?.meta?.feeType || (Number(feeField?.meta?.amount || 0) > 0 ? "paid" : "free");
+  return {
+    feeType,
+    registrationFee: feeType === "paid" ? String(feeField?.meta?.amount || "") : "",
+  };
+};
 
 export default function EventsPage() {
   const queryClient = useQueryClient();
+  const eventImageInputRef = useRef(null);
   const [selectedEventId, setSelectedEventId] = useState("");
   const [cancelReason, setCancelReason] = useState("");
   const [eventPage, setEventPage] = useState(1);
   const [registrantPage, setRegistrantPage] = useState(1);
   const [banner, setBanner] = useState({ type: "", title: "", message: "" });
-  const [fieldDraft, setFieldDraft] = useState({ name: "", type: "text", required: true });
-  const [form, setForm] = useState({
-    title: "",
-    description: "",
-    eventType: "Workshop",
-    feeType: "free",
-    registrationFee: "",
-    startsAt: "",
-    endsAt: "",
-    eventDate: "",
-    registrationDeadline: "",
-    location: "",
-    registrationLimit: 100,
-    registrationUrl: "",
-    registrationFields: [],
-  });
+  const [eventImageFile, setEventImageFile] = useState(null);
+  const [eventImagePreview, setEventImagePreview] = useState("");
+  const [editingEventId, setEditingEventId] = useState("");
+  const [form, setForm] = useState(EMPTY_FORM);
+
+  useEffect(() => {
+    return () => {
+      if (eventImagePreview?.startsWith("blob:")) {
+        URL.revokeObjectURL(eventImagePreview);
+      }
+    };
+  }, [eventImagePreview]);
 
   const eventsQuery = useQuery({ queryKey: ["admin-events"], queryFn: adminApi.getEvents });
   const selectedEventQuery = useQuery({
@@ -44,26 +95,25 @@ export default function EventsPage() {
     enabled: Boolean(selectedEventId),
   });
 
+  const resetForm = () => {
+    setForm(EMPTY_FORM);
+    setEditingEventId("");
+    if (eventImagePreview?.startsWith("blob:")) {
+      URL.revokeObjectURL(eventImagePreview);
+    }
+    setEventImageFile(null);
+    setEventImagePreview("");
+    if (eventImageInputRef.current) {
+      eventImageInputRef.current.value = "";
+    }
+  };
+
   const createMutation = useMutation({
     mutationFn: adminApi.createEvent,
     onSuccess: () => {
       toast.success("Event created.");
       setBanner({ type: "success", title: "Event created", message: "The event is published and visible in the list." });
-      setForm({
-        title: "",
-        description: "",
-        eventType: "Workshop",
-        feeType: "free",
-        registrationFee: "",
-        startsAt: "",
-        endsAt: "",
-        eventDate: "",
-        registrationDeadline: "",
-        location: "",
-        registrationLimit: 100,
-        registrationUrl: "",
-        registrationFields: [],
-      });
+      resetForm();
       queryClient.invalidateQueries({ queryKey: ["admin-events"] });
     },
     onError: (error) => {
@@ -72,11 +122,40 @@ export default function EventsPage() {
     },
   });
 
+  const updateMutation = useMutation({
+    mutationFn: ({ eventId, payload }) => adminApi.updateEvent(eventId, payload),
+    onSuccess: () => {
+      toast.success("Event updated.");
+      setBanner({ type: "success", title: "Event updated", message: "The event details were saved successfully." });
+      resetForm();
+      queryClient.invalidateQueries({ queryKey: ["admin-events"] });
+    },
+    onError: (error) => {
+      setBanner({ type: "error", title: "Update failed", message: error?.message || "Unable to update this event." });
+      toast.error(error?.message || "Failed to update event.");
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: adminApi.deleteEvent,
+    onSuccess: (_data, eventId) => {
+      toast.success("Event deleted.");
+      setBanner({ type: "success", title: "Event deleted", message: "The event was removed from the college events list." });
+      if (selectedEventId === eventId) setSelectedEventId("");
+      if (editingEventId === eventId) resetForm();
+      queryClient.invalidateQueries({ queryKey: ["admin-events"] });
+    },
+    onError: (error) => {
+      setBanner({ type: "error", title: "Delete failed", message: error?.message || "Unable to delete this event." });
+      toast.error(error?.message || "Failed to delete event.");
+    },
+  });
+
   const cancelMutation = useMutation({
     mutationFn: ({ eventId, reason }) => adminApi.cancelEvent(eventId, { reason }),
     onSuccess: () => {
-      toast.success("Event cancelled. Registrants notified.");
-      setBanner({ type: "success", title: "Event cancelled", message: "Cancellation reason saved and notifications dispatched." });
+      toast.success("Event cancelled.");
+      setBanner({ type: "success", title: "Event cancelled", message: "Cancellation reason saved successfully." });
       setCancelReason("");
       queryClient.invalidateQueries({ queryKey: ["admin-events"] });
       queryClient.invalidateQueries({ queryKey: ["admin-event-registrants", selectedEventId] });
@@ -102,34 +181,37 @@ export default function EventsPage() {
   }, [registrantPage, registrants]);
   const totalRegistrantPages = Math.max(1, Math.ceil(registrants.length / REGISTRANT_PAGE_SIZE));
 
-  const addField = () => {
-    if (!fieldDraft.name.trim()) {
-      setBanner({ type: "warning", title: "Field name required", message: "Enter a field label before adding custom registration field." });
-      toast.error("Field name is required.");
-      return;
+  const startEdit = (event) => {
+    const feeDetails = extractFeeDetails(event);
+    setEditingEventId(event.id);
+    setForm({
+      title: event.title || "",
+      description: event.description || "",
+      eventType: event.eventType || "Workshop",
+      visibilityScope: event.visibilityScope || (event.isInterCollege ? "INTER_COLLEGE" : "COLLEGE_ONLY"),
+      feeType: feeDetails.feeType,
+      registrationFee: feeDetails.registrationFee,
+      startsAt: toDateTimeLocalValue(event.startsAt),
+      endsAt: toDateTimeLocalValue(event.endsAt),
+      eventDate: toDateInputValue(event.eventDate),
+      registrationDeadline: toDateInputValue(event.registrationDeadline),
+      location: event.location || "",
+      registrationLimit: Number(event.registrationLimit || 100),
+      registrationUrl: event.registrationUrl || "",
+      registrationFields: Array.isArray(event.registrationFields) ? event.registrationFields.filter((field) => field?.key !== "registration_fee") : [],
+    });
+    if (eventImagePreview?.startsWith("blob:")) {
+      URL.revokeObjectURL(eventImagePreview);
     }
-    const trimmedName = fieldDraft.name.trim();
-    const safeKey = trimmedName
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "_")
-      .replace(/^_+|_+$/g, "") || `field_${Date.now()}`;
-    setForm((prev) => ({
-      ...prev,
-      registrationFields: [
-        ...prev.registrationFields,
-        {
-          key: safeKey,
-          label: trimmedName,
-          type: fieldDraft.type,
-          required: fieldDraft.required,
-          options: [],
-        },
-      ],
-    }));
-    setFieldDraft({ name: "", type: "text", required: true });
+    setEventImageFile(null);
+    setEventImagePreview("");
+    if (eventImageInputRef.current) {
+      eventImageInputRef.current.value = "";
+    }
+    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  const buildCreatePayload = () => {
+  const buildEventPayload = () => {
     const eventDateIso = form.eventDate ? new Date(`${form.eventDate}T00:00:00`).toISOString() : undefined;
     const deadlineIso = form.registrationDeadline ? new Date(`${form.registrationDeadline}T00:00:00`).toISOString() : undefined;
     const registrationFee = form.feeType === "paid" ? Number(form.registrationFee || 0) : 0;
@@ -156,18 +238,74 @@ export default function EventsPage() {
       },
     });
 
-    return {
+    const payload = {
       ...form,
       startsAt: form.startsAt ? new Date(form.startsAt).toISOString() : null,
       endsAt: form.endsAt ? new Date(form.endsAt).toISOString() : null,
       eventDate: eventDateIso,
       registrationDeadline: deadlineIso,
       registrationUrl: form.registrationUrl?.trim() ? form.registrationUrl.trim() : null,
+      visibilityScope: form.visibilityScope,
       feeType: form.feeType,
       registrationFee,
       registrationFields,
       maxParticipants: Number(form.registrationLimit),
     };
+
+    const formData = new FormData();
+    formData.append("title", payload.title);
+    formData.append("description", payload.description);
+    formData.append("eventType", payload.eventType);
+    formData.append("startsAt", payload.startsAt || "");
+    formData.append("visibilityScope", payload.visibilityScope);
+    formData.append("feeType", payload.feeType);
+    formData.append("registrationFee", String(payload.registrationFee));
+    formData.append("registrationLimit", String(payload.registrationLimit));
+    formData.append("maxParticipants", String(payload.maxParticipants));
+    formData.append("registrationFields", JSON.stringify(payload.registrationFields));
+
+    if (payload.endsAt) formData.append("endsAt", payload.endsAt);
+    if (payload.eventDate) formData.append("eventDate", payload.eventDate);
+    if (payload.registrationDeadline) formData.append("registrationDeadline", payload.registrationDeadline);
+    if (payload.location) formData.append("location", payload.location);
+    if (payload.registrationUrl) formData.append("registrationUrl", payload.registrationUrl);
+    if (eventImageFile) {
+      formData.append("eventImage", eventImageFile);
+    }
+
+    return formData;
+  };
+
+  const saveEvent = () => {
+    const payload = buildEventPayload();
+    if (editingEventId) {
+      updateMutation.mutate({ eventId: editingEventId, payload });
+      return;
+    }
+    createMutation.mutate(payload);
+  };
+
+  const onEventImageSelected = (event) => {
+    const file = event.target.files?.[0];
+    const validationError = validateImageFile(file, { label: "Event image" });
+
+    if (validationError) {
+      if (eventImagePreview?.startsWith("blob:")) {
+        URL.revokeObjectURL(eventImagePreview);
+      }
+      setEventImageFile(null);
+      setEventImagePreview("");
+      toast.error(validationError);
+      event.target.value = "";
+      return;
+    }
+
+    if (eventImagePreview?.startsWith("blob:")) {
+      URL.revokeObjectURL(eventImagePreview);
+    }
+
+    setEventImageFile(file || null);
+    setEventImagePreview(file ? URL.createObjectURL(file) : "");
   };
 
   const downloadCsv = async () => {
@@ -185,119 +323,127 @@ export default function EventsPage() {
   return (
     <div className="space-y-6">
       {banner.type ? (
-        <Alert variant={banner.type === "error" ? "destructive" : "default"} className={banner.type === "warning" ? "border-amber-300 bg-amber-50 text-amber-800" : ""}>
+        <Alert variant={banner.type === "error" ? "destructive" : "default"} className={banner.type === "warning" ? "border-warning/30 bg-warning/10 text-warning" : ""}>
           <AlertTitle>{banner.title}</AlertTitle>
           <AlertDescription>{banner.message}</AlertDescription>
         </Alert>
       ) : null}
 
-      <Card className="rounded-2xl border-slate-200">
+      <Card className="rounded-2xl border-border">
         <CardHeader>
-          <CardTitle>Create Event</CardTitle>
+          <CardTitle>{editingEventId ? "Edit Event" : "Create Event"}</CardTitle>
           <CardDescription>Event date/deadline with custom registration fields and participant cap.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="space-y-1.5">
-            <label htmlFor="event-title" className="text-sm font-medium text-slate-700">Title</label>
+            <label htmlFor="event-title" className="text-sm font-medium text-text-secondary">Title</label>
             <Input id="event-title" placeholder="Title" value={form.title} onChange={(event) => setForm((prev) => ({ ...prev, title: event.target.value }))} />
           </div>
           <div className="space-y-1.5">
-            <label htmlFor="event-description" className="text-sm font-medium text-slate-700">Description</label>
+            <label htmlFor="event-description" className="text-sm font-medium text-text-secondary">Description</label>
             <Textarea id="event-description" placeholder="Description" value={form.description} onChange={(event) => setForm((prev) => ({ ...prev, description: event.target.value }))} />
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-text-secondary">Event photo</label>
+            <div className="flex flex-col gap-3 rounded-xl border border-dashed border-border bg-background/70 p-3 sm:flex-row sm:items-center">
+              <label className="inline-flex w-fit cursor-pointer items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium text-text-secondary">
+                <Upload className="size-4" />
+                {eventImageFile ? "Change Photo" : "Upload Photo"}
+                <input
+                  ref={eventImageInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg"
+                  className="hidden"
+                  onChange={onEventImageSelected}
+                />
+              </label>
+              <p className="text-xs text-text-secondary">JPG/PNG only, max 2MB. The image will be uploaded to Cloudinary.</p>
+            </div>
+            {eventImagePreview ? (
+              <img
+                src={eventImagePreview}
+                alt="Event preview"
+                className="h-44 w-full rounded-xl border border-border object-cover sm:h-52"
+              />
+            ) : null}
           </div>
 
           <div className="grid gap-3 sm:grid-cols-3">
             <div className="space-y-1.5">
-              <label htmlFor="event-type" className="text-sm font-medium text-slate-700">Event type</label>
-              <select id="event-type" className="h-10 w-full rounded-md border border-slate-200 px-3 text-sm" value={form.eventType} onChange={(event) => setForm((prev) => ({ ...prev, eventType: event.target.value }))}>
+              <label htmlFor="event-type" className="text-sm font-medium text-text-secondary">Event type</label>
+              <select id="event-type" className="h-10 w-full rounded-md border border-border px-3 text-sm" value={form.eventType} onChange={(event) => setForm((prev) => ({ ...prev, eventType: event.target.value }))}>
                 {EVENT_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
               </select>
             </div>
             <div className="space-y-1.5">
-              <label htmlFor="event-location" className="text-sm font-medium text-slate-700">Location</label>
+              <label htmlFor="event-location" className="text-sm font-medium text-text-secondary">Location</label>
               <Input id="event-location" placeholder="Location" value={form.location} onChange={(event) => setForm((prev) => ({ ...prev, location: event.target.value }))} />
             </div>
             <div className="space-y-1.5">
-              <label htmlFor="event-max-participants" className="text-sm font-medium text-slate-700">Max participants</label>
+              <label htmlFor="event-visibility" className="text-sm font-medium text-text-secondary">Participation scope</label>
+              <select id="event-visibility" className="h-10 w-full rounded-md border border-border px-3 text-sm" value={form.visibilityScope} onChange={(event) => setForm((prev) => ({ ...prev, visibilityScope: event.target.value }))}>
+                <option value="COLLEGE_ONLY">College Level Event</option>
+                <option value="INTER_COLLEGE">Inter-college Event (all colleges)</option>
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="event-max-participants" className="text-sm font-medium text-text-secondary">Max participants</label>
               <Input id="event-max-participants" type="number" min={1} placeholder="Max participants" value={form.registrationLimit} onChange={(event) => setForm((prev) => ({ ...prev, registrationLimit: Number(event.target.value) }))} />
             </div>
             <div className="space-y-1.5">
-              <label htmlFor="event-fee-type" className="text-sm font-medium text-slate-700">Registration fees</label>
-              <select id="event-fee-type" className="h-10 w-full rounded-md border border-slate-200 px-3 text-sm" value={form.feeType} onChange={(event) => setForm((prev) => ({ ...prev, feeType: event.target.value, registrationFee: event.target.value === "free" ? "" : prev.registrationFee }))}>
+              <label htmlFor="event-fee-type" className="text-sm font-medium text-text-secondary">Registration fees</label>
+              <select id="event-fee-type" className="h-10 w-full rounded-md border border-border px-3 text-sm" value={form.feeType} onChange={(event) => setForm((prev) => ({ ...prev, feeType: event.target.value, registrationFee: event.target.value === "free" ? "" : prev.registrationFee }))}>
                 <option value="free">Free</option>
                 <option value="paid">Paid</option>
               </select>
             </div>
             {form.feeType === "paid" ? (
               <div className="space-y-1.5">
-                <label htmlFor="event-registration-fee" className="text-sm font-medium text-slate-700">Amount</label>
+                <label htmlFor="event-registration-fee" className="text-sm font-medium text-text-secondary">Amount</label>
                 <Input id="event-registration-fee" type="number" min={0} step="0.01" placeholder="Amount" value={form.registrationFee} onChange={(event) => setForm((prev) => ({ ...prev, registrationFee: event.target.value }))} />
               </div>
             ) : null}
             <div className="space-y-1.5">
-              <label htmlFor="event-starts-at" className="text-sm font-medium text-slate-700">Starts at</label>
+              <label htmlFor="event-starts-at" className="text-sm font-medium text-text-secondary">Starts at</label>
               <Input id="event-starts-at" type="datetime-local" value={form.startsAt} onChange={(event) => setForm((prev) => ({ ...prev, startsAt: event.target.value }))} />
             </div>
             <div className="space-y-1.5">
-              <label htmlFor="event-ends-at" className="text-sm font-medium text-slate-700">Ends at</label>
+              <label htmlFor="event-ends-at" className="text-sm font-medium text-text-secondary">Ends at</label>
               <Input id="event-ends-at" type="datetime-local" value={form.endsAt} onChange={(event) => setForm((prev) => ({ ...prev, endsAt: event.target.value }))} />
             </div>
             <div className="space-y-1.5">
-              <label htmlFor="event-date" className="text-sm font-medium text-slate-700">Event date</label>
+              <label htmlFor="event-date" className="text-sm font-medium text-text-secondary">Event date</label>
               <Input id="event-date" type="date" value={form.eventDate} onChange={(event) => setForm((prev) => ({ ...prev, eventDate: event.target.value }))} />
             </div>
             <div className="space-y-1.5">
-              <label htmlFor="event-registration-deadline" className="text-sm font-medium text-slate-700">Registration deadline</label>
+              <label htmlFor="event-registration-deadline" className="text-sm font-medium text-text-secondary">Registration deadline</label>
               <Input id="event-registration-deadline" type="date" value={form.registrationDeadline} onChange={(event) => setForm((prev) => ({ ...prev, registrationDeadline: event.target.value }))} />
             </div>
             <div className="space-y-1.5 sm:col-span-2">
-              <label htmlFor="event-registration-url" className="text-sm font-medium text-slate-700">Registration URL (optional)</label>
+              <label htmlFor="event-registration-url" className="text-sm font-medium text-text-secondary">Registration URL (optional)</label>
               <Input id="event-registration-url" placeholder="Registration URL (optional)" value={form.registrationUrl} onChange={(event) => setForm((prev) => ({ ...prev, registrationUrl: event.target.value }))} />
             </div>
           </div>
 
-          <div className="space-y-2 rounded-xl border border-slate-200 p-3">
-            <p className="text-sm font-semibold text-slate-800">Custom Registration Fields</p>
-            <div className="grid gap-2 sm:grid-cols-4">
-              <div className="space-y-1.5">
-                <label htmlFor="registration-field-name" className="text-sm font-medium text-slate-700">Field name</label>
-                <Input id="registration-field-name" placeholder="Field name" value={fieldDraft.name} onChange={(event) => setFieldDraft((prev) => ({ ...prev, name: event.target.value }))} />
-              </div>
-              <div className="space-y-1.5">
-                <label htmlFor="registration-field-type" className="text-sm font-medium text-slate-700">Field type</label>
-                <select id="registration-field-type" className="h-10 w-full rounded-md border border-slate-200 px-3 text-sm" value={fieldDraft.type} onChange={(event) => setFieldDraft((prev) => ({ ...prev, type: event.target.value }))}>
-                  <option value="text">Text</option>
-                  <option value="email">Email</option>
-                  <option value="number">Number</option>
-                  <option value="select">Select</option>
-                </select>
-              </div>
-              <div className="space-y-1.5">
-                <label htmlFor="registration-field-required" className="text-sm font-medium text-slate-700">Required</label>
-                <label className="flex h-10 items-center gap-2 text-sm text-slate-700">
-                  <input id="registration-field-required" type="checkbox" checked={fieldDraft.required} onChange={(event) => setFieldDraft((prev) => ({ ...prev, required: event.target.checked }))} />
-                  Yes
-                </label>
-              </div>
-              <Button type="button" variant="outline" onClick={addField}>Add Field</Button>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {form.registrationFields.map((item, index) => (
-                <span key={`${item.key || item.label}-${index}`} className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-700">
-                  {item.label} ({item.type}) {item.required ? "*" : ""}
-                </span>
-              ))}
-            </div>
-          </div>
+          
 
-          <Button onClick={() => createMutation.mutate(buildCreatePayload())} disabled={createMutation.isPending || !form.title || !form.startsAt || !form.eventDate || (form.feeType === "paid" && Number(form.registrationFee || 0) <= 0)}>
-            {createMutation.isPending ? "Creating..." : "Create Event"}
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button onClick={saveEvent} disabled={createMutation.isPending || updateMutation.isPending || !form.title || !form.startsAt || !form.eventDate || (form.feeType === "paid" && Number(form.registrationFee || 0) <= 0)}>
+              {createMutation.isPending || updateMutation.isPending ? "Saving..." : editingEventId ? "Save Event" : "Create Event"}
+            </Button>
+            {editingEventId ? (
+              <Button type="button" variant="outline" onClick={resetForm}>
+                <X className="size-4" />
+                Cancel Edit
+              </Button>
+            ) : null}
+          </div>
         </CardContent>
       </Card>
 
-      <div className="grid gap-6 xl:grid-cols-[1fr_1.2fr]">
-        <Card className="rounded-2xl border-slate-200">
+      <div className="grid gap-6 ">
+        <Card className="rounded-2xl border-border lg:w-1/5">
           <CardHeader><CardTitle>Events</CardTitle></CardHeader>
           <CardContent className="space-y-2">
             {eventsQuery.isLoading ? (
@@ -307,25 +453,51 @@ export default function EventsPage() {
                 <SkeletonBlock className="h-18" />
               </div>
             ) : null}
-            {eventsQuery.isError ? <p className="text-sm text-red-600">{eventsQuery.error?.message || "Unable to load events."}</p> : null}
-            {!eventsQuery.isLoading && !eventsQuery.isError && pagedEvents.length === 0 ? <p className="text-sm text-slate-500">No events created yet.</p> : null}
-            {pagedEvents.map((event) => (
-              <button
+            {eventsQuery.isError ? <p className="text-sm text-danger">{eventsQuery.error?.message || "Unable to load events."}</p> : null}
+            {!eventsQuery.isLoading && !eventsQuery.isError && pagedEvents.length === 0 ? <p className="text-sm text-text-secondary">No events created yet.</p> : null}
+            {pagedEvents.map((event) => {
+              const status = getEventStatus(event);
+              const isExpired = status === "EXPIRED";
+
+              return (
+              <div
                 key={event.id}
-                type="button"
-                onClick={() => {
-                  setSelectedEventId(event.id);
-                  setRegistrantPage(1);
-                }}
-                className={`w-full rounded-xl border px-3 py-2 text-left ${selectedEventId === event.id ? "border-blue-300 bg-blue-50" : "border-slate-200"}`}
+                className={`w-full rounded-xl border px-3 py-2 text-left ${selectedEventId === event.id ? "border-primary/40 bg-primary/10" : "border-border"}`}
               >
-                <p className="font-medium text-slate-800">{event.title}</p>
-                <p className="text-xs text-slate-500">{event.eventType} • {new Date(event.startsAt).toLocaleString()} • {event.registrantCount || 0}/{event.registrationLimit}</p>
-                {event.isCancelled ? <p className="mt-1 text-xs font-semibold text-red-600">Cancelled</p> : null}
-              </button>
-            ))}
+                {event.imageUrl ? (
+                  <img
+                    src={optimizeCloudinaryImage(event.imageUrl, { width: 640, height: 320, crop: "fill" })}
+                    alt={`${event.title} cover`}
+                    className={`mb-3 h-28 w-full rounded-lg object-cover ${isExpired ? "grayscale opacity-65" : ""}`}
+                  />
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedEventId(event.id);
+                    setRegistrantPage(1);
+                  }}
+                  className="w-full text-left"
+                >
+                  <p className="font-medium text-text-primary">{event.title}</p>
+                </button>
+                <p className="text-xs text-text-secondary">{event.eventType} • {(event.visibilityScope || (event.isInterCollege ? "INTER_COLLEGE" : "COLLEGE_ONLY")) === "INTER_COLLEGE" ? "Inter-college" : "College-only"} • {new Date(event.startsAt).toLocaleString()} • {event.registrantCount || 0}/{event.registrationLimit}</p>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  {status !== "ACTIVE" ? <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-semibold text-text-secondary">{status}</span> : null}
+                  <Button type="button" variant="outline" size="sm" onClick={() => startEdit(event)}>
+                    <Pencil className="size-4" />
+                    Edit
+                  </Button>
+                  <Button type="button" variant="destructive" size="sm" disabled={deleteMutation.isPending} onClick={() => deleteMutation.mutate(event.id)}>
+                    <Trash2 className="size-4" />
+                    Delete
+                  </Button>
+                </div>
+              </div>
+              );
+            })}
             {events.length > EVENT_PAGE_SIZE ? (
-              <div className="flex items-center justify-between border-t border-slate-100 pt-2 text-xs text-slate-500">
+              <div className="flex items-center justify-between border-t border-border pt-2 text-xs text-text-secondary">
                 <p>Page {eventPage} of {totalEventPages}</p>
                 <div className="flex items-center gap-2">
                   <Button variant="outline" size="sm" disabled={eventPage <= 1} onClick={() => setEventPage((prev) => Math.max(prev - 1, 1))}>Previous</Button>
@@ -336,57 +508,6 @@ export default function EventsPage() {
           </CardContent>
         </Card>
 
-        <Card className="rounded-2xl border-slate-200">
-          <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle>Participants</CardTitle>
-            {selectedEvent ? (
-              <div className="flex items-center gap-2">
-                <Button variant="outline" onClick={downloadCsv}>Export CSV</Button>
-                <Button
-                  variant="destructive"
-                  onClick={() => cancelMutation.mutate({ eventId: selectedEvent.id, reason: cancelReason || "Cancelled by admin" })}
-                  disabled={selectedEvent.isCancelled || cancelMutation.isPending}
-                >
-                  {selectedEvent.isCancelled ? "Cancelled" : "Cancel Event"}
-                </Button>
-              </div>
-            ) : null}
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {selectedEventQuery.isLoading ? (
-              <div className="space-y-2">
-                <SkeletonBlock className="h-10" />
-                <SkeletonBlock className="h-16" />
-                <SkeletonBlock className="h-16" />
-              </div>
-            ) : null}
-            {!selectedEvent ? <p className="text-sm text-slate-500">Select an event to manage participants.</p> : null}
-            {selectedEvent ? (
-              <>
-                {!selectedEvent.isCancelled ? (
-                  <Input placeholder="Cancellation reason" value={cancelReason} onChange={(event) => setCancelReason(event.target.value)} />
-                ) : null}
-                {pagedRegistrants.map((item) => (
-                  <div key={`${item.studentId}-${item.registeredAt}`} className="rounded-xl border border-slate-200 px-3 py-2">
-                    <p className="font-medium text-slate-800">{item.student?.fullName || item.fullName || "Unknown"}</p>
-                    <p className="text-xs text-slate-500">{item.student?.email || item.email || "-"} • {item.student?.batch?.name || "-"} • {item.status || "REGISTERED"}</p>
-                    <p className="text-xs text-slate-500">Registered: {item.registeredAt ? new Date(item.registeredAt).toLocaleString() : "-"}</p>
-                  </div>
-                ))}
-                {registrants.length === 0 ? <p className="text-sm text-slate-500">No participants yet.</p> : null}
-                {registrants.length > REGISTRANT_PAGE_SIZE ? (
-                  <div className="flex items-center justify-between border-t border-slate-100 pt-2 text-xs text-slate-500">
-                    <p>Page {registrantPage} of {totalRegistrantPages}</p>
-                    <div className="flex items-center gap-2">
-                      <Button variant="outline" size="sm" disabled={registrantPage <= 1} onClick={() => setRegistrantPage((prev) => Math.max(prev - 1, 1))}>Previous</Button>
-                      <Button variant="outline" size="sm" disabled={registrantPage >= totalRegistrantPages} onClick={() => setRegistrantPage((prev) => Math.min(prev + 1, totalRegistrantPages))}>Next</Button>
-                    </div>
-                  </div>
-                ) : null}
-              </>
-            ) : null}
-          </CardContent>
-        </Card>
       </div>
     </div>
   );
