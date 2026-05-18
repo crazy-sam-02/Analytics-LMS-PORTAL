@@ -22,6 +22,11 @@ const buildSubmissionDateFilter = (filters = {}) => {
   }
   return Object.keys(range).length > 0 ? range : undefined;
 };
+const toScorePercent = (submission) => {
+  const score = Number(submission?.score || 0);
+  const totalMarks = Number(submission?.test?.totalMarks || 0);
+  return Number((totalMarks > 0 ? (score / totalMarks) * 100 : score).toFixed(2));
+};
 
 const buildAnswerSignature = (answers = []) => {
   return answers
@@ -138,6 +143,12 @@ try {
 let reportQueue = null;
 let reportWorker = null;
 const queueConnection = getRedisQueueConnection();
+
+const getDbClient = async () => {
+  const m = await models.init();
+  return m.dbClient;
+};
+
 if (Queue && redisClient && queueConnection) {
   reportQueue = new Queue("admin-report-jobs", {
     connection: queueConnection,
@@ -158,6 +169,7 @@ if (Queue && redisClient && queueConnection) {
     const reportJobId = job?.data?.reportJobId;
     if (!reportJobId) return;
 
+    const db = await getDbClient();
     const reportJob = await db.reportJob.findUnique({ where: { id: reportJobId } });
     if (!reportJob) return;
 
@@ -169,7 +181,7 @@ if (Queue && redisClient && queueConnection) {
   });
 }
 
-const buildReportPayload = async (job) => {
+const buildReportPayload = async (db, job) => {
   const filters = job.filters || {};
   const submissionDateFilter = buildSubmissionDateFilter(filters);
 
@@ -179,6 +191,7 @@ const buildReportPayload = async (job) => {
         collegeId: job.collegeId,
         ...(filters.studentId ? { userId: filters.studentId } : {}),
         ...(submissionDateFilter ? { submittedAt: submissionDateFilter } : {}),
+        status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
       },
       include: {
         user: {
@@ -191,7 +204,17 @@ const buildReportPayload = async (job) => {
           select: {
             title: true,
             subject: true,
+            totalMarks: true,
           },
+        },
+        violations: {
+          select: {
+            id: true,
+            type: true,
+            createdAt: true,
+            metadata: true,
+          },
+          orderBy: { createdAt: "desc" },
         },
       },
       orderBy: { createdAt: "desc" },
@@ -203,10 +226,19 @@ const buildReportPayload = async (job) => {
       studentId: row.user.studentId,
       testName: row.test?.title,
       subject: row.test?.subject,
-      score: row.score,
-      accuracy: row.accuracy,
-      status: row.status,
-      submittedAt: row.submittedAt,
+      date: row.submittedAt || row.updatedAt || row.createdAt,
+      scorePercent: toScorePercent(row),
+      percentile: row.percentile ?? null,
+      timeTaken: Number(row.timeSpentSeconds || 0),
+      violationsCount: Number(row.violationCount || row.violations?.length || 0),
+      status: row.status || "-",
+      violationEvents: (row.violations || []).map((violation) => ({
+        testId: row.testId,
+        anomalyId: violation.id,
+        anomalyType: violation.type,
+        createdAt: violation.createdAt,
+        metadata: violation.metadata || null,
+      })),
     }));
   }
 
@@ -285,7 +317,13 @@ const buildReportPayload = async (job) => {
 
     return departments.map((department) => {
       const students = filters.batchId
-        ? department.students.filter((student) => String(student.batchId || "") === String(filters.batchId))
+        ? department.students.filter((student) => {
+            const mergedBatchIds = [...new Set([
+              ...(Array.isArray(student.batchIds) ? student.batchIds : []),
+              student.batchId,
+            ].filter(Boolean))];
+            return mergedBatchIds.some((id) => String(id) === String(filters.batchId));
+          })
         : department.students;
 
       const allSubmissions = students
@@ -473,6 +511,7 @@ const buildReportPayload = async (job) => {
 };
 
 const processReportSynchronously = async (reportJobId) => {
+  const db = await getDbClient();
   const queued = await db.reportJob.update({
     where: { id: reportJobId },
     data: { status: "PROCESSING" },
@@ -485,7 +524,7 @@ const processReportSynchronously = async (reportJobId) => {
 
   try {
     const reportJob = await db.reportJob.findUnique({ where: { id: reportJobId } });
-    const payload = await buildReportPayload(reportJob);
+    const payload = await buildReportPayload(db, reportJob);
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
     const resultUrl = `/api/admin/reports/${reportJobId}/download?expires=${encodeURIComponent(expiresAt)}`;
 

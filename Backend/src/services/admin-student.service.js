@@ -98,7 +98,19 @@ const processBulkImportJob = async ({ jobId, collegeId, adminId, csvData }, db) 
       const passwordHash = await bcrypt.hash(generatedPassword, 10);
       const studentId = requestedStudentId || (await generateUniqueStudentId(db, collegeId, enrollNumber));
 
-      await db.student.create({ data: { fullName, email, studentId, passwordHash, collegeId, departmentId: department.id, batchId: batch?.id || null } });
+      const resolvedBatchId = batch?.id || null;
+      await db.student.create({
+        data: {
+          fullName,
+          email,
+          studentId,
+          passwordHash,
+          collegeId,
+          departmentId: department.id,
+          batchId: resolvedBatchId,
+          batchIds: resolvedBatchId ? [resolvedBatchId] : [],
+        },
+      });
 
       result.created += 1;
     }
@@ -120,18 +132,62 @@ const listStudents = async (collegeId, opts = {}) => {
   const where = {
     collegeId,
     ...(opts.departmentId ? { departmentId: opts.departmentId } : {}),
-    ...(opts.batchId ? { batchId: opts.batchId } : {}),
-    ...(opts.search
-      ? { OR: [{ fullName: { contains: opts.search, mode: "insensitive" } }, { email: { contains: opts.search, mode: "insensitive" } }] }
-      : {}),
   };
+
+  const filters = [];
+  if (opts.batchId) {
+    filters.push({
+      OR: [
+        { batchIds: { in: [opts.batchId] } },
+        { batchId: opts.batchId },
+      ],
+    });
+  }
+
+  if (opts.search) {
+    filters.push({
+      OR: [
+        { fullName: { contains: opts.search, mode: "insensitive" } },
+        { email: { contains: opts.search, mode: "insensitive" } },
+        { studentId: { contains: opts.search, mode: "insensitive" } },
+        { department: { name: { contains: opts.search, mode: "insensitive" } } },
+      ],
+    });
+  }
+
+  if (filters.length > 0) {
+    where.AND = filters;
+  }
 
   const [total, data] = await Promise.all([
     db.student.count({ where }),
-    db.student.findMany({ where, include: { batch: true, department: true, _count: { select: { submissions: true } } }, orderBy: { createdAt: "desc" }, skip: (page - 1) * limit, take: limit }),
+    db.student.findMany({
+      where,
+      include: {
+        batches: true,
+        department: true,
+        _count: { select: { submissions: true } },
+      },
+      orderBy: { createdAt: "desc" },
+      skip: (page - 1) * limit,
+      take: limit,
+    }),
   ]);
 
-  return { data, total, page, limit };
+  const normalized = data.map((student) => {
+    const mergedBatchIds = [...new Set([
+      ...(Array.isArray(student.batchIds) ? student.batchIds : []),
+      student.batchId,
+    ].filter(Boolean).map((id) => String(id)))];
+
+    return {
+      ...student,
+      batchIds: mergedBatchIds,
+      batch: student.batch || (Array.isArray(student.batches) ? student.batches[0] : null),
+    };
+  });
+
+  return { data: normalized, total, page, limit };
 };
 
 const createStudent = async (collegeId, adminId, payload) => {
@@ -155,11 +211,30 @@ const createStudent = async (collegeId, adminId, payload) => {
     if (!batchRecord) throw new ApiError(404, "Batch not found in the selected department");
   }
 
-  const student = await db.student.create({ data: { fullName, email, studentId: generatedStudentId, passwordHash, collegeId, departmentId: departmentRecord.id, batchId: batchRecord?.id || null }, include: { department: true, batch: true } });
+  const resolvedBatchId = batchRecord?.id || null;
+  const student = await db.student.create({
+    data: {
+      fullName,
+      email,
+      studentId: generatedStudentId,
+      passwordHash,
+      collegeId,
+      departmentId: departmentRecord.id,
+      batchId: resolvedBatchId,
+      batchIds: resolvedBatchId ? [resolvedBatchId] : [],
+    },
+    include: { department: true, batches: true },
+  });
 
   await createAuditLog({ action: "ADMIN_STUDENT_CREATED", targetType: "STUDENT", targetId: student.id, collegeId, adminId, afterState: { email: student.email, studentId: student.studentId, departmentId: student.departmentId } });
 
-  return { student, credentials: { identifier: student.email, studentId: student.studentId, password: plainPassword } };
+  return {
+    student: {
+      ...student,
+      batch: Array.isArray(student.batches) ? student.batches[0] : null,
+    },
+    credentials: { identifier: student.email, studentId: student.studentId, password: plainPassword },
+  };
 };
 
 const getStudentPerformance = async (collegeId, studentId) => {
@@ -172,9 +247,20 @@ const getStudentPerformance = async (collegeId, studentId) => {
 const getStudentProfile = async (collegeId, studentId) => {
   const m = await models.init();
   const db = m.dbClient;
-  const student = await db.student.findFirst({ where: { id: studentId, collegeId }, include: { batch: true, department: true, _count: { select: { submissions: true } } } });
+  const student = await db.student.findFirst({
+    where: { id: studentId, collegeId },
+    include: { batches: true, department: true, _count: { select: { submissions: true } } },
+  });
   if (!student) throw new ApiError(404, "Student not found");
-  return student;
+  const mergedBatchIds = [...new Set([
+    ...(Array.isArray(student.batchIds) ? student.batchIds : []),
+    student.batchId,
+  ].filter(Boolean).map((id) => String(id)))];
+  return {
+    ...student,
+    batchIds: mergedBatchIds,
+    batch: student.batch || (Array.isArray(student.batches) ? student.batches[0] : null),
+  };
 };
 
 const assignStudentToBatch = async (collegeId, adminId, studentId, batchId) => {
@@ -183,11 +269,25 @@ const assignStudentToBatch = async (collegeId, adminId, studentId, batchId) => {
   const [batch, student] = await Promise.all([db.batch.findFirst({ where: { id: batchId, collegeId } }), db.student.findFirst({ where: { id: studentId, collegeId } })]);
   if (!batch || !student) throw new ApiError(404, "Student or batch not found");
 
-  const updated = await db.student.update({ where: { id: studentId }, data: { batchId, departmentId: batch.departmentId } });
+  const existingBatchIds = Array.isArray(student.batchIds) ? student.batchIds : [];
+  const mergedBatchIds = [...new Set([
+    ...existingBatchIds,
+    student.batchId,
+    batchId,
+  ].filter(Boolean).map((id) => String(id)))];
+
+  const updated = await db.student.update({
+    where: { id: studentId },
+    data: { batchIds: mergedBatchIds, batchId, departmentId: batch.departmentId },
+    include: { batches: true, department: true },
+  });
 
   await createAuditLog({ action: "ADMIN_STUDENT_BATCH_ASSIGNED", targetType: "STUDENT", targetId: studentId, collegeId, adminId, afterState: { batchId, departmentId: batch.departmentId } });
 
-  return updated;
+  return {
+    ...updated,
+    batch: updated.batch || (Array.isArray(updated.batches) ? updated.batches[0] : null),
+  };
 };
 
 const bulkImportStudents = async (collegeId, adminId, csvData) => {

@@ -10,6 +10,20 @@ const {
 
 const STUDENT_REFRESH_COOKIE = "student_refresh_token";
 
+const buildStudentProfilePayload = (user = {}) => ({
+  id: user.id,
+  studentId: user.studentId,
+  fullName: user.fullName,
+  email: user.email,
+  avatarUrl: user.avatarUrl || null,
+  batch: user.batch || (Array.isArray(user.batches) ? user.batches[0] : null),
+  batches: Array.isArray(user.batches) ? user.batches : [],
+  batchIds: Array.isArray(user.batchIds) ? user.batchIds : [],
+  department: user.department,
+  college: user.college,
+  preferences: user.preferences,
+});
+
 const verifyRefreshPayloadOrThrow = (refreshToken) => {
   try {
     return verifyRefreshToken(refreshToken);
@@ -84,17 +98,7 @@ const login = asyncHandler(async (req, res) => {
   res.status(200).json({
     accessToken,
     sessionId: refreshRecord.id,
-    user: {
-      id: user.id,
-      studentId: user.studentId,
-      fullName: user.fullName,
-      email: user.email,
-      avatarUrl: user.avatarUrl || null,
-      batch: user.batch,
-      department: user.department,
-      college: user.college,
-      preferences: user.preferences,
-    },
+    user: buildStudentProfilePayload(user),
   });
 });
 
@@ -141,18 +145,7 @@ const refresh = asyncHandler(async (req, res) => {
   res.status(200).json({
     accessToken: newAccessToken,
     sessionId: dbToken.id,
-    user: {
-      id: userRecord.id,
-      studentId: userRecord.studentId,
-      fullName: userRecord.fullName,
-      email: userRecord.email,
-      phone: userRecord.phone,
-      avatarUrl: userRecord.avatarUrl || null,
-      batchIds: userRecord.batchIds || [],
-      departmentId: userRecord.departmentId,
-      collegeId: userRecord.collegeId,
-      preferences: userRecord.preferences,
-    },
+    user: buildStudentProfilePayload(userRecord),
   });
 });
 
@@ -175,18 +168,7 @@ const logout = asyncHandler(async (req, res) => {
 
 const me = asyncHandler(async (req, res) => {
   const user = req.user;
-  res.status(200).json({
-    id: user.id,
-    studentId: user.studentId,
-    fullName: user.fullName,
-    email: user.email,
-    phone: user.phone,
-    avatarUrl: user.avatarUrl || null,
-    batch: user.batch,
-    department: user.department,
-    college: user.college,
-    preferences: user.preferences,
-  });
+  res.status(200).json(buildStudentProfilePayload(user));
 });
 
 module.exports = {

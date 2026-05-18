@@ -21,6 +21,48 @@ const parseCsv = (csvText) => {
   });
 };
 
+const getStudentBatchIds = (student) => {
+  const existing = Array.isArray(student?.batchIds) ? student.batchIds : [];
+  const legacy = student?.batchId ? [student.batchId] : [];
+  const merged = [...existing, ...legacy].filter(Boolean).map((id) => String(id));
+  return [...new Set(merged)];
+};
+
+const addBatchIdToStudent = (student, batchId) => {
+  const merged = [...getStudentBatchIds(student), String(batchId)].filter(Boolean);
+  return [...new Set(merged)];
+};
+
+const assignBatchToStudents = async ({ db, collegeId, studentIds, batchId, departmentId }) => {
+  const uniqueIds = [...new Set((studentIds || []).map((id) => String(id)).filter(Boolean))];
+  if (uniqueIds.length === 0) {
+    return { updated: 0 };
+  }
+
+  const students = await db.student.findMany({
+    where: { id: { in: uniqueIds }, collegeId },
+    select: { id: true, batchIds: true, batchId: true },
+  });
+
+  const updates = students.map((student) =>
+    db.student.update({
+      where: { id: student.id },
+      data: {
+        batchIds: addBatchIdToStudent(student, batchId),
+        batchId,
+        departmentId,
+      },
+    })
+  );
+
+  if (updates.length === 0) {
+    return { updated: 0 };
+  }
+
+  await db.$transaction(updates);
+  return { updated: updates.length };
+};
+
 const getBatches = asyncHandler(async (req, res) => {
   const m = await models.init();
   const db = m.dbClient;
@@ -126,15 +168,12 @@ const createBatch = asyncHandler(async (req, res) => {
   });
 
   if (Array.isArray(studentIds) && studentIds.length > 0) {
-    await db.student.updateMany({
-      where: {
-        id: { in: studentIds },
-        collegeId,
-      },
-      data: {
-        batchId: batch.id,
-        departmentId,
-      },
+    await assignBatchToStudents({
+      db,
+      collegeId,
+      studentIds,
+      batchId: batch.id,
+      departmentId,
     });
   }
 
@@ -166,15 +205,12 @@ const assignStudentsToBatch = asyncHandler(async (req, res) => {
     throw new ApiError(404, "Batch not found");
   }
 
-  const result = await db.student.updateMany({
-    where: {
-      id: { in: studentIds },
-      collegeId,
-    },
-    data: {
-      batchId,
-      departmentId: batch.departmentId,
-    },
+  const result = await assignBatchToStudents({
+    db,
+    collegeId,
+    studentIds,
+    batchId,
+    departmentId: batch.departmentId,
   });
 
   await createAuditLog({
@@ -185,11 +221,11 @@ const assignStudentsToBatch = asyncHandler(async (req, res) => {
     adminId: req.admin.id,
     afterState: {
       studentIds,
-      count: result.count,
+      count: result.updated,
     },
   });
 
-  res.status(200).json({ message: "Students assigned", updated: result.count });
+  res.status(200).json({ message: "Students assigned", updated: result.updated });
 });
 
 const bulkAddStudentsToBatch = asyncHandler(async (req, res) => {
@@ -233,12 +269,12 @@ const bulkAddStudentsToBatch = asyncHandler(async (req, res) => {
     throw new ApiError(422, "No valid students found from CSV/IDs");
   }
 
-  const update = await db.student.updateMany({
-    where: { id: { in: finalIds }, collegeId },
-    data: {
-      batchId,
-      departmentId: batch.departmentId,
-    },
+  const update = await assignBatchToStudents({
+    db,
+    collegeId,
+    studentIds: finalIds,
+    batchId,
+    departmentId: batch.departmentId,
   });
 
   await createAuditLog({
@@ -248,14 +284,14 @@ const bulkAddStudentsToBatch = asyncHandler(async (req, res) => {
     collegeId,
     adminId: req.admin.id,
     afterState: {
-      updated: update.count,
+      updated: update.updated,
       studentCount: finalIds.length,
     },
   });
 
   res.status(200).json({
     message: "Bulk student assignment completed",
-    updated: update.count,
+    updated: update.updated,
     requested: finalIds.length,
   });
 });
@@ -271,7 +307,9 @@ const removeStudentFromBatch = asyncHandler(async (req, res) => {
     db.student.findFirst({ where: { id: studentId, collegeId } }),
   ]);
 
-  if (!batch || !student || student.batchId !== batchId) {
+  const currentBatchIds = getStudentBatchIds(student);
+
+  if (!batch || !student || !currentBatchIds.includes(String(batchId))) {
     throw new ApiError(404, "Batch or student not found");
   }
 
@@ -311,9 +349,14 @@ const removeStudentFromBatch = asyncHandler(async (req, res) => {
     });
   }
 
+  const nextBatchIds = currentBatchIds.filter((id) => String(id) !== String(batchId));
+  const nextBatchId = String(student.batchId) === String(batchId)
+    ? (nextBatchIds[0] || null)
+    : student.batchId || null;
+
   await db.student.update({
     where: { id: studentId },
-    data: { batchId: null },
+    data: { batchIds: nextBatchIds, batchId: nextBatchId },
   });
 
   await createAuditLog({
@@ -328,7 +371,7 @@ const removeStudentFromBatch = asyncHandler(async (req, res) => {
     },
     afterState: {
       studentId,
-      batchId: null,
+      batchId: nextBatchId,
     },
   });
 

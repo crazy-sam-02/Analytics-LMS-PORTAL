@@ -7,6 +7,11 @@ const { emitToRole } = require("../../realtime/socket");
 const { asyncHandler } = require("../../utils/http");
 
 const toPercent = (value) => Number((value || 0).toFixed(2));
+const getScorePercent = (submission) => {
+  const rawScore = Number(submission?.score || 0);
+  const totalMarks = Number(submission?.test?.totalMarks || 0);
+  return toPercent(totalMarks > 0 ? (rawScore / totalMarks) * 100 : rawScore);
+};
 
 const scoreBand = (score) => {
   if (score <= 20) return "0-20";
@@ -272,13 +277,15 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
 
   const studentRows = students.map((student) => {
     const rows = submissionsByStudent.get(student.id) || [];
-    const average = rows.length ? rows.reduce((sum, row) => sum + Number(row.score || 0), 0) / rows.length : 0;
+    const average = rows.length ? rows.reduce((sum, row) => sum + getScorePercent(row), 0) / rows.length : 0;
     const violations = rows.reduce((sum, row) => sum + Number(row.violationCount || row.violations?.length || 0), 0);
     const violationEvents = rows
       .flatMap((row) =>
         (row.violations || []).map((violation) => ({
           id: violation.id,
           type: violation.type,
+          anomalyId: violation.id,
+          anomalyType: violation.type,
           createdAt: violation.createdAt,
           metadata: violation.metadata || null,
           testId: row.testId,
@@ -321,7 +328,7 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
   scopedSubmissions.forEach((row) => {
     const key = deriveMonthKey(row.submittedAt || row.updatedAt || row.createdAt);
     const existing = trendMap.get(key) || { total: 0, count: 0 };
-    existing.total += Number(row.score || 0);
+    existing.total += getScorePercent(row);
     existing.count += 1;
     trendMap.set(key, existing);
   });
@@ -334,7 +341,7 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
   scopedSubmissions.forEach((row) => {
     const topic = row.test?.subject || "General";
     const existing = topicMap.get(topic) || { total: 0, count: 0 };
-    existing.total += Number(row.score || 0);
+    existing.total += getScorePercent(row);
     existing.count += 1;
     topicMap.set(topic, existing);
   });
@@ -388,12 +395,26 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
       return !studentId || rowStudentId === studentId;
     })
     .map((row) => ({
+      id: row.id,
+      testId: row.testId,
       testName: row.test?.title || "Test",
-      score: Number(row.score || 0),
+      scorePercent: getScorePercent(row),
       percentile: row.percentile ?? null,
       timeTaken: Number(row.timeSpentSeconds || 0),
       date: row.submittedAt || row.updatedAt || row.createdAt,
       status: row.status,
+      violationsCount: Number(row.violationCount || row.violations?.length || 0),
+      violationEvents: (row.violations || []).map((violation) => ({
+        id: violation.id,
+        type: violation.type,
+        anomalyId: violation.id,
+        anomalyType: violation.type,
+        testId: row.testId,
+        createdAt: violation.createdAt,
+        metadata: violation.metadata || null,
+        testName: row.test?.title || "Test",
+        submissionId: row.id,
+      })),
     }))
     .sort((a, b) => new Date(b.date) - new Date(a.date));
 
@@ -822,8 +843,17 @@ const getReportStudentDetailDashboard = asyncHandler(async (req, res) => {
         include: {
           test: { select: { title: true, totalMarks: true } },
           answers: { select: { questionId: true } },
+          violations: {
+            select: {
+              id: true,
+              type: true,
+              createdAt: true,
+              metadata: true,
+            },
+            orderBy: { createdAt: "desc" },
+          },
         },
-        orderBy: { submittedAt: "asc" },
+        orderBy: { submittedAt: "desc" },
       },
     },
   });
@@ -841,12 +871,27 @@ const getReportStudentDetailDashboard = asyncHandler(async (req, res) => {
 
     return {
       id: submission.id,
+      testId: submission.testId,
       testName: submission.test?.title || "Test",
       score: Number(submission.score || 0),
+      scorePercent: Number(accuracy.toFixed(2)),
       accuracy: Number(accuracy.toFixed(2)),
+      percentile: submission.percentile ?? null,
       timeTaken: Number(submission.timeSpentSeconds || 0),
       status: submission.status,
       date: (submission.submittedAt || submission.updatedAt || submission.createdAt || new Date()).toISOString(),
+      violationsCount: Number(submission.violationCount || submission.violations?.length || 0),
+      violationEvents: (submission.violations || []).map((violation) => ({
+        id: violation.id,
+        type: violation.type,
+        anomalyId: violation.id,
+        anomalyType: violation.type,
+        testId: submission.testId,
+        testName: submission.test?.title || "Test",
+        createdAt: violation.createdAt,
+        metadata: violation.metadata || null,
+        submissionId: submission.id,
+      })),
       questionAnalysis: {
         correct,
         incorrect,

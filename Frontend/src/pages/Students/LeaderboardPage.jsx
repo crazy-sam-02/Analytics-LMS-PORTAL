@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import { useSelector } from "react-redux";
 import { useQuery } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Crown, Medal, Trophy } from "lucide-react";
+import { Crown, Medal, Rocket, Trophy } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Card } from "@/components/ui/card";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
@@ -279,6 +279,14 @@ export default function LeaderboardPage() {
 
   return (
     <section className="space-y-5">
+      <Card className="rounded-2xl border border-primary/25 bg-linear-to-br from-primary-dark via-primary to-primary-dark p-6 text-primary-foreground shadow-lg shadow-primary/30">
+              <div className="flex items-center gap-2 text-primary-foreground/90">
+                <Rocket className="size-4" />
+                <p className="text-xs font-semibold tracking-[0.12em] uppercase">Track Window</p>
+              </div>
+              <h1 className="mt-3 text-3xl font-semibold tracking-tight">Track Your Status</h1>
+              <p className="mt-2 text-sm text-primary-foreground/90">Track Your Status Among your Friend on the Test You Participated</p>
+            </Card>
       <div className="grid gap-4 md:grid-cols-3">
         <Card className="flex items-center gap-3 p-5">
           <div className="grid size-10 place-items-center rounded-xl bg-yellow-100 text-yellow-600"><Crown className="size-5" /></div>

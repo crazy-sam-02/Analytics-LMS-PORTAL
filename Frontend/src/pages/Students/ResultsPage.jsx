@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { AlertCircle, ShieldAlert } from "lucide-react";
+import { AlertCircle, Rocket, ShieldAlert } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -129,7 +129,14 @@ export default function ResultsPage() {
 
   return (
     <>
-    <header className="flex items-center h-20 font-bold text-4xl max-w-full justify-center bg-primary-dark text-primary-foreground">Results</header>
+    <Card className="rounded-2xl border border-primary/25 bg-linear-to-br from-primary-dark via-primary to-primary-dark p-6 text-primary-foreground shadow-lg shadow-primary/30">
+        <div className="flex items-center gap-2 text-primary-foreground/90">
+          <Rocket className="size-4" />
+          <p className="text-xs font-semibold tracking-[0.12em] uppercase">Result Window</p>
+        </div>
+        <h1 className="mt-3 text-3xl font-semibold tracking-tight">Track Test Result</h1>
+        <p className="mt-2 text-sm text-primary-foreground/90">the question wise answer for the test you have attempted</p>
+      </Card>
     <section className="space-y-5 mt-20">
       {violationSubmitted ? (
         <Alert className="border-warning/30 bg-warning/10 text-warning">

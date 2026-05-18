@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { Clock3, PlayCircle, CheckCircle2 } from "lucide-react";
+import { Clock3, PlayCircle, CheckCircle2, Rocket } from "lucide-react";
 import { activeAttemptsQueryOptions, reportsQueryOptions } from "@/services/studentQueries";
 import { studentApi } from "@/services/studentApi";
 import { Card } from "@/components/ui/card";
@@ -170,12 +170,14 @@ export default function OngoingTestsPage() {
 
   return (
     <section className="space-y-5">
-      <div className="rounded-2xl border border-primary/20 bg-linear-to-r from-primary/10 via-background to-background px-4 py-4 sm:px-5">
-        <div className="flex items-center justify-between gap-3">
-          <h1 className="text-2xl font-semibold text-text-primary">Ongoing Tests</h1>
-          <Badge variant="secondary" className="bg-primary/15 text-primary">{attempts.length} Active</Badge>
-        </div>
-      </div>
+      <Card className="rounded-2xl border border-primary/25 bg-linear-to-br from-primary-dark via-primary to-primary-dark p-6 text-primary-foreground shadow-lg shadow-primary/30">
+              <div className="flex items-center gap-2 text-primary-foreground/90">
+                <Rocket className="size-4" />
+                <p className="text-xs font-semibold tracking-[0.12em] uppercase">Test Window</p>
+              </div>
+              <h1 className="mt-3 text-3xl font-semibold tracking-tight">On-Going Tests</h1>
+              <p className="mt-2 text-sm text-primary-foreground/90">Start Your Attempt .  {"   "} Click on Attend Now.</p>
+            </Card>
 
       {attempts.length === 0 ? (
         <Card className="rounded-xl border border-dashed border-border bg-card p-10 text-center">

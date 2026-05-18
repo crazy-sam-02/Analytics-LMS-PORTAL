@@ -56,18 +56,30 @@ const generateSuperAdminReportHTML = (reportJob, reportData) => {
 // ============ Report Formatters ============
 
 const formatStudentWiseReport = (rows = [], generatedAt, expiresAt, isGlobal = false) => {
-  const totalStudents = rows.length;
-  const avgScore = totalStudents > 0 ? (rows.reduce((sum, r) => sum + Number(r.score || 0), 0) / totalStudents).toFixed(2) : 0;
-  const avgAccuracy = totalStudents > 0 ? (rows.reduce((sum, r) => sum + Number(r.accuracy || 0), 0) / totalStudents).toFixed(2) : 0;
+  const safeRows = [...rows]
+    .map((row) => ({
+      ...row,
+      testName: row.testName || "-",
+      date: row.date || row.submittedAt || null,
+      scorePercent: Number(row.scorePercent ?? row.accuracy ?? row.score ?? 0),
+      percentile: row.percentile == null ? null : Number(row.percentile),
+      timeTaken: Number(row.timeTaken || 0),
+      violationsCount: Number(row.violationsCount || row.violationCount || 0),
+      status: row.status || "-",
+      violationEvents: Array.isArray(row.violationEvents) ? row.violationEvents : [],
+    }))
+    .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+  const totalStudents = safeRows.length;
+  const avgScore = totalStudents > 0 ? (safeRows.reduce((sum, r) => sum + Number(r.scorePercent || 0), 0) / totalStudents).toFixed(2) : 0;
 
   // Group by student for average scores
   const studentMap = new Map();
-  rows.forEach((row) => {
+  safeRows.forEach((row) => {
     if (!studentMap.has(row.studentId)) {
       studentMap.set(row.studentId, { studentName: row.studentName, scores: [], count: 0 });
     }
     const student = studentMap.get(row.studentId);
-    student.scores.push(Number(row.score || 0));
+    student.scores.push(Number(row.scorePercent || 0));
     student.count += 1;
   });
 
@@ -78,7 +90,7 @@ const formatStudentWiseReport = (rows = [], generatedAt, expiresAt, isGlobal = f
   }));
 
   const topPerformers = studentPerformance.sort((a, b) => b.avgScore - a.avgScore).slice(0, 10);
-  const scoreDistribution = calculateScoreDistribution(rows);
+  const scoreDistribution = calculateScoreDistribution(safeRows, "scorePercent");
 
   return `
     ${generateHTMLHeader("Student-Wise Report" + (isGlobal ? " (Platform)" : ""), generatedAt, expiresAt)}
@@ -93,8 +105,8 @@ const formatStudentWiseReport = (rows = [], generatedAt, expiresAt, isGlobal = f
         <div class="metric-label">Average Score</div>
       </div>
       <div class="metric-card">
-        <div class="metric-value">${avgAccuracy}%</div>
-        <div class="metric-label">Average Accuracy</div>
+        <div class="metric-value">${safeRows.reduce((sum, row) => sum + row.violationsCount, 0)}</div>
+        <div class="metric-label">Total Violations</div>
       </div>
       <div class="metric-card">
         <div class="metric-value">${studentMap.size}</div>
@@ -144,7 +156,7 @@ const formatStudentWiseReport = (rows = [], generatedAt, expiresAt, isGlobal = f
           ${topPerformers.map((p, i) => `
             <tr>
               <td>${i + 1}</td>
-              <td>${p.studentName}</td>
+              <td>${p.name}</td>
               <td><strong>${p.avgScore}%</strong></td>
               <td>${p.submissions}</td>
             </tr>
@@ -154,34 +166,38 @@ const formatStudentWiseReport = (rows = [], generatedAt, expiresAt, isGlobal = f
     </div>
 
     <div class="section">
-      <h2>All Submissions (${rows.length} records)</h2>
+      <h2>Student Test Timeline (${safeRows.length} records)</h2>
       <table class="data-table">
         <thead>
           <tr>
-            <th>Student ID</th>
-            <th>Student Name</th>
+            <th>Date</th>
             <th>Test Name</th>
             <th>Score</th>
-            <th>Accuracy</th>
+            <th>Percentile</th>
+            <th>Pass/Fail</th>
+            <th>Time Taken</th>
+            <th>Violations Count</th>
             <th>Status</th>
-            <th>Submitted At</th>
+            <th>First Violation</th>
           </tr>
         </thead>
         <tbody>
-          ${rows.slice(0, 100).map((row) => `
+          ${safeRows.slice(0, 100).map((row) => `
             <tr>
-              <td>${row.studentId || "-"}</td>
-              <td>${row.studentName || "-"}</td>
+              <td>${formatDate(row.date)}</td>
               <td>${row.testName || "-"}</td>
-              <td>${row.score || 0}</td>
-              <td>${row.accuracy || 0}%</td>
+              <td>${formatPercentValue(row.scorePercent)}</td>
+              <td>${row.percentile == null ? "-" : `${row.percentile.toFixed(1)}%`}</td>
+              <td>${row.scorePercent >= 40 ? "PASS" : "FAIL"}</td>
+              <td>${formatMinutes(row.timeTaken)}</td>
+              <td>${row.violationsCount}</td>
               <td><span class="badge badge-${(row.status || "").toLowerCase()}">${row.status || "-"}</span></td>
-              <td>${new Date(row.submittedAt).toLocaleDateString() || "-"}</td>
+              <td>${row.violationEvents[0]?.anomalyType || "-"}</td>
             </tr>
           `).join("")}
         </tbody>
       </table>
-      ${rows.length > 100 ? `<p class="text-muted">Showing first 100 of ${rows.length} records</p>` : ""}
+      ${safeRows.length > 100 ? `<p class="text-muted">Showing first 100 of ${safeRows.length} records</p>` : ""}
     </div>
 
     ${generateHTMLFooter()}
@@ -536,7 +552,7 @@ const formatComprehensiveReport = (data = {}, generatedAt, expiresAt) => {
 
 // ============ Helper Functions ============
 
-const calculateScoreDistribution = (rows = []) => {
+const calculateScoreDistribution = (rows = [], key = "score") => {
   const ranges = [
     { label: "0-20", min: 0, max: 20 },
     { label: "21-40", min: 21, max: 40 },
@@ -547,7 +563,7 @@ const calculateScoreDistribution = (rows = []) => {
 
   const counts = ranges.map((range) =>
     rows.filter((r) => {
-      const score = Number(r.score || 0);
+      const score = Number(r?.[key] || 0);
       return score >= range.min && score <= range.max;
     }).length
   );
@@ -557,6 +573,12 @@ const calculateScoreDistribution = (rows = []) => {
     counts,
   };
 };
+const formatDate = (value) => {
+  const date = new Date(value || 0);
+  return Number.isFinite(date.getTime()) ? date.toLocaleDateString() : "-";
+};
+const formatPercentValue = (value) => `${Number(value || 0).toFixed(2)}%`;
+const formatMinutes = (seconds) => `${Math.round(Number(seconds || 0) / 60)} min`;
 
 const generateHTMLHeader = (title, generatedAt, expiresAt) => `
   <!DOCTYPE html>

@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSelector } from "react-redux";
 import { toast } from "sonner";
 import { adminApi } from "@/services/api";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -21,8 +22,24 @@ export default function BatchesPage() {
   const [studentPage, setStudentPage] = useState(1);
   const [search, setSearch] = useState("");
   const [selectedStudentId, setSelectedStudentId] = useState("");
+  const [selectedStudentIds, setSelectedStudentIds] = useState([]);
   const [batchIdInput, setBatchIdInput] = useState("");
+  const [bulkBatchId, setBulkBatchId] = useState("");
   const [banner, setBanner] = useState({ type: "", title: "", message: "" });
+
+  const admin = useSelector((state) => state.adminAuth.admin);
+  const adminDeptId = admin?.department?.id || admin?.departmentId || "";
+
+  useEffect(() => {
+    if (!adminDeptId) return;
+    setForm((prev) => (prev.departmentId === adminDeptId ? prev : { ...prev, departmentId: adminDeptId }));
+  }, [adminDeptId]);
+
+  useEffect(() => {
+    if (selectedBatchId && !bulkBatchId) {
+      setBulkBatchId(selectedBatchId);
+    }
+  }, [selectedBatchId, bulkBatchId]);
 
   const batchesQuery = useQuery({
     queryKey: ["admin-batches"],
@@ -32,11 +49,6 @@ export default function BatchesPage() {
   const testsQuery = useQuery({
     queryKey: ["admin-tests-for-batch"],
     queryFn: () => adminApi.getTests("?page=1&limit=100"),
-  });
-
-  const departmentsQuery = useQuery({
-    queryKey: ["admin-departments-for-batches"],
-    queryFn: adminApi.getDepartments,
   });
 
   const selectedBatchQuery = useQuery({
@@ -61,7 +73,7 @@ export default function BatchesPage() {
     onSuccess: () => {
       toast.success("Batch created successfully.");
       setBanner({ type: "success", title: "Batch created", message: "The new batch is now available in the list." });
-      setForm({ name: "", year: new Date().getFullYear(), departmentId: "" });
+      setForm({ name: "", year: new Date().getFullYear(), departmentId: adminDeptId });
       queryClient.invalidateQueries({ queryKey: ["admin-batches"] });
     },
     onError: (error) => {
@@ -151,7 +163,7 @@ export default function BatchesPage() {
     mutationFn: ({ studentId, batchId }) => adminApi.assignStudentBatch(studentId, { batchId }),
     onSuccess: () => {
       toast.success("Student batch updated.");
-      setBanner({ type: "success", title: "Student updated", message: "Student has been reassigned to the selected batch." });
+      setBanner({ type: "success", title: "Student updated", message: "Student has been added to the selected batch." });
       queryClient.invalidateQueries({ queryKey: ["admin-students-directory"] });
       queryClient.invalidateQueries({ queryKey: ["admin-student-profile", selectedStudentId] });
       queryClient.invalidateQueries({ queryKey: ["admin-batch-detail"] });
@@ -162,13 +174,29 @@ export default function BatchesPage() {
     },
   });
 
+  const bulkAssignMutation = useMutation({
+    mutationFn: ({ batchId, studentIds }) => adminApi.assignBatchStudents(batchId, { studentIds }),
+    onSuccess: () => {
+      toast.success("Students assigned to batch.");
+      setBanner({ type: "success", title: "Batch updated", message: "Selected students have been added to the batch." });
+      setSelectedStudentIds([]);
+      queryClient.invalidateQueries({ queryKey: ["admin-students-directory"] });
+      queryClient.invalidateQueries({ queryKey: ["admin-batch-detail"] });
+      queryClient.invalidateQueries({ queryKey: ["admin-batches"] });
+    },
+    onError: (error) => {
+      setBanner({ type: "error", title: "Bulk assign failed", message: error?.message || "Unable to assign selected students." });
+      toast.error(error?.message || "Failed to assign students.");
+    },
+  });
+
   const batches = useMemo(() => batchesQuery.data || [], [batchesQuery.data]);
   const students = useMemo(() => studentsQuery.data?.data || [], [studentsQuery.data]);
+  const pageStudentIds = useMemo(() => students.map((student) => student.id), [students]);
   const studentPagination = useMemo(
     () => studentsQuery.data?.pagination || { page: studentPage, totalPages: 1 },
     [studentPage, studentsQuery.data]
   );
-  const departments = useMemo(() => departmentsQuery.data || [], [departmentsQuery.data]);
   const pagedBatches = useMemo(() => {
     const start = (batchPage - 1) * PAGE_SIZE;
     return batches.slice(start, start + PAGE_SIZE);
@@ -176,6 +204,23 @@ export default function BatchesPage() {
   const totalPages = Math.max(1, Math.ceil(batches.length / PAGE_SIZE));
   const selectedBatch = selectedBatchQuery.data;
   const selectedStudent = studentProfileQuery.data;
+  const allStudentsOnPageSelected = pageStudentIds.length > 0 && pageStudentIds.every((id) => selectedStudentIds.includes(id));
+
+  const toggleStudentSelection = (studentId) => {
+    setSelectedStudentIds((prev) =>
+      prev.includes(studentId) ? prev.filter((id) => id !== studentId) : [...prev, studentId]
+    );
+  };
+
+  const toggleSelectAllOnPage = () => {
+    setSelectedStudentIds((prev) => {
+      if (allStudentsOnPageSelected) {
+        return prev.filter((id) => !pageStudentIds.includes(id));
+      }
+      const merged = [...new Set([...prev, ...pageStudentIds])];
+      return merged;
+    });
+  };
 
   return (
     <div className="space-y-6">
@@ -189,24 +234,11 @@ export default function BatchesPage() {
       <Card className="rounded-2xl border-border">
         <CardHeader>
           <CardTitle>Create Batch</CardTitle>
-          <CardDescription>Name + department + academic year with duplicate-name safeguards.</CardDescription>
+          <CardDescription>Name + academic year; department is taken from your admin profile.</CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-3 sm:grid-cols-4">
+        <CardContent className="grid gap-3 sm:grid-cols-3">
           <Input placeholder="Batch name (CSE-2027-A)" value={form.name} onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))} />
           <Input type="number" value={form.year} onChange={(event) => setForm((prev) => ({ ...prev, year: Number(event.target.value) }))} />
-          <select
-            className="h-10 rounded-md border border-border px-3 text-sm"
-            value={form.departmentId}
-            onChange={(event) => setForm((prev) => ({ ...prev, departmentId: event.target.value }))}
-            disabled={departmentsQuery.isLoading}
-          >
-            <option value="">{departmentsQuery.isLoading ? "Loading departments..." : "Select department"}</option>
-            {departments.map((department) => (
-              <option key={department.id} value={department.id}>
-                {department.name}
-              </option>
-            ))}
-          </select>
           <Button
             onClick={() => createBatchMutation.mutate(form)}
             disabled={createBatchMutation.isPending || !form.name || !form.departmentId}
@@ -370,6 +402,38 @@ export default function BatchesPage() {
                   <Input placeholder="Search by name/email" value={search} onChange={(event) => { setSearch(event.target.value); setStudentPage(1); }} />
                   <Button variant="outline" onClick={() => studentsQuery.refetch()}>Search</Button>
                 </div>
+                  <div className="mb-4 rounded-xl border border-border p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-sm font-semibold text-text-secondary">Bulk assign students</p>
+                      <p className="text-xs text-text-secondary">Selected: {selectedStudentIds.length}</p>
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <Button variant="outline" size="sm" onClick={toggleSelectAllOnPage} disabled={students.length === 0}>
+                        {allStudentsOnPageSelected ? "Unselect page" : "Select page"}
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={() => setSelectedStudentIds([])} disabled={selectedStudentIds.length === 0}>
+                        Clear
+                      </Button>
+                    </div>
+                    <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                      <select
+                        className="h-10 rounded-md border border-border px-3 text-sm sm:col-span-2"
+                        value={bulkBatchId}
+                        onChange={(event) => setBulkBatchId(event.target.value)}
+                      >
+                        <option value="">Select batch to add</option>
+                        {batches.map((batch) => (
+                          <option key={batch.id} value={batch.id}>{batch.name} ({batch.department?.name || "-"})</option>
+                        ))}
+                      </select>
+                      <Button
+                        onClick={() => bulkAssignMutation.mutate({ batchId: bulkBatchId, studentIds: selectedStudentIds })}
+                        disabled={bulkAssignMutation.isPending || !bulkBatchId || selectedStudentIds.length === 0}
+                      >
+                        {bulkAssignMutation.isPending ? "Adding..." : "Add Selected"}
+                      </Button>
+                    </div>
+                  </div>
                 <div className="grid gap-6 xl:grid-cols-[1fr_1.2fr]">
                   <div className="space-y-2">
                     {studentsQuery.isLoading ? (
@@ -380,26 +444,41 @@ export default function BatchesPage() {
                       </div>
                     ) : null}
                     {!studentsQuery.isLoading && students.length === 0 ? <p className="text-sm text-text-secondary">No students found for current filters.</p> : null}
-                    {students.map((student) => (
-                      <button
-                        key={student.id}
-                        type="button"
-                        onClick={() => {
-                          setSelectedStudentId(student.id);
-                          setBatchIdInput(student.batchId || student.batch?.id || "");
-                        }}
-                        className={`flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left ${selectedStudentId === student.id ? "border-primary/40 bg-primary/10" : "border-border"}`}
-                      >
-                        <div>
-                          <p className="font-medium text-text-primary">{student.fullName}</p>
-                          <p className="text-xs text-text-secondary">{student.email} • {student.studentId}</p>
-                        </div>
-                        <div className="text-right text-xs text-text-secondary">
-                          <p>{student.department?.name || "-"}</p>
-                          <p>{student.batch?.name || "-"}</p>
-                        </div>
-                      </button>
-                    ))}
+                    {students.map((student) => {
+                      const batchLabel = Array.isArray(student.batches) && student.batches.length > 0
+                        ? student.batches.map((batch) => batch.name).join(", ")
+                        : (student.batch?.name || "-");
+
+                      return (
+                        <button
+                          key={student.id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedStudentId(student.id);
+                            setBatchIdInput("");
+                          }}
+                          className={`flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left ${selectedStudentId === student.id ? "border-primary/40 bg-primary/10" : "border-border"}`}
+                        >
+                          <div className="flex items-start gap-3">
+                            <input
+                              type="checkbox"
+                              checked={selectedStudentIds.includes(student.id)}
+                              onChange={() => toggleStudentSelection(student.id)}
+                              onClick={(event) => event.stopPropagation()}
+                              className="mt-1 h-4 w-4"
+                            />
+                            <div>
+                              <p className="font-medium text-text-primary">{student.fullName}</p>
+                              <p className="text-xs text-text-secondary">{student.email} • {student.studentId}</p>
+                            </div>
+                          </div>
+                          <div className="text-right text-xs text-text-secondary">
+                            <p>{student.department?.name || "-"}</p>
+                            <p className="max-w-[140px] truncate">{batchLabel}</p>
+                          </div>
+                        </button>
+                      );
+                    })}
                     {(studentPagination?.totalPages || 1) > 1 ? (
                       <div className="flex items-center justify-between border-t border-border pt-2 text-xs text-text-secondary">
                         <p>Page {studentPagination?.page || studentPage} of {studentPagination?.totalPages || 1}</p>
@@ -424,12 +503,27 @@ export default function BatchesPage() {
                       <>
                         <p className="text-base font-semibold text-text-primary">{selectedStudent.fullName}</p>
                         <p className="text-xs text-text-secondary">{selectedStudent.email} • {selectedStudent.studentId}</p>
-                        <p className="text-xs text-text-secondary">Department: {selectedStudent.department?.name || "-"} • Batch: {selectedStudent.batch?.name || "-"}</p>
+                        <p className="text-xs text-text-secondary">Department: {selectedStudent.department?.name || "-"}</p>
                         <p className="text-xs text-text-secondary">Total submissions: {selectedStudent._count?.submissions || 0}</p>
+
+                        {Array.isArray(selectedStudent.batches) && selectedStudent.batches.length > 0 ? (
+                          <div className="border-t border-border pt-2">
+                            <p className="mb-2 text-xs font-medium text-text-primary">Assigned batches:</p>
+                            <div className="space-y-1">
+                              {selectedStudent.batches.map((batch) => (
+                                <div key={batch.id} className="flex items-center justify-between rounded-md bg-primary/5 px-2 py-1 text-xs">
+                                  <span className="text-text-primary">{batch.name}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-text-secondary italic">No batches assigned yet</p>
+                        )}
       
-                        <div className="grid gap-2 sm:grid-cols-3">
+                        <div className="grid gap-2 border-t border-border pt-2 sm:grid-cols-3">
                           <select className="h-10 rounded-md border border-border px-3 text-sm sm:col-span-2" value={batchIdInput} onChange={(event) => setBatchIdInput(event.target.value)}>
-                            <option value="">Select batch</option>
+                            <option value="">Select batch to add</option>
                             {batches.map((batch) => (
                               <option key={batch.id} value={batch.id}>{batch.name} ({batch.department?.name || "-"})</option>
                             ))}
@@ -438,7 +532,7 @@ export default function BatchesPage() {
                             onClick={() => assignBatchMutation.mutate({ studentId: selectedStudent.id, batchId: batchIdInput })}
                             disabled={assignBatchMutation.isPending || !batchIdInput}
                           >
-                            Assign Batch
+                            Add Batch
                           </Button>
                         </div>
                       </>

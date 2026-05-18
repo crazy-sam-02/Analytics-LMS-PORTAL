@@ -133,7 +133,14 @@ export default function UpcomingTestsPage() {
   if (tests.length === 0) {
     return (
       <section className="space-y-5">
-        <h1 className="text-2xl font-semibold text-text-primary">Upcoming Tests</h1>
+        <Card className="rounded-2xl border border-primary/25 bg-linear-to-br from-primary-dark via-primary to-primary-dark p-6 text-primary-foreground shadow-lg shadow-primary/30">
+        <div className="flex items-center gap-2 text-primary-foreground/90">
+          <Rocket className="size-4" />
+          <p className="text-xs font-semibold tracking-[0.12em] uppercase">Upcoming Window</p>
+        </div>
+        <h1 className="mt-3 text-3xl font-semibold tracking-tight">Upcoming Tests</h1>
+        <p className="mt-2 text-sm text-primary-foreground/90">Start access is validated on server when you click Attend Now.</p>
+      </Card>
         <Card className="rounded-xl border border-dashed border-border bg-card p-10 text-center">
           <p className="text-lg font-semibold text-text-primary">No upcoming tests</p>
           <p className="mt-2 text-sm text-text-secondary">New schedules will appear here automatically.</p>

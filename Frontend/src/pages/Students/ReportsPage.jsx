@@ -1,6 +1,6 @@
 import { Suspense, lazy, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Download, FileX } from "lucide-react";
+import { Download, FileX, Rocket } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -217,6 +217,14 @@ export default function ReportsPage() {
 
   return (
     <section className="space-y-5">
+      <Card className="rounded-2xl border border-primary/25 bg-linear-to-br from-primary-dark via-primary to-primary-dark p-6 text-primary-foreground shadow-lg shadow-primary/30">
+              <div className="flex items-center gap-2 text-primary-foreground/90">
+                <Rocket className="size-4" />
+                <p className="text-xs font-semibold tracking-[0.12em] uppercase">Report Window</p>
+              </div>
+              <h1 className="mt-3 text-3xl font-semibold tracking-tight">Visualize Your Performance</h1>
+              <p className="mt-2 text-sm text-primary-foreground/90">keep track on report of your test performance</p>
+            </Card>
       <Card className="space-y-4 p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="text-base font-semibold text-text-primary">Select the test</div>

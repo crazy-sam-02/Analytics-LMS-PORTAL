@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSelector } from "react-redux";
 import { toast } from "sonner";
 import { adminApi } from "@/services/api";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -152,7 +153,7 @@ export default function StudentsPage() {
     mutationFn: ({ studentId, batchId }) => adminApi.assignStudentBatch(studentId, { batchId }),
     onSuccess: () => {
       toast.success("Batch assigned.");
-      setBanner({ type: "success", title: "Batch updated", message: "Student batch and department assignment are now synced." });
+      setBanner({ type: "success", title: "Batch updated", message: "Student has been added to the selected batch." });
       queryClient.invalidateQueries({ queryKey: ["admin-students"] });
       queryClient.invalidateQueries({ queryKey: ["admin-student-profile", selectedStudentId] });
     },
@@ -165,9 +166,22 @@ export default function StudentsPage() {
   const importMutation = useMutation({
     mutationFn: (body) => adminApi.bulkImportStudents(body),
     onSuccess: (payload) => {
-      toast.success("Import job queued.");
-      setBanner({ type: "success", title: "Import queued", message: "CSV processing started in background." });
-      setActiveImportJobId(payload.jobId);
+      // Handle both queued async job (legacy) and immediate report (new behavior)
+      if (payload && payload.jobId) {
+        toast.success("Import job queued.");
+        setBanner({ type: "success", title: "Import queued", message: "CSV processing started in background." });
+        setActiveImportJobId(payload.jobId);
+        return;
+      }
+
+      // Immediate report returned
+      const report = payload?.result || payload || {};
+      const created = report.created || 0;
+      const failed = report.failed || 0;
+      const duplicates = report.duplicates || 0;
+      toast.success("Import completed");
+      setBanner({ type: "success", title: "Import completed", message: `Created: ${created} • Failed: ${failed} • Duplicates: ${duplicates}` });
+      queryClient.invalidateQueries({ queryKey: ["admin-students"] });
     },
     onError: (error) => {
       setBanner({ type: "error", title: "Import queue failed", message: error?.message || "Unable to queue import job." });
@@ -204,6 +218,19 @@ export default function StudentsPage() {
   const studentPagination = studentsQuery.data?.pagination;
   const batches = useMemo(() => Array.isArray(batchesQuery.data) ? batchesQuery.data : batchesQuery.data?.data || [], [batchesQuery.data]);
   const departments = useMemo(() => Array.isArray(departmentsQuery.data) ? departmentsQuery.data : departmentsQuery.data?.data || [], [departmentsQuery.data]);
+
+  // Auto-apply admin department filter and defaults
+  const admin = useSelector((state) => state.adminAuth.admin);
+
+  useEffect(() => {
+    if (!admin) return;
+    const adminDeptId = admin?.department?.id || admin?.departmentId || "";
+    setDirectoryFilters((prev) => ({ ...prev, departmentId: prev.departmentId || adminDeptId }));
+    // Default student create form department to admin's department name if available
+    if (admin?.department?.name && !studentForm.department) {
+      setStudentForm((prev) => ({ ...prev, department: admin.department.name }));
+    }
+  }, [admin]);
   const selectedStudent = studentProfileQuery.data;
 
   useEffect(() => {
@@ -257,13 +284,18 @@ export default function StudentsPage() {
             />
             <select
               className="h-10 rounded-md border border-border px-3 text-sm"
-              value={studentForm.department}
-              onChange={(event) => setStudentForm((prev) => ({ ...prev, department: event.target.value }))}
+                value={studentForm.department}
+                onChange={(event) => setStudentForm((prev) => ({ ...prev, department: event.target.value }))}
+                disabled={Boolean(admin)}
             >
-              <option value="">Select department</option>
-              {Array.isArray(departments) && departments.map((department) => (
-                <option key={department.id} value={department.name}>{department.name}</option>
-              ))}
+                {!admin ? <option value="">Select department</option> : null}
+                {admin && admin.department ? (
+                  <option value={admin.department.name}>{admin.department.name}</option>
+                ) : (
+                  Array.isArray(departments) && departments.map((department) => (
+                    <option key={department.id} value={department.name}>{department.name}</option>
+                  ))
+                )}
             </select>
             <select
               className="h-10 rounded-md border border-border px-3 text-sm"
@@ -361,11 +393,16 @@ export default function StudentsPage() {
                 setDirectoryFilters((prev) => ({ ...prev, departmentId: event.target.value }));
                 setPage(1);
               }}
+              disabled={Boolean(admin)}
             >
-              <option value="">All departments</option>
-              {Array.isArray(departments) && departments.map((department) => (
-                <option key={department.id} value={department.id}>{department.name}</option>
-              ))}
+              {!admin ? <option value="">All departments</option> : null}
+              {admin && admin.department ? (
+                <option value={admin.department.id}>{admin.department.name}</option>
+              ) : (
+                Array.isArray(departments) && departments.map((department) => (
+                  <option key={department.id} value={department.id}>{department.name}</option>
+                ))
+              )}
             </select>
             <select
               className="h-10 rounded-md border border-border px-3 text-sm"
@@ -396,26 +433,32 @@ export default function StudentsPage() {
                 </div>
               ) : null}
               {!studentsQuery.isLoading && students.length === 0 ? <p className="text-sm text-text-secondary">No students found for current filters.</p> : null}
-              {Array.isArray(students) && students.map((student) => (
-                <button
-                  key={student.id}
-                  type="button"
-                  onClick={() => {
-                    setSelectedStudentId(student.id);
-                    setBatchIdInput(student.batchId || "");
-                  }}
-                  className={`flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left ${selectedStudentId === student.id ? "border-primary/40 bg-primary/10" : "border-border"}`}
-                >
-                  <div>
-                    <p className="font-medium text-text-primary">{student.fullName}</p>
-                    <p className="text-xs text-text-secondary">{student.email} • {student.studentId}</p>
-                  </div>
-                  <div className="text-right text-xs text-text-secondary">
-                    <p>{student.department?.name || "-"}</p>
-                    <p>{student.batch?.name || "-"}</p>
-                  </div>
-                </button>
-              ))}
+              {Array.isArray(students) && students.map((student) => {
+                const batchLabel = Array.isArray(student.batches) && student.batches.length > 0
+                  ? student.batches.map((batch) => batch.name).join(", ")
+                  : (student.batch?.name || "-");
+
+                return (
+                  <button
+                    key={student.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedStudentId(student.id);
+                      setBatchIdInput("");
+                    }}
+                    className={`flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left ${selectedStudentId === student.id ? "border-primary/40 bg-primary/10" : "border-border"}`}
+                  >
+                    <div>
+                      <p className="font-medium text-text-primary">{student.fullName}</p>
+                      <p className="text-xs text-text-secondary">{student.email} • {student.studentId}</p>
+                    </div>
+                    <div className="text-right text-xs text-text-secondary">
+                      <p>{student.department?.name || "-"}</p>
+                      <p className="max-w-[140px] truncate">{batchLabel}</p>
+                    </div>
+                  </button>
+                );
+              })}
               {(studentPagination?.totalPages || 1) > 1 ? (
                 <div className="flex items-center justify-between border-t border-border pt-2 text-xs text-text-secondary">
                   <p>Page {studentPagination?.page || page} of {studentPagination?.totalPages || 1}</p>
@@ -440,12 +483,26 @@ export default function StudentsPage() {
                 <>
                   <p className="text-base font-semibold text-text-primary">{selectedStudent.fullName}</p>
                   <p className="text-xs text-text-secondary">{selectedStudent.email} • {selectedStudent.studentId}</p>
-                  <p className="text-xs text-text-secondary">Department: {selectedStudent.department?.name || "-"} • Batch: {selectedStudent.batch?.name || "-"}</p>
+                  <p className="text-xs text-text-secondary">Department: {selectedStudent.department?.name || "-"}</p>
                   <p className="text-xs text-text-secondary">Total submissions: {selectedStudent._count?.submissions || 0}</p>
+                  {Array.isArray(selectedStudent.batches) && selectedStudent.batches.length > 0 ? (
+                    <div className="border-t border-border pt-2">
+                      <p className="mb-2 text-xs font-medium text-text-primary">Assigned batches:</p>
+                      <div className="space-y-1">
+                        {selectedStudent.batches.map((batch) => (
+                          <div key={batch.id} className="flex items-center justify-between rounded-md bg-primary/5 px-2 py-1 text-xs">
+                            <span className="text-text-primary">{batch.name}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-text-secondary italic">No batches assigned yet</p>
+                  )}
 
-                  <div className="grid gap-2 sm:grid-cols-3">
+                  <div className="grid gap-2 border-t border-border pt-2 sm:grid-cols-3">
                     <select className="h-10 rounded-md border border-border px-3 text-sm sm:col-span-2" value={batchIdInput} onChange={(event) => setBatchIdInput(event.target.value)}>
-                      <option value="">Select batch</option>
+                      <option value="">Select batch to add</option>
                       {Array.isArray(batches) && batches.map((batch) => (
                         <option key={batch.id} value={batch.id}>{batch.name} ({batch.department?.name || "-"})</option>
                       ))}
@@ -454,9 +511,10 @@ export default function StudentsPage() {
                       onClick={() => assignBatchMutation.mutate({ studentId: selectedStudent.id, batchId: batchIdInput })}
                       disabled={assignBatchMutation.isPending || !batchIdInput}
                     >
-                      Assign Batch
+                      Add Batch
                     </Button>
                   </div>
+
                 </>
               ) : null}
             </div>

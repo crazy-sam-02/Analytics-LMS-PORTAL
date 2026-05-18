@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -38,10 +38,18 @@ const MODE_DEFAULT_SORT = {
 };
 
 const clampPercent = (value) => Math.max(0, Math.min(100, Number(value || 0)));
+const NUMERIC_SORT_KEYS = new Set(["rank", "avgScore", "testsTaken", "violations", "scorePercent", "percentile", "timeTaken", "violationsCount"]);
 
 const getSortValue = (row, key) => {
   if (!row) return null;
-  if (key === "date") return new Date(row.date || 0).getTime();
+  if (key === "date") {
+    const time = new Date(row.date || 0).getTime();
+    return Number.isFinite(time) ? time : null;
+  }
+  if (NUMERIC_SORT_KEYS.has(key)) {
+    const numeric = Number(row[key]);
+    return Number.isFinite(numeric) ? numeric : null;
+  }
   return row[key] ?? null;
 };
 
@@ -100,6 +108,13 @@ export default function ReportsPage() {
     studentName: "",
     events: [],
   });
+  const [reviewState, setReviewState] = useState({
+    eventKey: "",
+    action: "",
+    reason: "",
+    submitting: false,
+    error: "",
+  });
 
   const pollRef = useRef(null);
 
@@ -129,8 +144,22 @@ export default function ReportsPage() {
 
   const studentsDirectoryQuery = useQuery({
     queryKey: ["admin-report-students-directory-v2"],
-    queryFn: () => adminApi.getStudents("?page=1&limit=300"),
+    queryFn: () => adminApi.getStudents("?page=1&limit=100"),
     staleTime: 120000,
+  });
+  const studentSearchTerm = studentSearch.trim();
+  const studentSearchQuery = useQuery({
+    queryKey: ["admin-report-student-search-v2", studentSearchTerm],
+    queryFn: () =>
+      adminApi.getStudents(
+        toQueryString({
+          page: 1,
+          limit: 8,
+          search: studentSearchTerm,
+        })
+      ),
+    enabled: canViewReports && mode === "student" && studentSearchTerm.length >= 2,
+    staleTime: 30000,
   });
 
   const analyticsQuery = useQuery({
@@ -147,11 +176,38 @@ export default function ReportsPage() {
     enabled: canViewReports && (mode !== "student" || Boolean(studentId)),
     staleTime: 45000,
   });
+  const studentDetailQuery = useQuery({
+    queryKey: ["admin-report-student-detail-all-tests-v2", studentId],
+    queryFn: () => adminApi.getReportStudentDetail(studentId),
+    enabled: canViewReports && mode === "student" && Boolean(studentId),
+    staleTime: 45000,
+  });
 
   const tests = testsQuery.data?.data || [];
   const batches = batchesQuery.data || [];
   const studentsDirectory = studentsDirectoryQuery.data?.data || [];
+  const studentSearchResults = studentSearchQuery.data?.data || [];
   const analytics = analyticsQuery.data || {};
+  const selectedDirectoryStudent = useMemo(
+    () => studentsDirectory.find((student) => String(student.id) === String(studentId)) || null,
+    [studentsDirectory, studentId]
+  );
+  const selectedStudentBatchLabel = selectedDirectoryStudent
+    ? Array.isArray(selectedDirectoryStudent.batches) && selectedDirectoryStudent.batches.length > 0
+      ? selectedDirectoryStudent.batches.map((batch) => batch.name).join(", ")
+      : selectedDirectoryStudent.batch?.name || "-"
+    : "-";
+  const selectedStudentPickerRecord =
+    selectedDirectoryStudent ||
+    (studentDetailQuery.data?.student
+      ? {
+          id: studentDetailQuery.data.student.id,
+          fullName: studentDetailQuery.data.student.name,
+          studentId: studentDetailQuery.data.student.studentId,
+          department: { name: studentDetailQuery.data.student.department },
+          batch: { name: studentDetailQuery.data.student.batch },
+        }
+      : null);
 
   const trendData = (analytics.scoreTrend || []).map((item, index) => ({
     month: item.month || `Test ${index + 1}`,
@@ -204,6 +260,8 @@ export default function ReportsPage() {
       ? row.violationEvents.map((event) => ({
           id: event.id,
           type: event.type,
+          anomalyId: event.anomalyId || event.id,
+          anomalyType: event.anomalyType || event.type,
           createdAt: event.createdAt,
           metadata: event.metadata || null,
           testName: event.testName || "Test",
@@ -214,15 +272,37 @@ export default function ReportsPage() {
 
   const attemptRows = (analytics.attemptHistory || []).map((item) => ({
     id: item.id,
-    test: item.testName || item.testTitle || "-",
-    score: Number(item.score || 0),
+    testId: item.testId,
+    testName: item.testName || item.testTitle || "-",
+    scorePercent: Number(item.scorePercent || 0),
     percentile: item.percentile != null ? Number(item.percentile) : null,
     timeTaken: Number(item.timeTaken || 0),
     date: item.date,
     status: item.status || "-",
+    violationsCount: Number(item.violationsCount || 0),
+    violationEvents: Array.isArray(item.violationEvents) ? item.violationEvents : [],
   }));
+  const studentReportRows = useMemo(
+    () =>
+      (studentDetailQuery.data?.tests || [])
+        .map((item) => ({
+          id: item.id,
+          testId: item.testId,
+          testName: item.testName || "-",
+          scorePercent: Number(item.scorePercent ?? item.accuracy ?? 0),
+          percentile: item.percentile != null ? Number(item.percentile) : null,
+          timeTaken: Number(item.timeTaken || 0),
+          date: item.date,
+          status: item.status || "-",
+          violationsCount: Number(item.violationsCount || 0),
+          violationEvents: Array.isArray(item.violationEvents) ? item.violationEvents : [],
+          questionAnalysis: item.questionAnalysis || { correct: 0, incorrect: 0, total: 0 },
+        }))
+        .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0)),
+    [studentDetailQuery.data]
+  );
 
-  const selectedStudent = analytics.selectedStudent;
+  const selectedStudent = analytics.selectedStudent || studentDetailQuery.data?.student || null;
   const totalStudents = Math.max(1, rankedRows.length);
   const percentile = selectedStudent?.rank ? ((totalStudents - Number(selectedStudent.rank) + 1) / totalStudents) * 100 : 0;
 
@@ -231,23 +311,34 @@ export default function ReportsPage() {
     percentile,
     rank: selectedStudent?.rank || null,
     violations: Number(analytics?.metrics?.violations || 0),
-    totalSubmissions: attemptRows.length,
+    totalSubmissions: studentReportRows.length || attemptRows.length,
   };
+  const studentSummary = useMemo(() => {
+    if (!studentReportRows.length) {
+      return { best: null, worst: null, total: 0, violations: 0 };
+    }
+    const byScore = [...studentReportRows].sort((a, b) => b.scorePercent - a.scorePercent);
+    return {
+      best: byScore[0],
+      worst: byScore[byScore.length - 1],
+      total: studentReportRows.length,
+      violations: studentReportRows.reduce((sum, row) => sum + row.violationsCount, 0),
+    };
+  }, [studentReportRows]);
 
   const sortedDepartmentRows = sortRows(rankedRows, sortState);
   const sortedBatchRows = sortRows(rankedRows, sortState);
-  const sortedAttemptRows = sortRows(attemptRows, sortState);
+  const sortedStudentReportRows = sortRows(studentReportRows, sortState);
 
   const studentMatches = useMemo(() => {
-    const term = studentSearch.trim().toLowerCase();
-    if (term.length < 2) return [];
-    return studentsDirectory
-      .filter((student) => {
-        const hay = `${student.fullName || ""} ${student.studentId || ""} ${student.department?.name || ""}`.toLowerCase();
-        return hay.includes(term);
-      })
-      .slice(0, 8);
-  }, [studentSearch, studentsDirectory]);
+    if (studentSearchTerm.length < 2) return [];
+    return studentSearchResults;
+  }, [studentSearchResults, studentSearchTerm]);
+
+  const handleStudentSelect = (nextStudentId) => {
+    updateParams({ student_id: nextStudentId || "" });
+    setStudentSearch("");
+  };
 
   useEffect(() => {
     setSortState(MODE_DEFAULT_SORT[mode]);
@@ -369,6 +460,30 @@ export default function ReportsPage() {
       studentName: row.name || row.studentName || "Student",
       events: Array.isArray(row.violationEvents) ? row.violationEvents : [],
     });
+    setReviewState({ eventKey: "", action: "", reason: "", submitting: false, error: "" });
+  };
+  const handleViolationReview = async (event, action) => {
+    const reason = reviewState.reason.trim();
+    if (!event?.testId || !event?.anomalyId || !event?.anomalyType || !reason) {
+      setReviewState((prev) => ({ ...prev, error: "A reason is required before submitting a review." }));
+      return;
+    }
+    const eventKey = event.anomalyId;
+    setReviewState((prev) => ({ ...prev, eventKey, action, submitting: true, error: "" }));
+    try {
+      await adminApi.reviewReportAnomaly({
+        testId: event.testId,
+        anomalyId: event.anomalyId,
+        anomalyType: event.anomalyType,
+        action,
+        reason,
+      });
+      setViolationDialog((prev) => ({ ...prev, open: false }));
+      setReviewState({ eventKey: "", action: "", reason: "", submitting: false, error: "" });
+      analyticsQuery.refetch();
+    } catch (_error) {
+      setReviewState((prev) => ({ ...prev, submitting: false, error: "Unable to save review. Please try again." }));
+    }
   };
 
   if (!canViewReports) {
@@ -437,45 +552,89 @@ export default function ReportsPage() {
           ) : null}
 
           {mode === "student" ? (
-            <div className="relative flex w-full max-w-md flex-col gap-2">
-              <input
-                value={studentSearch}
-                onChange={(event) => setStudentSearch(event.target.value)}
-                placeholder="Search student (name / roll / dept)"
-                className="h-9 rounded-lg border border-border bg-background px-3 text-sm"
-              />
+            <div className="grid w-full gap-3 lg:grid-cols-[minmax(0,1fr)_320px]">
+              <div className="rounded-2xl border border-border bg-background p-4">
+                <div className="mb-3">
+                  <p className="text-sm font-semibold text-text-primary">Select student</p>
+                  <p className="text-xs text-text-secondary">Choose a student here to load all of their test reports and analytics.</p>
+                </div>
 
-              {studentSearch.trim().length >= 2 && studentMatches.length > 0 ? (
-                <div className="absolute top-10 z-10 max-h-56 w-full overflow-y-auto rounded-xl border border-border bg-card p-1 shadow-lg">
-                  {studentMatches.map((student) => (
+                <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+                  <select
+                    value={studentId}
+                    onChange={(event) => handleStudentSelect(event.target.value)}
+                    className="h-10 rounded-xl border border-border bg-card px-3 text-sm"
+                  >
+                    <option value="">Choose a student</option>
+                    {selectedStudentPickerRecord && !selectedDirectoryStudent ? (
+                      <option value={selectedStudentPickerRecord.id}>
+                        {selectedStudentPickerRecord.fullName} ({selectedStudentPickerRecord.studentId})
+                      </option>
+                    ) : null}
+                    {studentsDirectory.map((student) => (
+                      <option key={student.id} value={student.id}>{student.fullName} ({student.studentId})</option>
+                    ))}
+                  </select>
+                  {studentId ? (
                     <button
-                      key={student.id}
                       type="button"
                       onClick={() => {
-                        updateParams({ student_id: student.id });
-                        setStudentSearch(student.fullName || "");
+                        updateParams({ student_id: "" });
+                        setStudentSearch("");
                       }}
-                      className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm hover:bg-muted"
+                      className="h-10 rounded-xl border border-border px-3 text-sm font-medium hover:bg-muted"
                     >
-                      <span className="font-medium text-text-primary">{student.fullName}</span>
-                      <span className="text-xs text-text-secondary">{student.studentId} · {student.department?.name || "-"}</span>
+                      Clear
                     </button>
-                  ))}
+                  ) : null}
                 </div>
-              ) : null}
 
-              {studentSearch.trim().length < 2 ? (
-                <select
-                  value={studentId}
-                  onChange={(event) => updateParams({ student_id: event.target.value })}
-                  className="h-9 rounded-lg border border-border bg-background px-3 text-sm"
-                >
-                  <option value="">Select student</option>
-                  {studentsDirectory.map((student) => (
-                    <option key={student.id} value={student.id}>{student.fullName} ({student.studentId})</option>
-                  ))}
-                </select>
-              ) : null}
+                <div className="relative mt-2">
+                  <input
+                    value={studentSearch}
+                    onChange={(event) => setStudentSearch(event.target.value)}
+                    placeholder="Or search by name, roll number, or department"
+                    className="h-10 w-full rounded-xl border border-border bg-card px-3 text-sm"
+                  />
+
+                  {studentSearchTerm.length >= 2 ? (
+                    <div className="absolute top-11 z-10 max-h-60 w-full overflow-y-auto rounded-2xl border border-border bg-card p-1 shadow-lg">
+                      {studentSearchQuery.isLoading ? (
+                        <p className="px-3 py-2 text-sm text-text-secondary">Searching students...</p>
+                      ) : studentSearchQuery.isError ? (
+                        <p className="px-3 py-2 text-sm text-red-500">Unable to search students.</p>
+                      ) : studentMatches.length > 0 ? (
+                        studentMatches.map((student) => (
+                          <button
+                            key={student.id}
+                            type="button"
+                            onClick={() => handleStudentSelect(student.id)}
+                            className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm hover:bg-muted"
+                          >
+                            <span className="font-medium text-text-primary">{student.fullName}</span>
+                            <span className="text-xs text-text-secondary">{student.studentId} · {student.department?.name || "-"}</span>
+                          </button>
+                        ))
+                      ) : (
+                        <p className="px-3 py-2 text-sm text-text-secondary">No matching students found.</p>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-border bg-background p-4">
+                <p className="text-xs font-medium uppercase tracking-wide text-text-secondary">Current selection</p>
+                {selectedStudentPickerRecord ? (
+                  <div className="mt-3 space-y-1">
+                    <p className="font-semibold text-text-primary">{selectedStudentPickerRecord.fullName}</p>
+                    <p className="text-sm text-text-secondary">{selectedStudentPickerRecord.studentId}</p>
+                    <p className="text-sm text-text-secondary">{selectedStudentPickerRecord.department?.name || "-"} · {selectedStudentPickerRecord.batch?.name || selectedStudentBatchLabel}</p>
+                  </div>
+                ) : (
+                  <p className="mt-3 text-sm text-text-secondary">No student selected yet.</p>
+                )}
+              </div>
             </div>
           ) : null}
         </div>
@@ -650,13 +809,20 @@ export default function ReportsPage() {
           {mode === "student" ? (
             <>
               {!studentId ? (
-                <EmptyState title="Select a student" description="Choose a student from the context selector to render personal analytics." />
+                <EmptyState title="Select a student" description="Use the student picker above to load that student's complete analytics and test history." />
               ) : (
                 <>
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                    <KpiCard label="Best Score Test" value={studentSummary.best?.testName || "-"} sub={studentSummary.best ? formatPercent(studentSummary.best.scorePercent) : "No attempts yet"} />
+                    <KpiCard label="Worst Score Test" value={studentSummary.worst?.testName || "-"} sub={studentSummary.worst ? formatPercent(studentSummary.worst.scorePercent) : "No attempts yet"} />
+                    <KpiCard label="Tests Attempted" value={studentSummary.total} sub="Submitted attempts" />
+                    <KpiCard label="Total Violations" value={studentSummary.violations} sub="Across all attempts" flag={studentSummary.violations > 0} flagLabel="Review recommended" />
+                  </div>
+
                   <div className="grid gap-4 lg:grid-cols-[3fr_2fr]">
                     <ChartCard title="Score Progression" height="h-[220px]">
                       <AreaTrendChart
-                        data={attemptRows.map((item) => ({ month: formatDateLabel(item.date), score: item.score }))}
+                        data={studentReportRows.map((item) => ({ month: formatDateLabel(item.date), score: item.scorePercent })).reverse()}
                         xKey="month"
                         dataKey="score"
                         name="Score"
@@ -679,38 +845,67 @@ export default function ReportsPage() {
                     <HorizontalBarChart data={topicData} />
                   </ChartCard>
 
-                  <article className="overflow-x-auto rounded-2xl border border-border bg-card">
-                    <table className="min-w-full text-sm">
-                      <thead>
-                        <tr>
-                          <Th sortKey="test" sortState={sortState} onSort={handleSort}>Test</Th>
-                          <Th sortKey="score" sortState={sortState} onSort={handleSort}>Score</Th>
-                          <Th sortKey="percentile" sortState={sortState} onSort={handleSort}>Percentile</Th>
-                          <Th sortKey="timeTaken" sortState={sortState} onSort={handleSort}>Time Taken</Th>
-                          <Th sortKey="date" sortState={sortState} onSort={handleSort}>Date</Th>
-                          <Th sortKey="status" sortState={sortState} onSort={handleSort}>Status</Th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {sortedAttemptRows.map((row) => (
-                          <tr key={row.id} className="border-t border-border/70">
-                            <td className="px-4 py-3 font-medium text-text-primary">{row.test}</td>
-                            <td className="px-4 py-3"><ScoreBadge score={row.score} /></td>
-                            <td className="px-4 py-3">{row.percentile != null ? `${row.percentile.toFixed(1)}%` : "-"}</td>
-                            <td className="px-4 py-3">{Math.round(row.timeTaken / 60)} min</td>
-                            <td className="px-4 py-3 text-text-secondary">{formatDateLabel(row.date)}</td>
-                            <td className="px-4 py-3"><StatusBadge label={row.status} variant={getStatusVariant(row.status)} /></td>
-                          </tr>
-                        ))}
-                        {sortedAttemptRows.length === 0 ? (
-                          <tr>
-                            <td colSpan={6} className="px-4 py-8">
-                              <EmptyState title="No tests attempted yet in the selected scope." description="Once this student submits tests, attempts will appear here." />
-                            </td>
-                          </tr>
-                        ) : null}
-                      </tbody>
-                    </table>
+                  <article className="space-y-3 rounded-2xl border border-border bg-card p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <h3 className="text-lg font-semibold text-text-primary">All Test Reports</h3>
+                        <p className="text-xs text-text-secondary">Complete submitted test history for this student.</p>
+                      </div>
+                      <div className="flex flex-wrap gap-2 text-xs">
+                        <button type="button" onClick={() => handleSort("date")} className="rounded-full border border-border px-3 py-1">Newest</button>
+                        <button type="button" onClick={() => handleSort("scorePercent")} className="rounded-full border border-border px-3 py-1">Score</button>
+                        <button type="button" onClick={() => handleSort("timeTaken")} className="rounded-full border border-border px-3 py-1">Time</button>
+                      </div>
+                    </div>
+                    {studentDetailQuery.isLoading ? (
+                      <div className="rounded-2xl border border-border bg-background p-4 text-sm text-text-secondary">Loading all student test reports...</div>
+                    ) : null}
+                    {sortedStudentReportRows.map((row) => (
+                      <div
+                        key={row.id}
+                        className={`rounded-2xl border bg-background p-4 ${
+                          row.scorePercent >= 40 ? "border-green-500/20" : "border-red-500/20"
+                        }`}
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <p className="font-semibold text-text-primary">{row.testName}</p>
+                            <p className="text-xs text-text-secondary">{formatDateLabel(row.date)}</p>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <ScoreBadge score={row.scorePercent} />
+                            <StatusBadge label={row.scorePercent >= 40 ? "PASS" : "FAIL"} variant={row.scorePercent >= 40 ? "success" : "danger"} />
+                            <StatusBadge label={row.status} variant={getStatusVariant(row.status)} />
+                          </div>
+                        </div>
+                        <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted">
+                          <div
+                            className={row.scorePercent >= 40 ? "h-full bg-green-500" : "h-full bg-red-500"}
+                            style={{ width: `${clampPercent(row.scorePercent)}%` }}
+                          />
+                        </div>
+                        <div className="mt-3 grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
+                          <StatusBadge label={`Percentile: ${row.percentile != null ? `${row.percentile.toFixed(1)}%` : "-"}`} variant="info" />
+                          <StatusBadge label={`Time: ${Number.isFinite(row.timeTaken) ? `${Math.round(row.timeTaken / 60)} min` : "-"}`} variant="default" />
+                          <StatusBadge label={`Questions: ${row.questionAnalysis?.correct || 0}/${row.questionAnalysis?.total || 0}`} variant="default" />
+                          <div className="flex items-center gap-2">
+                            <ViolationBadge count={row.violationsCount} />
+                          </div>
+                        </div>
+                        <div className="mt-3 flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() => handleViolationClick({ studentName: selectedStudent?.name, violationEvents: row.violationEvents })}
+                            className="rounded-full border border-border px-3 py-1 text-xs font-medium hover:bg-muted"
+                          >
+                            Violation Details
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                    {!studentDetailQuery.isLoading && sortedStudentReportRows.length === 0 ? (
+                      <EmptyState title="No tests attempted yet." description="Once this student submits tests, every report will appear here." />
+                    ) : null}
                   </article>
                 </>
               )}
@@ -754,6 +949,40 @@ export default function ReportsPage() {
                   {event.metadata ? (
                     <pre className="mt-2 overflow-x-auto rounded-lg border border-border/70 bg-card p-2 text-[11px] text-text-secondary">{JSON.stringify(event.metadata, null, 2)}</pre>
                   ) : null}
+                  <div className="mt-3 space-y-2">
+                    <textarea
+                      value={reviewState.eventKey === (event.anomalyId || event.id) ? reviewState.reason : ""}
+                      onChange={(e) => setReviewState((prev) => ({
+                        ...prev,
+                        eventKey: event.anomalyId || event.id || "",
+                        reason: e.target.value,
+                        error: "",
+                      }))}
+                      placeholder="Reason required for escalate or dismiss"
+                      className="min-h-20 w-full rounded-lg border border-border bg-card px-3 py-2 text-sm"
+                    />
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleViolationReview(event, "ESCALATE")}
+                        disabled={reviewState.submitting}
+                        className="rounded-lg bg-red-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-60"
+                      >
+                        Escalate
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleViolationReview(event, "DISMISS")}
+                        disabled={reviewState.submitting}
+                        className="rounded-lg border border-border px-3 py-2 text-sm font-medium disabled:opacity-60"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                    {reviewState.eventKey === (event.anomalyId || event.id) && reviewState.error ? (
+                      <p className="text-xs text-red-500">{reviewState.error}</p>
+                    ) : null}
+                  </div>
                 </div>
               ))}
             </div>
@@ -765,3 +994,4 @@ export default function ReportsPage() {
     </div>
   );
 }
+

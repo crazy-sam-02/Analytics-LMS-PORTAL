@@ -18,6 +18,13 @@ export default function ProfilePage() {
 
   const profileQuery = useQuery(profileQueryOptions());
   const user = profileQuery.data;
+  const batchLabel = useMemo(() => {
+    if (Array.isArray(user?.batches) && user.batches.length > 0) {
+      return user.batches.map((batch) => batch?.name).filter(Boolean).join(", ") || "-";
+    }
+
+    return user?.batch?.name || user?.batch || "-";
+  }, [user?.batch, user?.batches]);
 
   const uploadMutation = useMutation({
     mutationFn: (file) => studentApi.uploadMyAvatar(file),
@@ -131,7 +138,7 @@ export default function ProfilePage() {
             </div>
             <div className="rounded-xl border border-border bg-background p-3">
               <p className="text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Batch</p>
-              <p className="mt-1 text-sm font-medium text-text-primary">{user?.batch?.name || user?.batch || "-"}</p>
+              <p className="mt-1 text-sm font-medium text-text-primary">{batchLabel}</p>
             </div>
           </div>
         </div>

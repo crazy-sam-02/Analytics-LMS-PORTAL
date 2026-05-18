@@ -47,24 +47,41 @@ const getStudents = asyncHandler(async (req, res) => {
 
   const where = {
     collegeId,
-    ...(req.query.departmentId ? { departmentId: req.query.departmentId } : {}),
-    ...(req.query.batchId ? { batchId: req.query.batchId } : {}),
-    ...(req.query.search
-      ? {
-          OR: [
-            { fullName: { contains: req.query.search, mode: "insensitive" } },
-            { email: { contains: req.query.search, mode: "insensitive" } },
-          ],
-        }
-      : {}),
+    // Enforce admin department scoping: admins see only their department unless superAdmin
+    ...(req.superAdmin ? (req.query.departmentId ? { departmentId: req.query.departmentId } : {}) : { departmentId: req.admin?.departmentId }),
   };
+
+  const filters = [];
+  if (req.query.batchId) {
+    filters.push({
+      OR: [
+        { batchIds: { in: [req.query.batchId] } },
+        { batchId: req.query.batchId },
+      ],
+    });
+  }
+
+  if (req.query.search) {
+    filters.push({
+      OR: [
+        { fullName: { contains: req.query.search, mode: "insensitive" } },
+        { email: { contains: req.query.search, mode: "insensitive" } },
+        { studentId: { contains: req.query.search, mode: "insensitive" } },
+        { department: { name: { contains: req.query.search, mode: "insensitive" } } },
+      ],
+    });
+  }
+
+  if (filters.length > 0) {
+    where.AND = filters;
+  }
 
   const [total, data] = await Promise.all([
     db.student.count({ where }),
     db.student.findMany({
       where,
       include: {
-        batch: true,
+        batches: true,
         department: true,
         _count: {
           select: {
@@ -78,8 +95,21 @@ const getStudents = asyncHandler(async (req, res) => {
     }),
   ]);
 
+  const normalized = data.map((student) => {
+    const mergedBatchIds = [...new Set([
+      ...(Array.isArray(student.batchIds) ? student.batchIds : []),
+      student.batchId,
+    ].filter(Boolean).map((id) => String(id)))];
+
+    return {
+      ...student,
+      batchIds: mergedBatchIds,
+      batch: student.batch || (Array.isArray(student.batches) ? student.batches[0] : null),
+    };
+  });
+
   res.status(200).json({
-    data,
+    data: normalized,
     pagination: {
       page,
       limit,
