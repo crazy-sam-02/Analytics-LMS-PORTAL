@@ -8,8 +8,15 @@ import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { loginStudent } from "@/features/Students/authSlice";
+import { useSeo } from "@/hooks/useSeo";
 
 export default function LoginPage() {
+  useSeo({
+    title: "Student Login | Analytics LMS | Analystics LMS",
+    description: "Student login for Analytics LMS, also searched as Analystics LMS. Access tests, reports, performance metrics, and academic insights.",
+    keywords: "Analystics LMS student login, Analytics LMS student portal, LMS student login, online test portal",
+  });
+
   const dispatch = useDispatch();
   const { user, loading, error } = useSelector((state) => state.auth);
 

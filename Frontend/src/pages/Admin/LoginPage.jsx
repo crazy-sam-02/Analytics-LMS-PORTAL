@@ -8,8 +8,15 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { loginAdmin } from "@/features/Admin/adminAuthSlice";
+import { useSeo } from "@/hooks/useSeo";
 
 export default function AdminLoginPage() {
+  useSeo({
+    title: "Admin Login | Analytics LMS | Analystics LMS",
+    description: "Admin login for Analytics LMS, also searched as Analystics LMS. Manage students, assessments, reports, and college-level LMS analytics.",
+    keywords: "Analystics LMS admin login, Analytics LMS admin portal, college LMS admin, assessment management portal",
+  });
+
   const dispatch = useDispatch();
   const { admin, loading, error } = useSelector((state) => state.adminAuth);
   const [email, setEmail] = useState("");
