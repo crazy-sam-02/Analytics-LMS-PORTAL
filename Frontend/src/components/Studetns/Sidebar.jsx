@@ -1,7 +1,16 @@
 import { memo } from "react";
 import { Link, NavLink } from "react-router-dom";
 import { useDispatch } from "react-redux";
-import { BarChart3, CalendarDays, FileText, Medal, Settings, User, PlayCircle, Clock3, LogOut } from "lucide-react";
+import {
+  CalendarDays,
+  FileText,
+  Medal,
+  Settings,
+  User,
+  PlayCircle,
+  Clock3,
+  LogOut,
+} from "lucide-react";
 import { logoutStudent } from "@/features/Students/authSlice";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,15 +30,29 @@ function Sidebar({ collapsed, mobile = false, onNavigate, upcomingCount = 0 }) {
   const shellWidthClass = collapsed ? "w-12" : "w-60";
 
   return (
-    <aside className={`flex h-full flex-col border-r border-sidebar-border bg-linear-to-b from-primary-dark to-sidebar px-2 py-4 text-sidebar-foreground ${mobile ? "w-full max-w-80" : shellWidthClass}`}>
-      <Link to="/tests/ongoing" onClick={onNavigate} className="mb-6 flex items-center gap-2 px-1">
-        <div className="grid size-8 shrink-0 place-items-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground shadow-lg shadow-primary/25">
-          <BarChart3 className="size-4" />
+    <aside
+      className={`flex h-full flex-col border-r border-sidebar-border bg-linear-to-b from-primary-dark to-sidebar px-2 py-4 text-sidebar-foreground ${mobile ? "w-full max-w-80" : shellWidthClass}`}
+    >
+      <Link
+        to="/tests/ongoing"
+        onClick={onNavigate}
+        className="mb-6 flex flex-col items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-3 py-4 text-center shadow-[0_18px_40px_-24px_rgba(0,0,0,0.55)] backdrop-blur-sm transition-transform hover:-translate-y-px"
+      >
+        <div className="flex w-full items-center justify-center">
+          <img
+            src="/ANALYTICS%20LOGO-%20FINAL.png"
+            alt="Analytics Logo"
+            className={`h-8 object-contain brightness-0 invert ${collapsed ? "w-10" : "w-full max-w-44"}`}
+          />
         </div>
         {!collapsed ? (
-          <div>
-            <p className="text-lg leading-none font-semibold tracking-tight text-sidebar-foreground">Analytica</p>
-            <p className="mt-1 text-[10px] tracking-wide text-sidebar-foreground/75 uppercase">Student Portal</p>
+          <div className="space-y-1">
+            <p className="text-[10px] text-white font-extrabold uppercase tracking-[0.35em] ">
+              Student Portal
+            </p>
+            <p className="text-sm leading-5 text-sidebar-foreground/85">
+              Focused mode for tests and performance
+            </p>
           </div>
         ) : null}
       </Link>
@@ -52,7 +75,10 @@ function Sidebar({ collapsed, mobile = false, onNavigate, upcomingCount = 0 }) {
             <item.icon className="size-4 shrink-0" strokeWidth={2.2} />
             {!collapsed ? <span className="truncate">{item.label}</span> : null}
             {!collapsed && item.to === "/tests/upcoming" ? (
-              <Badge variant="secondary" className="ml-auto bg-sidebar-accent text-[10px] font-semibold text-sidebar-foreground">
+              <Badge
+                variant="secondary"
+                className="ml-auto bg-sidebar-accent text-[10px] font-semibold text-sidebar-foreground"
+              >
                 {upcomingCount}
               </Badge>
             ) : null}

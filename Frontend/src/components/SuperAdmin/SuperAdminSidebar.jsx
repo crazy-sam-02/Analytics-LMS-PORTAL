@@ -1,7 +1,7 @@
 import { NavLink } from "react-router-dom";
 import { useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
-import { LayoutDashboard, School, ShieldUser, Users, Building2, FileCheck2, BookOpen, Layers3, CalendarDays, FileBarChart2, ChartNoAxesCombined, ScrollText, Settings, LogOut, Crown, ChevronLeft } from "lucide-react";
+import { LayoutDashboard, School, ShieldUser, Users, Building2, FileCheck2, BookOpen, Layers3, CalendarDays, FileBarChart2, ChartNoAxesCombined, ScrollText, Settings, LogOut, ChevronLeft } from "lucide-react";
 import { logoutSuperAdmin } from "@/features/SuperAdmin/superAdminAuthSlice";
 import { toggleSidebar } from "@/features/SuperAdmin/superAdminUiSlice";
 import ConfirmActionDialog from "@/components/Admin/ConfirmActionDialog";
@@ -31,24 +31,25 @@ export default function SuperAdminSidebar() {
         collapsed ? "w-16 px-2" : "w-64 px-4"
       }`}
     >
-      <div className={`mb-6 flex items-center ${collapsed ? "justify-center" : "justify-between"}`}>
-        <div className="grid size-10 place-items-center rounded-xl bg-sidebar-primary text-sidebar-primary-foreground shadow-md shadow-primary/40">
-          <Crown className="size-5" />
+      <div className={`mb-6 flex items-start gap-3 ${collapsed ? "justify-center" : "justify-between"}`}>
+        <div className="flex min-w-0 flex-1 flex-col items-center rounded-2xl border border-white/10 bg-white/5 px-3 py-4 text-center shadow-[0_18px_40px_-24px_rgba(0,0,0,0.55)] backdrop-blur-sm transition-transform hover:-translate-y-px">
+          <img
+            src="/ANALYTICS%20LOGO-%20FINAL.png"
+            alt="Analytics Logo"
+            className={`h-8 object-contain brightness-0 invert ${collapsed ? "w-10" : "w-full max-w-44"}`}
+          />
+          {!collapsed ? (
+            <div className="mt-2 space-y-1">
+              <p className="text-[15px] font-extrabold uppercase tracking-[0.35em] text-white">
+                Super Admin Portal
+              </p>
+              <p className="text-sm leading-5 text-sidebar-foreground/85">
+                Global control center for colleges
+              </p>
+            </div>
+          ) : null}
         </div>
-        {!collapsed ? (
-          <div className="ml-3 flex-1">
-            <p className="text-xl leading-none font-semibold tracking-tight text-sidebar-foreground">LMS Super</p>
-            <p className="mt-1 text-[11px] tracking-wide text-sidebar-foreground/70 uppercase">Platform Control Center</p>
-          </div>
-        ) : null}
-        <button
-          type="button"
-          onClick={() => dispatch(toggleSidebar())}
-          className="grid size-8 place-items-center rounded-lg border border-sidebar-foreground/25 text-sidebar-foreground/80 hover:bg-sidebar-accent"
-          aria-label="Toggle sidebar"
-        >
-          <ChevronLeft className={`size-4 transition-transform ${collapsed ? "rotate-180" : ""}`} />
-        </button>
+        
       </div>
 
       <nav className="space-y-1.5">

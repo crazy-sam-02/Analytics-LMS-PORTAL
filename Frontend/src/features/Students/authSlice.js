@@ -296,7 +296,7 @@ const authSlice = createSlice({
           state.sessionId = null;
         }
         state.accountInactive = Boolean(action.payload?.accountInactive);
-        state.error = action.payload?.message || null;
+        state.error = action.payload?.accountInactive ? action.payload?.message || null : null;
       })
       .addCase(fetchCurrentUser.fulfilled, (state, action) => {
         state.user = action.payload || null;
