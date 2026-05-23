@@ -1,18 +1,59 @@
 const models = require("../../models");
 const { createAuditLog } = require("../../services/audit.service");
 const { ApiError, asyncHandler } = require("../../utils/http");
+const { getPagination } = require("../../utils/pagination");
+
+const parseCsvRecords = (csvText) => {
+  const records = [];
+  let row = [];
+  let cell = "";
+  let inQuotes = false;
+  const text = String(csvText || "");
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+
+    if (char === "\"") {
+      if (inQuotes && next === "\"") {
+        cell += "\"";
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (char === "," && !inQuotes) {
+      row.push(cell.trim());
+      cell = "";
+      continue;
+    }
+
+    if ((char === "\n" || char === "\r") && !inQuotes) {
+      if (char === "\r" && next === "\n") index += 1;
+      row.push(cell.trim());
+      if (row.some(Boolean)) records.push(row);
+      row = [];
+      cell = "";
+      continue;
+    }
+
+    cell += char;
+  }
+
+  row.push(cell.trim());
+  if (row.some(Boolean)) records.push(row);
+  return records;
+};
 
 const parseCsv = (csvText) => {
-  const rows = String(csvText || "")
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
+  const rows = parseCsvRecords(csvText);
 
   if (rows.length === 0) return [];
 
-  const headers = rows[0].split(",").map((value) => value.trim());
-  return rows.slice(1).map((line, rowIndex) => {
-    const values = line.split(",").map((value) => value.trim());
+  const headers = rows[0].map((value) => value.trim());
+  return rows.slice(1).map((values, rowIndex) => {
     const record = { __row: rowIndex + 2 };
     headers.forEach((key, index) => {
       record[key] = values[index] || "";
@@ -36,8 +77,7 @@ const getRowValue = (row, aliases = []) => {
 const getDepartmentsGlobal = asyncHandler(async (req, res) => {
   const m = await models.init();
   const db = m.dbClient;
-  const page = Number(req.query.page || 1);
-  const limit = Number(req.query.limit || 20);
+  const { page, limit, skip } = getPagination(req.query);
   const collegeId = req.query.collegeId;
   const search = (req.query.search || "").trim();
 
@@ -71,7 +111,7 @@ const getDepartmentsGlobal = asyncHandler(async (req, res) => {
         },
       },
       orderBy: [{ collegeId: "asc" }, { name: "asc" }],
-      skip: (page - 1) * limit,
+      skip,
       take: limit,
     }),
     db.department.count({ where }),

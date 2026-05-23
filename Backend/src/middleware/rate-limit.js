@@ -5,6 +5,15 @@ const { recordRateLimitEvent } = require("../services/rate-limit-metrics.service
 
 const memoryCounters = new Map();
 
+const isRateLimitDisabled = () => {
+  if (process.env.NODE_ENV === "test") {
+    return false;
+  }
+
+  const value = String(process.env.RATE_LIMIT_DISABLED || "").trim().toLowerCase();
+  return value === "true" || value === "1" || value === "yes" || value === "on";
+};
+
 const toSafePositiveInt = (value, fallback) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
@@ -134,6 +143,10 @@ const createRateLimiter = (options = {}) => {
   const windowMs = toSafePositiveInt(options.windowMs, 60_000);
 
   return async (req, res, next) => {
+    if (isRateLimitDisabled()) {
+      return next();
+    }
+
     if (typeof options.skip === "function" && options.skip(req)) {
       return next();
     }

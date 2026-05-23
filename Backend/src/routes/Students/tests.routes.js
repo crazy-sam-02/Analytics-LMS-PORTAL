@@ -29,6 +29,7 @@ const examStartLimiter = createRateLimiter({
   routeLabel: "/api/tests/:testId/start",
   windowMs: env.rateLimit.examStartWindowMs,
   max: env.rateLimit.examStartMax,
+  failOpen: false,
   message: "Too many test start requests. Please retry shortly.",
   keySelector: (req, actorIdentity) => `${actorIdentity}:test:${req.params?.testId || "unknown-test"}`,
 });
@@ -38,6 +39,7 @@ const examListLimiter = createRateLimiter({
   routeLabel: "/api/tests/list",
   windowMs: env.rateLimit.examListWindowMs,
   max: env.rateLimit.examListMax,
+  failOpen: false,
   message: "Too many test list requests in a short window. Please wait a moment.",
 });
 
@@ -46,6 +48,7 @@ const examSessionLimiter = createRateLimiter({
   routeLabel: "/api/tests/:testId/session",
   windowMs: env.rateLimit.examSessionWindowMs,
   max: env.rateLimit.examSessionMax,
+  failOpen: false,
   keySelector: (req, actorIdentity) => `${actorIdentity}:test:${req.params?.testId || "unknown-test"}`,
   message: "Too many session fetch requests in a short window. Please wait a moment.",
 });
@@ -55,6 +58,7 @@ const examAnswerLimiter = createRateLimiter({
   routeLabel: "/api/tests/:testId/answer",
   windowMs: env.rateLimit.examAnswerWindowMs,
   max: env.rateLimit.examAnswerMax,
+  failOpen: false,
   keySelector: examWriteKey,
   message: "Too many answer save requests in a short window. Please wait a moment.",
 });
@@ -64,6 +68,7 @@ const examHeartbeatLimiter = createRateLimiter({
   routeLabel: "/api/tests/:testId/heartbeat",
   windowMs: env.rateLimit.examHeartbeatWindowMs,
   max: env.rateLimit.examHeartbeatMax,
+  failOpen: false,
   keySelector: examWriteKey,
   message: "Too many heartbeat requests in a short window. Please wait a moment.",
 });
@@ -73,6 +78,7 @@ const examViolationLimiter = createRateLimiter({
   routeLabel: "/api/tests/:testId/violation",
   windowMs: env.rateLimit.examViolationWindowMs,
   max: env.rateLimit.examViolationMax,
+  failOpen: false,
   keySelector: examWriteKey,
   message: "Too many violation reports in a short window. Please wait a moment.",
 });
@@ -82,6 +88,7 @@ const examSubmitLimiter = createRateLimiter({
   routeLabel: "/api/tests/:testId/submit",
   windowMs: env.rateLimit.examSubmitWindowMs,
   max: env.rateLimit.examSubmitMax,
+  failOpen: false,
   keySelector: examWriteKey,
   message: "Submission is already in progress. Please wait for it to complete.",
 });

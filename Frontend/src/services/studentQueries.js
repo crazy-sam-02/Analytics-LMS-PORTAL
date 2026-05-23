@@ -25,7 +25,7 @@ export const testSessionQueryOptions = (testId) => ({
 export const attemptResultQueryOptions = (attemptId) => ({
   queryKey: ["student", "results", attemptId],
   queryFn: () => studentApi.getAttemptResult(attemptId),
-  staleTime: 30 * 1000,
+  staleTime: 0,
   refetchOnWindowFocus: false,
   retry: false,
 });

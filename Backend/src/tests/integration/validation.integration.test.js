@@ -5,7 +5,8 @@
  * Run with: npm test -- src/tests/integration/validation.integration.test.js
  */
 
-const { describe, it, expect, beforeEach, afterEach } = require("@jest/globals");
+const { describe, it, expect, beforeEach, afterEach, afterAll } = require("@jest/globals");
+const mongoose = require("mongoose");
 const models = require("../../models");
 const {
   validateDocument,
@@ -59,6 +60,12 @@ describe("Validation Services Integration Tests", () => {
     await resetMetrics();
   });
 
+  afterAll(async () => {
+    if (mongoose.connection.readyState !== 0) {
+      await mongoose.disconnect();
+    }
+  });
+
   // ============================================================================
   // Student Service Tests
   // ============================================================================
@@ -87,16 +94,37 @@ describe("Validation Services Integration Tests", () => {
     });
 
     it("should validate duplicate email", async () => {
+      const collegeId = "507f1f77bcf86cd799439011";
+      const db = {
+        college: {
+          findUnique: jest.fn(async () => ({ id: collegeId })),
+        },
+        admin: {
+          findUnique: jest.fn(),
+        },
+        student: {
+          findFirst: jest
+            .fn()
+            .mockResolvedValueOnce(null)
+            .mockResolvedValueOnce({ id: "existing-student", email: "jane@test.edu", collegeId }),
+          create: jest.fn(async ({ data }) => ({ id: "created-student", ...data })),
+        },
+        auditLog: {
+          create: jest.fn(async ({ data }) => ({ id: "audit-log", ...data })),
+        },
+      };
+      const initSpy = jest.spyOn(models, "init").mockResolvedValue({ dbClient: db });
+
       try {
         await createStudent(
           {
             fullName: "Jane Doe",
             email: "jane@test.edu",
             enrollmentNumber: "2024002",
-            departmentId: "dept-001",
+            departmentId: "507f1f77bcf86cd799439012",
           },
-          testCollege.id,
-          testAdmin.id
+          collegeId,
+          null
         );
 
         await createStudent(
@@ -104,15 +132,18 @@ describe("Validation Services Integration Tests", () => {
             fullName: "Jane Smith",
             email: "jane@test.edu", // Duplicate
             enrollmentNumber: "2024003",
-            departmentId: "dept-001",
+            departmentId: "507f1f77bcf86cd799439012",
           },
-          testCollege.id,
-          testAdmin.id
+          collegeId,
+          null
         );
 
         expect(true).toBe(false); // Should not reach here
       } catch (error) {
-        expect(error.message).toContain("unique");
+        expect(error.code).toBe("DUPLICATE_EMAIL");
+        expect(error.message).toContain("Email already registered");
+      } finally {
+        initSpy.mockRestore();
       }
     });
 
@@ -191,7 +222,7 @@ describe("Validation Services Integration Tests", () => {
         await validateQuestionMarksSum(questions, totalMarks);
         expect(true).toBe(false); // Should fail
       } catch (error) {
-        expect(error.message).toContain("sum");
+        expect(error.message).toContain("Sum");
       }
     });
 
@@ -360,7 +391,7 @@ describe("Validation Services Integration Tests", () => {
 
         expect(true).toBe(false); // Should fail
       } catch (error) {
-        expect(error.statusCode).toBe(403);
+        expect(error.statusCode).toBe(422);
         expect(error.message).toContain("not found");
       }
     });

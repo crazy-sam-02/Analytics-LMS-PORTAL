@@ -33,15 +33,21 @@ const renderHtmlToPdfBuffer = async (html, options = {}) => {
 
     await page.emulateMediaType("screen");
 
+    const showHeaderFooter = Boolean(options.displayHeaderFooter || options.headerTemplate || options.footerTemplate);
+    const margin = options.margin || {
+      top: "12mm",
+      right: "10mm",
+      bottom: showHeaderFooter ? "16mm" : "12mm",
+      left: "10mm",
+    };
+
     const pdfData = await page.pdf({
       format: "A4",
       printBackground: true,
-      margin: {
-        top: "12mm",
-        right: "10mm",
-        bottom: "12mm",
-        left: "10mm",
-      },
+      displayHeaderFooter: showHeaderFooter,
+      headerTemplate: options.headerTemplate || "<div></div>",
+      footerTemplate: options.footerTemplate || "<div></div>",
+      margin,
     });
 
     // Puppeteer can return Uint8Array in newer versions; normalize to Buffer for Express binary responses.

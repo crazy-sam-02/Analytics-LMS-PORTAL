@@ -1,27 +1,41 @@
 import { getAccessToken } from "@/services/httpClient";
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:5000/api";
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
 const isFormDataBody = (value) => typeof FormData !== "undefined" && value instanceof FormData;
 const shouldAttachJsonContentType = (options = {}) => !isFormDataBody(options.body);
 
 const createTokenStorage = (prefix) => {
   const accessKey = `${prefix}_access_token`;
   const refreshKey = `${prefix}_refresh_token`;
+  let accessToken = null;
+
+  try {
+    localStorage.removeItem(accessKey);
+    localStorage.removeItem(refreshKey);
+  } catch {
+    // Ignore legacy storage cleanup failures.
+  }
 
   return {
-    getAccess: () => localStorage.getItem(accessKey),
-    getRefresh: () => localStorage.getItem(refreshKey),
-    setTokens: ({ accessToken, refreshToken }) => {
-      if (accessToken) {
-        localStorage.setItem(accessKey, accessToken);
-      }
-      if (refreshToken) {
-        localStorage.setItem(refreshKey, refreshToken);
+    getAccess: () => accessToken,
+    getRefresh: () => null,
+    setTokens: ({ accessToken: nextAccessToken }) => {
+      accessToken = nextAccessToken || null;
+      try {
+        localStorage.removeItem(accessKey);
+        localStorage.removeItem(refreshKey);
+      } catch {
+        // Ignore legacy storage cleanup failures.
       }
     },
     clear: () => {
-      localStorage.removeItem(accessKey);
-      localStorage.removeItem(refreshKey);
+      accessToken = null;
+      try {
+        localStorage.removeItem(accessKey);
+        localStorage.removeItem(refreshKey);
+      } catch {
+        // Ignore storage cleanup failures.
+      }
     },
   };
 };
@@ -49,16 +63,19 @@ const buildApiErrorMessage = (payload) => {
   const formErrors = payload.details?.formErrors || [];
   const fieldErrors = payload.details?.fieldErrors || {};
 
-  const firstFormError = Array.isArray(formErrors) ? formErrors.find(Boolean) : null;
-  if (firstFormError) {
-    return `${message}: ${firstFormError}`;
+  const formErrorList = Array.isArray(formErrors) ? formErrors.filter(Boolean) : [];
+  const fieldErrorList = Object.values(fieldErrors)
+    .flatMap((errors) => (Array.isArray(errors) ? errors.filter(Boolean) : []));
+  const validationMessages = [...formErrorList, ...fieldErrorList];
+
+  if (validationMessages.length > 0) {
+    return `${message}: ${validationMessages.join("; ")}`;
   }
 
-  const firstFieldError = Object.values(fieldErrors)
-    .find((errors) => Array.isArray(errors) && errors.length > 0)?.[0];
-
-  return firstFieldError ? `${message}: ${firstFieldError}` : message;
+  return message;
 };
+
+const isLoginPath = (path) => /\/auth\/login$/.test(path);
 
 const toApiError = (payload, status, retryAfterHeader = null) => {
   const retryAfterSeconds = Number.parseInt(String(retryAfterHeader || "0"), 10);
@@ -108,6 +125,7 @@ const refreshAccessToken = async () => {
   if (!refreshingPromise) {
     refreshingPromise = fetch(`${API_BASE}/auth/refresh`, {
       method: "POST",
+      credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ refreshToken: tokenStorage.getRefresh() }),
     })
@@ -129,8 +147,9 @@ const refreshAdminAccessToken = async () => {
   if (!adminRefreshingPromise) {
     adminRefreshingPromise = fetch(`${API_BASE}/admin/auth/refresh`, {
       method: "POST",
+      credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refreshToken: adminTokenStorage.getRefresh() }),
+      body: JSON.stringify({ refreshToken: adminTokenStorage.getRefresh() || undefined }),
     })
       .then(async (response) => {
         if (!response.ok) throw new Error("Refresh failed");
@@ -150,8 +169,9 @@ const refreshSuperAdminAccessToken = async () => {
   if (!superAdminRefreshingPromise) {
     superAdminRefreshingPromise = fetch(`${API_BASE}/super-admin/auth/refresh`, {
       method: "POST",
+      credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refreshToken: superAdminTokenStorage.getRefresh() }),
+      body: JSON.stringify({ refreshToken: superAdminTokenStorage.getRefresh() || undefined }),
     })
       .then(async (response) => {
         if (!response.ok) throw new Error("Refresh failed");
@@ -188,13 +208,14 @@ export const apiRequest = async (path, options = {}) => {
       requestFactory: () =>
         fetch(`${API_BASE}${path}`, {
           ...options,
+          credentials: "include",
           headers,
         }),
     });
 
   let response = await makeRequest();
 
-  if (response.status === 401 && tokenStorage.getRefresh()) {
+  if (response.status === 401 && !isLoginPath(path)) {
     try {
       const newAccessToken = await refreshAccessToken();
       headers.Authorization = `Bearer ${newAccessToken}`;
@@ -235,13 +256,14 @@ export const adminApiRequest = async (path, options = {}) => {
       requestFactory: () =>
         fetch(`${API_BASE}${path}`, {
           ...options,
+          credentials: "include",
           headers,
         }),
     });
 
   let response = await makeRequest();
 
-  if (response.status === 401 && adminTokenStorage.getRefresh()) {
+  if (response.status === 401 && !isLoginPath(path)) {
     try {
       const newAccessToken = await refreshAdminAccessToken();
       headers.Authorization = `Bearer ${newAccessToken}`;
@@ -274,12 +296,13 @@ export const adminApiTextRequest = async (path, options = {}) => {
   const makeRequest = () =>
     fetch(`${API_BASE}${path}`, {
       ...options,
+      credentials: "include",
       headers,
     });
 
   let response = await makeRequest();
 
-  if (response.status === 401 && adminTokenStorage.getRefresh()) {
+  if (response.status === 401) {
     try {
       const newAccessToken = await refreshAdminAccessToken();
       headers.Authorization = `Bearer ${newAccessToken}`;
@@ -318,12 +341,13 @@ export const adminApiBlobRequest = async (path, options = {}) => {
   const makeRequest = () =>
     fetch(`${API_BASE}${path}`, {
       ...options,
+      credentials: "include",
       headers,
     });
 
   let response = await makeRequest();
 
-  if (response.status === 401 && adminTokenStorage.getRefresh()) {
+  if (response.status === 401) {
     try {
       const newAccessToken = await refreshAdminAccessToken();
       headers.Authorization = `Bearer ${newAccessToken}`;
@@ -369,13 +393,14 @@ export const superAdminApiRequest = async (path, options = {}) => {
       requestFactory: () =>
         fetch(`${API_BASE}${path}`, {
           ...options,
+          credentials: "include",
           headers,
         }),
     });
 
   let response = await makeRequest();
 
-  if (response.status === 401 && superAdminTokenStorage.getRefresh()) {
+  if (response.status === 401 && !isLoginPath(path)) {
     try {
       const newAccessToken = await refreshSuperAdminAccessToken();
       headers.Authorization = `Bearer ${newAccessToken}`;
@@ -408,12 +433,13 @@ export const superAdminApiBlobRequest = async (path, options = {}) => {
   const makeRequest = () =>
     fetch(`${API_BASE}${path}`, {
       ...options,
+      credentials: "include",
       headers,
     });
 
   let response = await makeRequest();
 
-  if (response.status === 401 && superAdminTokenStorage.getRefresh()) {
+  if (response.status === 401) {
     try {
       const newAccessToken = await refreshSuperAdminAccessToken();
       headers.Authorization = `Bearer ${newAccessToken}`;
@@ -610,6 +636,7 @@ export const superAdminApi = {
   getBatches: (params = "") => superAdminApiRequest(`/super-admin/batches${params}`),
   createBatch: (body) => superAdminApiRequest("/super-admin/batches", { method: "POST", body: JSON.stringify(body) }),
   updateBatch: (batchId, body) => superAdminApiRequest(`/super-admin/batches/${batchId}`, { method: "PATCH", body: JSON.stringify(body) }),
+  assignStudentsToBatch: (batchId, body) => superAdminApiRequest(`/super-admin/batches/${batchId}/students`, { method: "PATCH", body: JSON.stringify(body) }),
   deleteBatch: (batchId, body) => superAdminApiRequest(`/super-admin/batches/${batchId}`, { method: "DELETE", body: JSON.stringify(body || {}) }),
   getDepartments: (params = "") => superAdminApiRequest(`/super-admin/departments${params}`),
   createDepartment: (body) => superAdminApiRequest("/super-admin/departments", { method: "POST", body: JSON.stringify(body) }),
@@ -629,13 +656,13 @@ export const superAdminApi = {
       body: isFormDataBody(body) ? body : JSON.stringify(body),
     }),
   deleteEvent: (eventId) => superAdminApiRequest(`/super-admin/events/${eventId}`, { method: "DELETE" }),
-  getReports: () => superAdminApiRequest("/super-admin/reports"),
+  getReports: (params = "") => superAdminApiRequest(`/super-admin/reports${params}`),
+  getReportAnalytics: (params = "") => superAdminApiRequest(`/super-admin/reports/analytics${params}`),
   generateReport: (body) => superAdminApiRequest("/super-admin/reports/generate", { method: "POST", body: JSON.stringify(body) }),
   downloadReport: (reportJobId) => superAdminApiBlobRequest(`/super-admin/reports/${reportJobId}/download`),
   regenerateReportLink: (reportJobId) => superAdminApiRequest(`/super-admin/reports/jobs/${reportJobId}/regenerate-link`, { method: "POST", body: JSON.stringify({}) }),
   getEscalatedAnomalies: (params = "") => superAdminApiRequest(`/super-admin/reports/anomalies/escalations${params}`),
   getAnalytics: () => superAdminApiRequest("/super-admin/analytics"),
-  getAuditLogs: (params = "") => superAdminApiRequest(`/super-admin/audit-logs${params}`),
   getSettings: () => superAdminApiRequest("/super-admin/settings"),
   updateSettings: (body) => superAdminApiRequest("/super-admin/settings", { method: "PATCH", body: JSON.stringify(body) }),
   changePassword: (body) => superAdminApiRequest("/super-admin/settings/password", { method: "PATCH", body: JSON.stringify(body) }),

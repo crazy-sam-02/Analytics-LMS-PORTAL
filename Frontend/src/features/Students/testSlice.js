@@ -44,6 +44,28 @@ const normalizeAnswersMap = (answersArrayOrObject) => {
   }, {});
 };
 
+const normalizeAnswerValue = (answer = {}) => ({
+  selected_option: answer?.selected_option ?? null,
+  selected_options: Array.isArray(answer?.selected_options) ? [...answer.selected_options] : [],
+  answer_boolean: typeof answer?.answer_boolean === "boolean" ? answer.answer_boolean : null,
+  answer_text: answer?.answer_text ?? "",
+  marked_for_review: Boolean(answer?.marked_for_review),
+});
+
+const areAnswersEqual = (left = {}, right = {}) => {
+  const normalizedLeft = normalizeAnswerValue(left);
+  const normalizedRight = normalizeAnswerValue(right);
+
+  return (
+    normalizedLeft.selected_option === normalizedRight.selected_option &&
+    normalizedLeft.answer_boolean === normalizedRight.answer_boolean &&
+    normalizedLeft.answer_text === normalizedRight.answer_text &&
+    normalizedLeft.marked_for_review === normalizedRight.marked_for_review &&
+    normalizedLeft.selected_options.length === normalizedRight.selected_options.length &&
+    normalizedLeft.selected_options.every((item, index) => item === normalizedRight.selected_options[index])
+  );
+};
+
 const createDefaultViolationState = () => ({
   tab_switch: 0,
   copy: 0,
@@ -359,13 +381,7 @@ const testSlice = createSlice({
         return;
       }
 
-      state.answers[question_id] = {
-        selected_option: answer?.selected_option ?? null,
-        selected_options: Array.isArray(answer?.selected_options) ? [...answer.selected_options] : [],
-        answer_boolean: typeof answer?.answer_boolean === "boolean" ? answer.answer_boolean : null,
-        answer_text: answer?.answer_text ?? "",
-        marked_for_review: Boolean(answer?.marked_for_review),
-      };
+      state.answers[question_id] = normalizeAnswerValue(answer);
 
       if (!state.changed_answer_ids.includes(question_id)) {
         state.changed_answer_ids.push(question_id);
@@ -429,6 +445,52 @@ const testSlice = createSlice({
       const ids = action.payload || [];
       const set = new Set(ids);
       state.changed_answer_ids = state.changed_answer_ids.filter((id) => !set.has(id));
+    },
+    clearSavedAnswerSnapshots: (state, action) => {
+      const snapshots = Array.isArray(action.payload) ? action.payload : [];
+      const savedIds = new Set();
+
+      snapshots.forEach((snapshot) => {
+        const questionId = snapshot?.question_id;
+        if (!questionId) {
+          return;
+        }
+
+        if (areAnswersEqual(state.answers[questionId], snapshot)) {
+          savedIds.add(questionId);
+        }
+      });
+
+      state.changed_answer_ids = state.changed_answer_ids.filter((id) => !savedIds.has(id));
+    },
+    restoreDraftAnswers: (state, action) => {
+      const answers = Array.isArray(action.payload) ? action.payload : [];
+
+      answers.forEach((item) => {
+        const questionId = item?.question_id;
+        if (!questionId || !state.questions[questionId]) {
+          return;
+        }
+
+        const restoredAnswer = normalizeAnswerValue(item);
+        state.answers[questionId] = restoredAnswer;
+
+        if (!state.changed_answer_ids.includes(questionId)) {
+          state.changed_answer_ids.push(questionId);
+        }
+
+        if (restoredAnswer.marked_for_review) {
+          if (!state.marked_for_review.includes(questionId)) {
+            state.marked_for_review.push(questionId);
+          }
+        } else {
+          state.marked_for_review = state.marked_for_review.filter((id) => id !== questionId);
+        }
+      });
+
+      if (answers.length > 0 && state.save_status !== "saving") {
+        state.save_status = "error";
+      }
     },
     incrementViolationCounter: (state, action) => {
       const type = String(action.payload || "").toLowerCase();
@@ -551,6 +613,8 @@ export const {
   toggleMarkedForReview,
   clearAnswer,
   clearChangedAnswerIds,
+  clearSavedAnswerSnapshots,
+  restoreDraftAnswers,
   incrementViolationCounter,
   setSaveStatus,
   setSubmitStatus,

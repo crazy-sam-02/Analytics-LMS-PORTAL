@@ -1,8 +1,11 @@
 const models = require("../models");
 const bcrypt = require("bcrypt");
 const { validateDocument, validateDocuments } = require("./model-validation.service");
+const { validateUniqueEmail } = require("./cross-field-validators.service");
 const { UserValidation } = require("../models/validation");
 const { ApiError } = require("../utils/http");
+
+const resolveStudentId = (enrollmentNumber) => String(enrollmentNumber || "").trim();
 
 /**
  * Create a single student with validation
@@ -38,6 +41,7 @@ async function createStudent(payload, collegeId, adminId) {
       collegeId,
       departmentId: payload.departmentId || null,
       batchId: payload.batchId || null,
+      year: payload.year ?? null,
       isActive: payload.isActive !== false,
     },
     "Student creation"
@@ -47,6 +51,14 @@ async function createStudent(payload, collegeId, adminId) {
   const resolvedBatchIds = requestedBatchIds.length > 0
     ? requestedBatchIds
     : (validated.batchId ? [validated.batchId] : []);
+
+  await validateUniqueEmail(validated.email, collegeId);
+
+  const studentId = resolveStudentId(payload.enrollmentNumber || payload.enrollNumber);
+  const duplicateStudentId = await db.student.findFirst({ where: { collegeId, studentId } });
+  if (duplicateStudentId) {
+    throw new ApiError(409, "Student with this enroll number already exists");
+  }
 
   // Enforce department scoping for admins (defense-in-depth)
   if (admin && admin.departmentId) {
@@ -67,7 +79,8 @@ async function createStudent(payload, collegeId, adminId) {
     data: {
       ...validated,
       batchIds: resolvedBatchIds,
-      enrollmentNumber: payload.enrollmentNumber || `STD-${Date.now()}`,
+      studentId,
+      enrollmentNumber: studentId,
       passwordHash,
       // Additional fields not in validation schema
       phoneNumber: payload.phoneNumber || null,
@@ -120,10 +133,22 @@ async function updateStudent(studentId, payload, collegeId, adminId) {
       collegeId,
       departmentId: payload.departmentId !== undefined ? payload.departmentId : existing.departmentId,
       batchId: payload.batchId !== undefined ? payload.batchId : existing.batchId,
+      year: payload.year !== undefined ? payload.year : existing.year,
       isActive: payload.isActive !== undefined ? payload.isActive : existing.isActive,
     },
     "Student update"
   );
+
+  await validateUniqueEmail(validated.email, collegeId, studentId);
+
+  const nextEnrollmentNumber = payload.enrollmentNumber || payload.enrollNumber || null;
+  const nextStudentId = nextEnrollmentNumber ? resolveStudentId(nextEnrollmentNumber) : null;
+  if (nextStudentId && nextStudentId !== existing.studentId) {
+    const duplicateStudentId = await db.student.findFirst({ where: { collegeId, studentId: nextStudentId } });
+    if (duplicateStudentId) {
+      throw new ApiError(409, "Student with this enroll number already exists");
+    }
+  }
 
   // Persist
   const incomingBatchIds = Array.isArray(payload.batchIds) ? payload.batchIds.filter(Boolean) : null;
@@ -142,6 +167,7 @@ async function updateStudent(studentId, payload, collegeId, adminId) {
     data: {
       ...validated,
       batchIds: mergedBatchIds,
+      ...(nextStudentId ? { studentId: nextStudentId, enrollmentNumber: nextStudentId } : {}),
     },
   });
 
@@ -186,6 +212,7 @@ async function bulkImportStudents(rows, collegeId, adminId) {
       collegeId,
       departmentId: row.departmentId || null,
       batchId: row.batchId || null,
+      year: row.year ?? null,
       isActive: true,
     })),
     "Bulk student import"
@@ -218,8 +245,9 @@ async function bulkImportStudents(rows, collegeId, adminId) {
 
     // Prevent duplicate email/studentId
     const existingByEmail = await db.student.findFirst({ where: { collegeId, email: validated.email } });
-    const existingByEnroll = original.enrollmentNumber
-      ? await db.student.findFirst({ where: { collegeId, enrollmentNumber: original.enrollmentNumber } })
+    const studentId = resolveStudentId(original.enrollmentNumber);
+    const existingByEnroll = studentId
+      ? await db.student.findFirst({ where: { collegeId, studentId } })
       : null;
 
     if (existingByEmail || existingByEnroll) {
@@ -234,7 +262,8 @@ async function bulkImportStudents(rows, collegeId, adminId) {
     toInsert.push({
       ...validated,
       batchIds: mergedBatchIds,
-      enrollmentNumber: original.enrollmentNumber || `STD-${Date.now()}-${i}`,
+      studentId,
+      enrollmentNumber: studentId,
       passwordHash,
       phoneNumber: original.phoneNumber || null,
       preferences: {},

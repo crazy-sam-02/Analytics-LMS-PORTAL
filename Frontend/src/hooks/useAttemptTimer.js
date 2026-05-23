@@ -4,6 +4,11 @@ export const useAttemptTimer = ({ serverEndTime, onExpired }) => {
   const [remainingMs, setRemainingMs] = useState(() => Math.max(0, Number(serverEndTime || 0) - Date.now()));
   const intervalRef = useRef(null);
   const expiryTriggeredRef = useRef(false);
+  const onExpiredRef = useRef(onExpired);
+
+  useEffect(() => {
+    onExpiredRef.current = onExpired;
+  }, [onExpired]);
 
   useEffect(() => {
     expiryTriggeredRef.current = false;
@@ -12,18 +17,18 @@ export const useAttemptTimer = ({ serverEndTime, onExpired }) => {
   useEffect(() => {
     const end = Number(serverEndTime || 0);
     if (!end) {
-      setRemainingMs(0);
+      setRemainingMs((current) => (current === 0 ? current : 0));
       return undefined;
     }
 
     const tick = () => {
       const nextRemaining = Math.max(0, end - Date.now());
-      setRemainingMs(nextRemaining);
+      setRemainingMs((current) => (current === nextRemaining ? current : nextRemaining));
 
       if (nextRemaining <= 0) {
         if (!expiryTriggeredRef.current) {
           expiryTriggeredRef.current = true;
-          onExpired?.();
+          onExpiredRef.current?.();
         }
         if (intervalRef.current) {
           clearInterval(intervalRef.current);
@@ -32,9 +37,8 @@ export const useAttemptTimer = ({ serverEndTime, onExpired }) => {
       }
     };
 
-    // Run once immediately, then every second
     tick();
-    intervalRef.current = setInterval(tick, 1000);
+    intervalRef.current = setInterval(tick, Math.min(1000, Math.max(25, end - Date.now())));
 
     return () => {
       if (intervalRef.current) {

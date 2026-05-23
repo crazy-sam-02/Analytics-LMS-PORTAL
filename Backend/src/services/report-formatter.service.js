@@ -3,32 +3,423 @@
  * Converts raw report data into human-readable HTML reports with charts, tables, and metrics
  */
 
-const generateAdminReportHTML = (reportJob, reportData) => {
-  const { type, generatedAt, expiresAt } = reportJob;
-  const rows = reportData?.rows || [];
+const escapeHtml = (value) => String(value || "")
+  .replace(/&/g, "&amp;")
+  .replace(/</g, "&lt;")
+  .replace(/>/g, "&gt;")
+  .replace(/\"/g, "&quot;")
+  .replace(/'/g, "&#39;");
 
-  if (type === "STUDENT_WISE") {
-    return formatStudentWiseReport(rows, generatedAt, expiresAt);
-  }
-
-  if (type === "TEST_WISE") {
-    return formatTestWiseReport(rows, generatedAt, expiresAt);
-  }
-
-  if (type === "DEPARTMENT_WISE") {
-    return formatDepartmentWiseReport(rows, generatedAt, expiresAt);
-  }
-
-  if (type === "BATCH_WISE") {
-    return formatBatchWiseReport(rows, generatedAt, expiresAt);
-  }
-
-  if (type === "COMPREHENSIVE") {
-    return formatComprehensiveReport(rows[0] || {}, generatedAt, expiresAt);
-  }
-
-  return generateBasicHTML("Unknown Report Type", "No formatting available for this report type.");
+const formatDateValue = (value) => {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "-";
+  return date.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
 };
+
+const clampPercent = (value) => Math.max(0, Math.min(100, Number(value || 0)));
+const formatPercentCompact = (value) => `${clampPercent(value).toFixed(1)}%`;
+
+const normalizeAdminReportPayload = (reportData = {}) => {
+  if (reportData?.meta) return reportData;
+  if (reportData?.rows?.meta) return reportData.rows;
+  return reportData || {};
+};
+
+const buildDepartmentReportHTML = (reportJob, reportData) => {
+  const payload = normalizeAdminReportPayload(reportData);
+  const meta = payload.meta || {};
+  const kpis = payload.kpis || {};
+  const subjectPerformance = Array.isArray(payload.subjectPerformance) ? payload.subjectPerformance : [];
+  const passFail = payload.passFail || {};
+  const weakSubjects = Array.isArray(payload.weakSubjects) ? payload.weakSubjects : [];
+  const remarks = payload.remarks || "";
+  const studentPerformance = Array.isArray(payload.studentPerformance)
+    ? payload.studentPerformance
+    : Array.isArray(payload.scoreboard)
+      ? payload.scoreboard
+      : [];
+  const canRenderStudentPerformance = Boolean(
+    meta.hasSelectedTest &&
+    (reportJob?.adminId || reportJob?.initiatedById || reportJob?.role === "ADMIN" || reportJob?.role === "SUPER_ADMIN")
+  );
+
+  const headerLogo = meta.logoUrl
+    ? `<div class="logo"><img src="${escapeHtml(meta.logoUrl)}" alt="College logo" /></div>`
+    : "";
+
+  const renderSubjectBars = subjectPerformance.length > 0
+    ? subjectPerformance
+        .map((row) => `
+          <div class="bar-row">
+            <div class="bar-label">${escapeHtml(row.subject)}</div>
+            <div class="bar-track">
+              <div class="bar-fill" style="width: ${clampPercent(row.averageScore)}%"></div>
+            </div>
+            <div class="bar-value">${formatPercentCompact(row.averageScore)}</div>
+          </div>
+        `)
+        .join("")
+    : `<p class="muted">No subject performance data available.</p>`;
+
+  const renderWeakSubjects = weakSubjects.length > 0
+    ? weakSubjects
+        .map((row) => {
+          const statusClass = row.status === "Good" ? "badge-good" : row.status === "Moderate" ? "badge-moderate" : "badge-attention";
+          return `
+            <tr>
+              <td>${escapeHtml(row.subject)}</td>
+              <td class="text-right">${formatPercentCompact(row.averageScore)}</td>
+              <td><span class="status-badge ${statusClass}">${escapeHtml(row.status)}</span></td>
+            </tr>
+          `;
+        })
+        .join("")
+    : `<tr><td colspan="3" class="muted">No subject data available.</td></tr>`;
+
+  const renderStudentPerformanceRows = studentPerformance.length > 0
+    ? studentPerformance
+        .map((row) => `
+          <tr>
+            <td class="rank-cell">#${Number(row.rank || 0) || "-"}</td>
+            <td>${escapeHtml(row.name || row.studentName || "-")}</td>
+            <td>${escapeHtml(row.email || "-")}</td>
+            <td>${escapeHtml(row.year || "-")}</td>
+            <td>${escapeHtml(row.registerNumber || row.rollNo || row.studentId || "-")}</td>
+            <td class="text-right strong">${formatPercentCompact(row.scorePercent ?? row.score ?? row.avgScore)}</td>
+          </tr>
+        `)
+        .join("")
+    : `<tr><td colspan="6" class="muted">No students have submitted this test yet.</td></tr>`;
+
+  const passPercent = clampPercent(passFail.passPercent);
+  const failPercent = clampPercent(passFail.failPercent);
+
+  return `
+    <!doctype html>
+    <html lang="en">
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Department Academic Report</title>
+        <style>
+          :root {
+            --primary: #2563EB;
+            --success: #16A34A;
+            --danger: #DC2626;
+            --bg: #F8FAFC;
+            --card: #FFFFFF;
+            --text: #0F172A;
+            --muted: #64748B;
+            --border: #E2E8F0;
+          }
+          * { box-sizing: border-box; }
+          body {
+            margin: 0;
+            background: var(--bg);
+            color: var(--text);
+            font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+            font-size: 13px;
+          }
+          .page {
+            padding: 18px;
+          }
+          .header {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 16px;
+            align-items: center;
+            justify-content: space-between;
+            background: var(--card);
+            border-radius: 16px;
+            padding: 16px;
+            box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+          }
+          .header-title h1 {
+            margin: 0 0 4px 0;
+            font-size: 22px;
+            font-weight: 700;
+          }
+          .header-title p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 13px;
+          }
+          .logo img {
+            max-height: 54px;
+            max-width: 120px;
+            object-fit: contain;
+          }
+          .meta-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 6px 16px;
+            font-size: 12px;
+            color: var(--muted);
+          }
+          .meta-grid span {
+            color: var(--text);
+            font-weight: 600;
+          }
+          .section {
+            margin-top: 16px;
+          }
+          .section-title {
+            margin: 0 0 10px 0;
+            font-size: 14px;
+            font-weight: 700;
+          }
+          .kpi-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+          }
+          .kpi-card {
+            background: var(--card);
+            border-radius: 14px;
+            padding: 12px 14px;
+            box-shadow: 0 8px 18px rgba(15, 23, 42, 0.06);
+          }
+          .kpi-value {
+            font-size: 20px;
+            font-weight: 700;
+          }
+          .kpi-label {
+            margin-top: 4px;
+            font-size: 11px;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+          }
+          .card {
+            background: var(--card);
+            border-radius: 14px;
+            padding: 14px;
+            box-shadow: 0 8px 18px rgba(15, 23, 42, 0.06);
+          }
+          .bar-row {
+            display: grid;
+            grid-template-columns: 120px 1fr 60px;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 8px;
+          }
+          .bar-label {
+            font-weight: 600;
+            font-size: 12px;
+          }
+          .bar-track {
+            height: 10px;
+            background: #E2E8F0;
+            border-radius: 999px;
+            overflow: hidden;
+          }
+          .bar-fill {
+            height: 100%;
+            background: var(--primary);
+          }
+          .bar-value {
+            text-align: right;
+            font-weight: 600;
+            color: var(--primary);
+          }
+          .pass-fail {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 10px;
+          }
+          .progress-track {
+            background: #E2E8F0;
+            border-radius: 999px;
+            overflow: hidden;
+            height: 12px;
+          }
+          .progress-fill {
+            height: 100%;
+            background: var(--success);
+          }
+          .progress-meta {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: var(--muted);
+          }
+          .table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+          }
+          .table th,
+          .table td {
+            padding: 8px 6px;
+            border-bottom: 1px solid var(--border);
+            text-align: left;
+          }
+          .table th {
+            color: var(--muted);
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            font-size: 10px;
+          }
+          .text-right { text-align: right; }
+          .strong { font-weight: 700; }
+          .rank-cell { white-space: nowrap; font-weight: 700; color: var(--primary); }
+          .status-badge {
+            display: inline-flex;
+            padding: 2px 8px;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: 600;
+          }
+          .badge-good { background: rgba(22, 163, 74, 0.12); color: var(--success); }
+          .badge-moderate { background: rgba(37, 99, 235, 0.12); color: var(--primary); }
+          .badge-attention { background: rgba(220, 38, 38, 0.12); color: var(--danger); }
+          .remarks {
+            min-height: 60px;
+            color: var(--muted);
+            white-space: pre-wrap;
+          }
+          .muted { color: var(--muted); font-size: 12px; }
+          .final-page {
+            break-before: page;
+            page-break-before: always;
+          }
+          .performance-table {
+            table-layout: fixed;
+            font-size: 11px;
+          }
+          .performance-table th:nth-child(1),
+          .performance-table td:nth-child(1) { width: 9%; }
+          .performance-table th:nth-child(2),
+          .performance-table td:nth-child(2) { width: 22%; }
+          .performance-table th:nth-child(3),
+          .performance-table td:nth-child(3) { width: 27%; word-break: break-word; }
+          .performance-table th:nth-child(4),
+          .performance-table td:nth-child(4) { width: 10%; }
+          .performance-table th:nth-child(5),
+          .performance-table td:nth-child(5) { width: 17%; }
+          .performance-table th:nth-child(6),
+          .performance-table td:nth-child(6) { width: 15%; }
+          thead { display: table-header-group; }
+          tr { break-inside: avoid; page-break-inside: avoid; }
+          @media (max-width: 720px) {
+            .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .bar-row { grid-template-columns: 1fr; align-items: flex-start; }
+            .bar-value { text-align: left; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="page">
+          <section class="header">
+            <div class="header-title">
+              <h1>Department Academic Report</h1>
+              <p>${escapeHtml(meta.departmentName || "Department")} Department</p>
+            </div>
+            ${headerLogo}
+            <div class="meta-grid">
+              <div>Test: <span>${escapeHtml(meta.testTitle || "-")}</span></div>
+              <div>Semester: <span>${escapeHtml(meta.semester || "-")}</span></div>
+              <div>Academic Year: <span>${escapeHtml(meta.academicYear || "-")}</span></div>
+              <div>Generated: <span>${formatDateValue(reportJob.generatedAt)}</span></div>
+            </div>
+          </section>
+
+          <section class="section">
+            <h2 class="section-title">KPI Summary</h2>
+            <div class="kpi-grid">
+              <div class="kpi-card">
+                <div class="kpi-value">${Number(kpis.totalStudents || 0)}</div>
+                <div class="kpi-label">Total Students</div>
+              </div>
+              <div class="kpi-card">
+                <div class="kpi-value">${Number(kpis.studentsAppeared || 0)}</div>
+                <div class="kpi-label">Students Appeared</div>
+              </div>
+              <div class="kpi-card">
+                <div class="kpi-value">${Number(kpis.studentsNotAttended || 0)}</div>
+                <div class="kpi-label">Students Not Attended</div>
+              </div>
+              <div class="kpi-card">
+                <div class="kpi-value">${formatPercentCompact(kpis.averageScore)}</div>
+                <div class="kpi-label">Average Score</div>
+              </div>
+            </div>
+          </section>
+
+          <section class="section">
+            <h2 class="section-title">Subject Wise Performance</h2>
+            <div class="card">
+              ${renderSubjectBars}
+            </div>
+          </section>
+
+          <section class="section">
+            <h2 class="section-title">Pass vs Fail Summary</h2>
+            <div class="card pass-fail">
+              <div class="progress-meta">
+                <span>Pass: ${formatPercentCompact(passPercent)} (${Number(passFail.passedCount || 0)})</span>
+                <span>Fail: ${formatPercentCompact(failPercent)} (${Number(passFail.failedCount || 0)})</span>
+              </div>
+              <div class="progress-track">
+                <div class="progress-fill" style="width: ${passPercent}%"></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="section">
+            <h2 class="section-title">Weak Subject Analysis</h2>
+            <div class="card">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>Subject</th>
+                    <th class="text-right">Average Score</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${renderWeakSubjects}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="section">
+            <h2 class="section-title">Faculty Remarks</h2>
+            <div class="card remarks">${remarks ? escapeHtml(remarks) : "Add optional remarks for faculty review."}</div>
+          </section>
+
+          ${canRenderStudentPerformance ? `
+            <section class="section final-page">
+              <h2 class="section-title">Student Performance</h2>
+              <div class="card">
+                <table class="table performance-table">
+                  <thead>
+                    <tr>
+                      <th>Rank</th>
+                      <th>Student Name</th>
+                      <th>Email</th>
+                      <th>Year</th>
+                      <th>Register No</th>
+                      <th class="text-right">Score</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${renderStudentPerformanceRows}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          ` : ""}
+        </div>
+      </body>
+    </html>
+  `;
+};
+
+const generateAdminReportHTML = (reportJob, reportData) => buildDepartmentReportHTML(reportJob, reportData);
 
 const generateSuperAdminReportHTML = (reportJob, reportData) => {
   const { type, generatedAt, expiresAt } = reportJob;
@@ -43,6 +434,16 @@ const generateSuperAdminReportHTML = (reportJob, reportData) => {
   }
 
   if (type === "DEPARTMENT_WISE") {
+    if (reportData?.meta) {
+      return buildDepartmentReportHTML(
+        {
+          ...reportJob,
+          role: "SUPER_ADMIN",
+        },
+        reportData
+      );
+    }
+
     return formatDepartmentWiseReport(rows, generatedAt, expiresAt, true);
   }
 

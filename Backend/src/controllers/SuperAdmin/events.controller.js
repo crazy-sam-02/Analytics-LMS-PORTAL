@@ -2,6 +2,7 @@ const models = require("../../models");
 const { createAuditLog } = require("../../services/audit.service");
 const { ApiError, asyncHandler } = require("../../utils/http");
 const { uploadImageBuffer } = require("../../services/cloudinary.service");
+const { getPagination } = require("../../utils/pagination");
 const {
   buildEventFeedKey,
   getCachedEventFeed,
@@ -43,8 +44,7 @@ const buildGlobalEventUpdateData = (body, uploadedImage = null) => {
 const getEventsGlobal = asyncHandler(async (req, res) => {
   const m = await models.init();
   const db = m.dbClient;
-  const page = Number(req.query.page || 1);
-  const limit = Number(req.query.limit || 20);
+  const { page, limit, skip } = getPagination(req.query);
   const cacheKey = buildEventFeedKey("super-admin", { page, limit });
 
   const cached = await getCachedEventFeed(cacheKey);
@@ -66,7 +66,7 @@ const getEventsGlobal = asyncHandler(async (req, res) => {
         },
       },
       orderBy: { startsAt: "desc" },
-      skip: (page - 1) * limit,
+      skip,
       take: limit,
     }),
     db.event.count(),

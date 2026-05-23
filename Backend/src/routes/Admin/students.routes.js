@@ -16,11 +16,11 @@ const studentsController = require("../../controllers/Admin/students.controller"
 const router = express.Router();
 
 router.get("/", authenticateAdmin, requireAnyPermission("manage_students", "view_students"), validate(studentFiltersSchema), studentsValidationController.getStudents);
-router.post("/", authenticateAdmin, requirePermission("manage_students"), validate(createStudentSchema), studentsValidationController.createStudentHandler);
+router.post("/", authenticateAdmin, requirePermission("manage_students"), validate(createStudentSchema), studentsController.createStudent);
+router.post("/bulk-import", authenticateAdmin, requirePermission("manage_students", "bulk_import"), validate(studentBulkImportSchema), studentsController.bulkImportStudents);
+router.get("/import-jobs/:jobId", authenticateAdmin, requirePermission("manage_students", "bulk_import"), validate(studentBulkImportJobParamSchema), studentsController.getStudentImportJob);
 router.get("/:studentId", authenticateAdmin, requireAnyPermission("manage_students", "view_students"), validate(studentIdParamSchema), studentsController.getStudentProfile);
 router.get("/:studentId/performance", authenticateAdmin, requireAnyPermission("manage_students", "view_students"), requirePermission("view_reports"), studentsController.getStudentPerformance);
 router.patch("/:studentId/assign-batch", authenticateAdmin, requirePermission("manage_students", "manage_batches"), validate(assignStudentBatchSchema), studentsController.assignStudentToBatch);
-router.post("/bulk-import", authenticateAdmin, requirePermission("manage_students", "bulk_import"), validate(studentBulkImportSchema), studentsValidationController.bulkImportStudentsHandler);
-router.get("/import-jobs/:jobId", authenticateAdmin, requirePermission("manage_students", "bulk_import"), validate(studentBulkImportJobParamSchema), studentsController.getStudentImportJob);
 
 module.exports = router;

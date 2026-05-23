@@ -6,6 +6,8 @@ const ASSIGNMENT_METHOD = {
 
 const normalizeIds = (values = []) =>
   Array.isArray(values) ? values.filter(Boolean).map((value) => String(value)) : [];
+const normalizeYears = (values = []) =>
+  Array.isArray(values) ? values.map((value) => Number(value)).filter((value) => Number.isInteger(value)) : [];
 
 const getStudentBatchIds = (student) =>
   [...new Set(normalizeIds([...(student?.batchIds || []), student?.batchId]))];
@@ -13,6 +15,7 @@ const getStudentBatchIds = (student) =>
 const buildStudentAssignmentScope = (student) => {
   const userBatchIds = getStudentBatchIds(student);
   const userDepartmentId = student?.departmentId || null;
+  const userYear = Number(student?.year);
   const hasBatches = userBatchIds.length > 0;
 
   const conditions = [
@@ -79,7 +82,23 @@ const buildStudentAssignmentScope = (student) => {
     );
   }
 
-  return { OR: conditions };
+  const assignmentScope = { OR: conditions };
+  if (!Number.isInteger(userYear)) {
+    return assignmentScope;
+  }
+
+  return {
+    AND: [
+      {
+        OR: [
+          { years: null },
+          { years: [] },
+          { years: { in: [userYear] } },
+        ],
+      },
+      assignmentScope,
+    ],
+  };
 };
 
 const isStudentAssignedToTest = ({ test, student, hasBatchAssignment = false }) => {
@@ -91,6 +110,11 @@ const isStudentAssignedToTest = ({ test, student, hasBatchAssignment = false }) 
 
   const assignmentMethod = String(test?.assignmentMethod || "").trim().toLowerCase();
   const studentDepartmentId = String(student?.departmentId || "");
+  const testYears = normalizeYears(test?.years);
+  if (testYears.length > 0 && !testYears.includes(Number(student?.year))) {
+    return false;
+  }
+
   const studentBatchIds = getStudentBatchIds(student);
   const assignedDepartmentIds = normalizeIds(test?.assignedTo);
 

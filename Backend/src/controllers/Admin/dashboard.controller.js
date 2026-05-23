@@ -1,5 +1,6 @@
 const models = require("../../models");
 const { asyncHandler } = require("../../utils/http");
+const { getSubmissionScorePercent } = require("../../utils/score");
 
 const getAdminDashboard = asyncHandler(async (req, res) => {
   const m = await models.init();
@@ -42,7 +43,7 @@ const getAdminDashboard = asyncHandler(async (req, res) => {
           select: { fullName: true, studentId: true },
         },
         test: {
-          select: { title: true },
+          select: { title: true, totalMarks: true },
         },
         violations: {
           select: { id: true, type: true, createdAt: true },
@@ -106,7 +107,9 @@ const getAdminDashboard = asyncHandler(async (req, res) => {
 
   const averageScorePerTest = tests.map((test) => {
     const count = test.submissions.length;
-    const avgScore = count > 0 ? test.submissions.reduce((acc, item) => acc + item.score, 0) / count : 0;
+    const avgScore = count > 0
+      ? test.submissions.reduce((acc, item) => acc + getSubmissionScorePercent({ ...item, test }), 0) / count
+      : 0;
     return {
       testId: test.id,
       testName: test.title,

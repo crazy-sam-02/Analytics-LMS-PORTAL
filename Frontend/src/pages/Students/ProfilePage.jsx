@@ -26,6 +26,14 @@ export default function ProfilePage() {
     return user?.batch?.name || user?.batch || "-";
   }, [user?.batch, user?.batches]);
 
+  const yearLabel = useMemo(() => {
+    if (user?.year === null || typeof user?.year === "undefined" || user?.year === "") {
+      return "-";
+    }
+
+    return `${user.year} YEAR`;
+  }, [user?.year]);
+
   const uploadMutation = useMutation({
     mutationFn: (file) => studentApi.uploadMyAvatar(file),
     onSuccess: (payload) => {
@@ -135,6 +143,10 @@ export default function ProfilePage() {
             <div className="rounded-xl border border-border bg-background p-3">
               <p className="text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Department</p>
               <p className="mt-1 text-sm font-medium text-text-primary">{user?.department?.name || user?.department || "-"}</p>
+            </div>
+            <div className="rounded-xl border border-border bg-background p-3">
+              <p className="text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Year</p>
+              <p className="mt-1 text-sm font-medium text-text-primary">{yearLabel}</p>
             </div>
             <div className="rounded-xl border border-border bg-background p-3">
               <p className="text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Batch</p>

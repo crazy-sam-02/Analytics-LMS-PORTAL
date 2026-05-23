@@ -67,6 +67,99 @@ describe("useAttemptAutosave integration", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     sessionStorage.clear();
+    Object.defineProperty(window.navigator, "onLine", {
+      configurable: true,
+      value: true,
+    });
+  });
+
+  it("writes changed answers to local draft immediately for refresh recovery", async () => {
+    studentApi.patchAttemptAnswers.mockResolvedValue({ saved: true });
+    const store = createStore();
+
+    const wrapper = ({ children }) => <Provider store={store}>{children}</Provider>;
+
+    const { unmount } = renderHook(() => useAttemptAutosave(), { wrapper });
+
+    await waitFor(() => {
+      const draft = JSON.parse(sessionStorage.getItem("lms:attempt:draft:attempt-1") || "[]");
+      expect(draft).toEqual([
+        expect.objectContaining({
+          question_id: "q1",
+          selected_option: "A",
+        }),
+      ]);
+    });
+
+    unmount();
+  });
+
+  it("keeps answers local and skips the API while offline", async () => {
+    Object.defineProperty(window.navigator, "onLine", {
+      configurable: true,
+      value: false,
+    });
+
+    const store = createStore();
+    const wrapper = ({ children }) => <Provider store={store}>{children}</Provider>;
+
+    const { result, unmount } = renderHook(() => useAttemptAutosave(), { wrapper });
+
+    await act(async () => {
+      await result.current.flushPendingSaves();
+    });
+
+    expect(studentApi.patchAttemptAnswers).not.toHaveBeenCalled();
+    expect(store.getState().test.save_status).toBe("error");
+    expect(JSON.parse(sessionStorage.getItem("lms:attempt:draft:attempt-1") || "[]")).toHaveLength(1);
+
+    unmount();
+  });
+
+  it("restores local draft answers after refresh and sends them on the next save", async () => {
+    sessionStorage.setItem(
+      "lms:attempt:draft:attempt-1",
+      JSON.stringify([
+        {
+          question_id: "q1",
+          selected_option: "B",
+          selected_options: [],
+          answer_boolean: null,
+          answer_text: "",
+          marked_for_review: false,
+        },
+      ])
+    );
+    studentApi.patchAttemptAnswers.mockResolvedValue({ saved: true });
+    const store = createStore();
+    store.dispatch({ type: "test/clearChangedAnswerIds", payload: ["q1"] });
+
+    const wrapper = ({ children }) => <Provider store={store}>{children}</Provider>;
+    const { result, unmount } = renderHook(() => useAttemptAutosave(), { wrapper });
+
+    await waitFor(() => {
+      expect(store.getState().test.answers.q1.selected_option).toBe("B");
+      expect(store.getState().test.changed_answer_ids).toContain("q1");
+    });
+
+    await act(async () => {
+      await result.current.flushPendingSaves();
+    });
+
+    await waitFor(() => {
+      expect(studentApi.patchAttemptAnswers).toHaveBeenCalledWith({
+        attemptId: "attempt-1",
+        testId: "test-1",
+        changedAnswers: [
+          expect.objectContaining({
+            question_id: "q1",
+            selected_option: "B",
+          }),
+        ],
+      });
+    });
+
+    unmount();
   });
 
   it("debounces and sends changed answers to autosave API", async () => {

@@ -1,10 +1,60 @@
 const models = require("../../models");
 const { createAuditLog } = require("../../services/audit.service");
 const { ApiError, asyncHandler } = require("../../utils/http");
+const { getPagination } = require("../../utils/pagination");
+
+const normalizeIdList = (ids = []) => [...new Set((Array.isArray(ids) ? ids : []).map((id) => String(id || "").trim()).filter(Boolean))];
+
+const assignStudentsToBatchRecord = async ({ db, batch, studentIds }) => {
+  const requestedStudentIds = normalizeIdList(studentIds);
+  if (!requestedStudentIds.length) {
+    return { requested: 0, updated: 0, invalidStudentIds: [] };
+  }
+
+  const students = await db.student.findMany({
+    where: {
+      id: { in: requestedStudentIds },
+      collegeId: batch.collegeId,
+      ...(batch.isGlobal && Array.isArray(batch.departmentIds) && batch.departmentIds.length > 0
+        ? { departmentId: { in: batch.departmentIds } }
+        : batch.isGlobal
+          ? {}
+          : { departmentId: batch.departmentId }),
+    },
+    select: { id: true, batchId: true, batchIds: true },
+  });
+
+  const validStudentIds = new Set(students.map((student) => String(student.id)));
+  const invalidStudentIds = requestedStudentIds.filter((id) => !validStudentIds.has(String(id)));
+
+  if (students.length > 0) {
+    await db.$transaction(students.map((student) => {
+      const batchIds = [...new Set([
+        ...(Array.isArray(student.batchIds) ? student.batchIds : []),
+        student.batchId,
+        batch.id,
+      ].filter(Boolean).map((id) => String(id)))];
+
+      return db.student.update({
+        where: { id: student.id },
+        data: {
+          batchId: batch.id,
+          batchIds,
+          ...(batch.isGlobal ? {} : { departmentId: batch.departmentId }),
+        },
+      });
+    }));
+  }
+
+  return {
+    requested: requestedStudentIds.length,
+    updated: students.length,
+    invalidStudentIds,
+  };
+};
 
 const getBatchesGlobal = asyncHandler(async (req, res) => {
-  const page = Number(req.query.page || 1);
-  const limit = Number(req.query.limit || 20);
+  const { page, limit, skip } = getPagination(req.query);
   const collegeId = req.query.collegeId;
   const search = (req.query.search || "").trim();
 
@@ -34,8 +84,16 @@ const getBatchesGlobal = asyncHandler(async (req, res) => {
       const m = await models.init();
       return m.dbClient.batch.findMany({
         where,
+        include: {
+          college: true,
+          department: true,
+          departments: true,
+          _count: {
+            select: { students: true, tests: true, testAssignments: true },
+          },
+        },
         orderBy: { createdAt: "desc" },
-        skip: (page - 1) * limit,
+        skip,
         take: limit,
       });
     })(),
@@ -80,6 +138,7 @@ const assignTestToBatches = asyncHandler(async (req, res) => {
   const validBatches = await Batch.findMany({
     where: {
       id: { in: requestedBatchIds },
+      collegeId: test.collegeId,
     },
   });
 
@@ -87,7 +146,7 @@ const assignTestToBatches = asyncHandler(async (req, res) => {
   const invalidBatchIds = requestedBatchIds.filter((id) => !validBatchIds.has(String(id)));
 
   if (!validBatches.length) {
-    throw new ApiError(400, "No valid batches found", { invalidBatchIds });
+    throw new ApiError(400, "No valid batches found in the test college", { invalidBatchIds, collegeId: test.collegeId });
   }
 
   const TestBatch = m.dbClient.testBatch;
@@ -118,6 +177,7 @@ const assignTestToBatches = asyncHandler(async (req, res) => {
 
   res.status(200).json({
     message: "Batch assignments updated",
+    collegeId: test.collegeId,
     requested: requestedBatchIds.length,
     assigned: assignments.length,
     alreadyAssigned: existingBatchIds.size,
@@ -126,34 +186,46 @@ const assignTestToBatches = asyncHandler(async (req, res) => {
 });
 
 const createBatchGlobal = asyncHandler(async (req, res) => {
-  const { name, year, collegeId, departmentId, studentIds = [] } = req.body;
+  const { name, year, collegeId, departmentId, studentIds = [], isGlobal = false } = req.body;
+  const requestedDepartmentIds = normalizeIdList(req.body.departmentIds);
 
   const m = await models.init();
   const College = m.dbClient.college;
   const Department = m.dbClient.department;
   const Batch = m.dbClient.batch;
-  const Student = m.dbClient.student;
 
   const college = await College.findUnique({ where: { id: collegeId } });
   if (!college || !college.isActive) {
     throw new ApiError(400, "Batch cannot be created for inactive or missing college");
   }
 
-  const department = await Department.findFirst({
+  const finalDepartmentIds = isGlobal ? requestedDepartmentIds : [departmentId].filter(Boolean);
+  const departments = await Department.findMany({
     where: {
-      id: departmentId,
+      id: { in: finalDepartmentIds },
       collegeId,
     },
+    select: { id: true, name: true },
   });
 
-  if (!department) {
-    throw new ApiError(422, "Invalid department for selected college");
+  if (departments.length !== finalDepartmentIds.length) {
+    const foundIds = new Set(departments.map((department) => String(department.id)));
+    throw new ApiError(422, "Invalid departments for selected college", {
+      invalidDepartmentIds: finalDepartmentIds.filter((id) => !foundIds.has(String(id))),
+      collegeId,
+    });
   }
+
+  if (isGlobal && finalDepartmentIds.length < 2) {
+    throw new ApiError(422, "Select at least two departments for a global batch");
+  }
+
+  const primaryDepartmentId = isGlobal ? finalDepartmentIds[0] : departmentId;
 
   const duplicate = await Batch.findFirst({
     where: {
       collegeId,
-      departmentId,
+      ...(isGlobal ? { isGlobal: true } : { departmentId: primaryDepartmentId, isGlobal: { not: true } }),
       year,
       name: {
         equals: name,
@@ -171,21 +243,14 @@ const createBatchGlobal = asyncHandler(async (req, res) => {
       name,
       year,
       collegeId,
-      departmentId,
+      departmentId: primaryDepartmentId,
+      departmentIds: finalDepartmentIds,
+      isGlobal: Boolean(isGlobal),
     },
   });
 
   if (Array.isArray(studentIds) && studentIds.length > 0) {
-    await Student.updateMany({
-      where: {
-        id: { in: studentIds },
-        collegeId,
-      },
-      data: {
-        batchId: batch.id,
-        departmentId,
-      },
-    });
+    await assignStudentsToBatchRecord({ db: m.dbClient, batch, studentIds });
   }
 
   await createAuditLog({
@@ -198,6 +263,8 @@ const createBatchGlobal = asyncHandler(async (req, res) => {
       name: batch.name,
       year: batch.year,
       departmentId: batch.departmentId,
+      departmentIds: batch.departmentIds,
+      isGlobal: batch.isGlobal,
     },
   });
 
@@ -217,25 +284,36 @@ const updateBatchGlobal = asyncHandler(async (req, res) => {
 
   const nextName = req.body.name !== undefined ? String(req.body.name).trim() : existing.name;
   const nextYear = req.body.year !== undefined ? Number(req.body.year) : existing.year;
+  const nextIsGlobal = req.body.isGlobal !== undefined ? Boolean(req.body.isGlobal) : Boolean(existing.isGlobal);
+  const requestedDepartmentIds = req.body.departmentIds !== undefined
+    ? normalizeIdList(req.body.departmentIds)
+    : normalizeIdList(existing.departmentIds);
   const nextDepartmentId = req.body.departmentId !== undefined ? req.body.departmentId : existing.departmentId;
+  const finalDepartmentIds = nextIsGlobal ? requestedDepartmentIds : [nextDepartmentId].filter(Boolean);
 
-  const department = await db.department.findFirst({
+  const departments = await db.department.findMany({
     where: {
-      id: nextDepartmentId,
+      id: { in: finalDepartmentIds },
       collegeId: existing.collegeId,
     },
     select: { id: true },
   });
 
-  if (!department) {
-    throw new ApiError(422, "Invalid department for selected batch college");
+  if (departments.length !== finalDepartmentIds.length) {
+    throw new ApiError(422, "Invalid departments for selected batch college");
   }
+
+  if (nextIsGlobal && finalDepartmentIds.length < 2) {
+    throw new ApiError(422, "Select at least two departments for a global batch");
+  }
+
+  const primaryDepartmentId = nextIsGlobal ? finalDepartmentIds[0] : nextDepartmentId;
 
   const duplicate = await db.batch.findFirst({
     where: {
       id: { not: batchId },
       collegeId: existing.collegeId,
-      departmentId: nextDepartmentId,
+      ...(nextIsGlobal ? { isGlobal: true } : { departmentId: primaryDepartmentId, isGlobal: { not: true } }),
       year: nextYear,
       name: {
         equals: nextName,
@@ -254,12 +332,15 @@ const updateBatchGlobal = asyncHandler(async (req, res) => {
     data: {
       ...(req.body.name !== undefined ? { name: nextName } : {}),
       ...(req.body.year !== undefined ? { year: nextYear } : {}),
-      ...(req.body.departmentId !== undefined ? { departmentId: nextDepartmentId } : {}),
+      ...(req.body.departmentId !== undefined || req.body.departmentIds !== undefined || req.body.isGlobal !== undefined ? { departmentId: primaryDepartmentId } : {}),
+      ...(req.body.departmentId !== undefined || req.body.departmentIds !== undefined || req.body.isGlobal !== undefined ? { departmentIds: finalDepartmentIds } : {}),
+      ...(req.body.isGlobal !== undefined ? { isGlobal: nextIsGlobal } : {}),
       ...(req.body.isArchived !== undefined ? { isArchived: req.body.isArchived } : {}),
     },
     include: {
       college: true,
       department: true,
+      departments: true,
       _count: {
         select: { students: true, tests: true },
       },
@@ -276,17 +357,61 @@ const updateBatchGlobal = asyncHandler(async (req, res) => {
       name: existing.name,
       year: existing.year,
       departmentId: existing.departmentId,
+      departmentIds: existing.departmentIds,
+      isGlobal: existing.isGlobal,
       isArchived: existing.isArchived,
     },
     afterState: {
       name: updated.name,
       year: updated.year,
       departmentId: updated.departmentId,
+      departmentIds: updated.departmentIds,
+      isGlobal: updated.isGlobal,
       isArchived: updated.isArchived,
     },
   });
 
   res.status(200).json(updated);
+});
+
+const assignStudentsToBatchGlobal = asyncHandler(async (req, res) => {
+  const { batchId } = req.params;
+  const { studentIds = [] } = req.body;
+  const m = await models.init();
+  const db = m.dbClient;
+
+  const batch = await db.batch.findUnique({ where: { id: batchId } });
+  if (!batch) {
+    throw new ApiError(404, "Batch not found");
+  }
+
+  const result = await assignStudentsToBatchRecord({ db, batch, studentIds });
+  if (result.updated === 0) {
+    throw new ApiError(422, "No selected students are eligible for this batch", {
+      collegeId: batch.collegeId,
+      batchId,
+      invalidStudentIds: result.invalidStudentIds,
+    });
+  }
+
+  await createAuditLog({
+    action: "SUPER_ADMIN_BATCH_STUDENTS_ASSIGNED",
+    targetType: "BATCH",
+    targetId: batchId,
+    collegeId: batch.collegeId,
+    superAdminId: req.superAdmin.id,
+    afterState: {
+      requested: result.requested,
+      updated: result.updated,
+      invalidStudentIds: result.invalidStudentIds,
+      isGlobalBatch: Boolean(batch.isGlobal),
+    },
+  });
+
+  res.status(200).json({
+    message: "Students assigned to batch",
+    ...result,
+  });
 });
 
 const deleteBatchGlobal = asyncHandler(async (req, res) => {
@@ -326,12 +451,36 @@ const deleteBatchGlobal = asyncHandler(async (req, res) => {
     data: { batchId: null },
   });
 
+  const studentsWithBatchArray = await db.student.findMany({
+    where: {
+      collegeId: existing.collegeId,
+      batchIds: { in: [batchId] },
+    },
+    select: { id: true, batchId: true, batchIds: true },
+  });
+
+  for (const student of studentsWithBatchArray) {
+    const nextBatchIds = (Array.isArray(student.batchIds) ? student.batchIds : [])
+      .filter((id) => String(id) !== String(batchId));
+    const nextBatchId = String(student.batchId || "") === String(batchId)
+      ? nextBatchIds[0] || null
+      : student.batchId || null;
+
+    await db.student.update({
+      where: { id: student.id },
+      data: {
+        batchIds: nextBatchIds,
+        batchId: nextBatchId,
+      },
+    });
+  }
+
   await db.batch.delete({ where: { id: batchId } });
 
   const result = {
     removedAssignments: removedAssignments.count || 0,
     detachedLegacyTests: detachedLegacyTests.count || 0,
-    detachedStudents: detachedStudents.count || 0,
+    detachedStudents: Math.max(detachedStudents.count || 0, studentsWithBatchArray.length),
   };
 
   await createAuditLog({
@@ -363,5 +512,6 @@ module.exports = {
   assignTestToBatches,
   createBatchGlobal,
   updateBatchGlobal,
+  assignStudentsToBatchGlobal,
   deleteBatchGlobal,
 };

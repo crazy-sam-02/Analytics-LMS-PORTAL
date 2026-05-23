@@ -69,7 +69,7 @@ export default function LiveMonitoringPage() {
 
     const onConnect = () => {
       setSocketHealthy(true);
-      joinTestRoom(testId);
+      joinTestRoom(testId, "admin");
     };
     const onDisconnect = () => {
       setSocketHealthy(false);
@@ -111,14 +111,14 @@ export default function LiveMonitoringPage() {
     }
 
     return () => {
-      leaveTestRoom(testId);
+      leaveTestRoom(testId, "admin");
       socket.off("connect", onConnect);
       socket.off("disconnect", onDisconnect);
       socket.off("connect_error", onConnectError);
       socket.off("student_status_update", onStatusUpdate);
       socket.off("violation_event", onViolationEvent);
       socket.off("test_status_change", onTestStatusChange);
-      disconnectTestSocket();
+      disconnectTestSocket("admin");
     };
   }, [testId]);
 

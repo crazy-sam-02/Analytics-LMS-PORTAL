@@ -36,7 +36,7 @@ const getEventState = (event) => {
     return "REGISTERED";
   }
 
-  if (Boolean(event?.is_cancelled || event?.cancelled)) {
+  if (event?.is_cancelled || event?.cancelled) {
     return "CANCELLED";
   }
 

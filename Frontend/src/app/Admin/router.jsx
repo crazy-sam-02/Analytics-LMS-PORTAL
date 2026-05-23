@@ -1,8 +1,7 @@
 import { useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { Navigate, Outlet, RouterProvider, createBrowserRouter } from "react-router-dom";
-import { adminTokenStorage } from "@/services/api";
-import { fetchCurrentAdmin, markAdminInitialized } from "@/features/Admin/adminAuthSlice";
+import { fetchCurrentAdmin } from "@/features/Admin/adminAuthSlice";
 import AdminPortalLayout from "@/components/Admin/AdminPortalLayout";
 import AdminLoginPage from "@/pages/Admin/LoginPage";
 import AdminDashboardPage from "@/pages/Admin/DashboardPage";
@@ -27,11 +26,7 @@ function AdminAuthBootstrap() {
   const initialized = useSelector((state) => state.adminAuth.initialized);
 
   useEffect(() => {
-    if (adminTokenStorage.getAccess()) {
-      dispatch(fetchCurrentAdmin());
-    } else {
-      dispatch(markAdminInitialized());
-    }
+    dispatch(fetchCurrentAdmin());
   }, [dispatch]);
 
   if (!initialized) {

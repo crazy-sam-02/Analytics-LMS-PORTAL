@@ -19,6 +19,7 @@ const UserValidationSchema = new mongoose.Schema(
     collegeId: { type: String, required: true, validate: referenceValidator },
     departmentId: { type: String, default: null, validate: optionalReferenceValidator },
     batchId: { type: String, default: null, validate: optionalReferenceValidator },
+    year: { type: Number, required: true, min: 1, max: 4 },
     isActive: { type: Boolean, default: true },
   },
   {

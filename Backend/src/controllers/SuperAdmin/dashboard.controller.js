@@ -1,5 +1,6 @@
 const { getDb } = require("../../utils/db");
 const { asyncHandler } = require("../../utils/http");
+const { getSubmissionScorePercent } = require("../../utils/score");
 
 const getSuperAdminDashboard = asyncHandler(async (_req, res) => {
   const db = await getDb();
@@ -33,6 +34,7 @@ const getSuperAdminDashboard = asyncHandler(async (_req, res) => {
         submittedAt: true,
         score: true,
         collegeId: true,
+        test: { select: { totalMarks: true } },
       },
       orderBy: { submittedAt: "asc" },
     }),
@@ -43,7 +45,7 @@ const getSuperAdminDashboard = asyncHandler(async (_req, res) => {
         name: true,
         submissions: {
           where: { status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] } },
-          select: { score: true },
+          select: { score: true, test: { select: { totalMarks: true } } },
         },
       },
       take: 20,
@@ -69,7 +71,7 @@ const getSuperAdminDashboard = asyncHandler(async (_req, res) => {
   const collegeWisePerformance = collegePerformance.map((college) => {
     const participantCount = college.submissions.length;
     const avgScore = participantCount > 0
-      ? college.submissions.reduce((sum, row) => sum + row.score, 0) / participantCount
+      ? college.submissions.reduce((sum, row) => sum + getSubmissionScorePercent(row), 0) / participantCount
       : 0;
 
     return {

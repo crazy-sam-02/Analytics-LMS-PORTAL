@@ -2,16 +2,15 @@ const models = require("../../models");
 const { enqueueReportJob } = require("../../services/admin-report-queue.service");
 const { generateAdminReportHTML } = require("../../services/report-formatter.service");
 const { renderHtmlToPdfBuffer } = require("../../services/report-pdf.service");
+const { readReportPayload } = require("../../services/report-payload-store.service");
 const { createAuditLog } = require("../../services/audit.service");
 const { emitToRole } = require("../../realtime/socket");
-const { asyncHandler } = require("../../utils/http");
+const { ApiError, asyncHandler } = require("../../utils/http");
+const { clampPercent, getSubmissionScorePercent } = require("../../utils/score");
 
-const toPercent = (value) => Number((value || 0).toFixed(2));
-const getScorePercent = (submission) => {
-  const rawScore = Number(submission?.score || 0);
-  const totalMarks = Number(submission?.test?.totalMarks || 0);
-  return toPercent(totalMarks > 0 ? (rawScore / totalMarks) * 100 : rawScore);
-};
+const MAX_ANALYTICS_SUBMISSIONS = 20000;
+const toPercent = (value) => clampPercent(value);
+const getScorePercent = getSubmissionScorePercent;
 
 const scoreBand = (score) => {
   if (score <= 20) return "0-20";
@@ -34,6 +33,7 @@ const toValidDate = (value) => {
 };
 
 const resolveSubmissionStudentId = (submission) => submission?.userId || submission?.studentId || submission?.user?.id || null;
+const getStudentNumber = (student = {}) => student.enrollNumber || student.enrollmentNumber || student.studentId || "-";
 
 const normalizeId = (value) => String(value || "").trim();
 
@@ -62,6 +62,12 @@ const buildEmptyAnalyticsPayload = (mode = "department") => ({
   tableRows: [],
   attemptHistory: [],
   selectedStudent: null,
+  notAttended: {
+    count: 0,
+    students: [],
+    testId: null,
+    testName: null,
+  },
   anomalyAlerts: [],
 });
 
@@ -203,26 +209,60 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
   const studentWhere = {
     collegeId,
     ...(scopedDepartmentId ? { departmentId: scopedDepartmentId } : {}),
-    ...(scopedBatchId ? { batchId: scopedBatchId } : {}),
+    ...(scopedBatchId
+      ? {
+          OR: [
+            { batchId: scopedBatchId },
+            { batchIds: { in: [scopedBatchId] } },
+          ],
+        }
+      : {}),
     ...(studentId ? { id: studentId } : {}),
   };
+  const submissionWhere = {
+    collegeId,
+    ...(testIds.length ? { testId: { in: testIds } } : {}),
+    ...(studentId ? { userId: studentId } : {}),
+    status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
+    ...(dateFromValue || dateToValue
+      ? {
+          submittedAt: {
+            ...(dateFromValue ? { gte: dateFromValue } : {}),
+            ...(dateToValue ? { lte: dateToValue } : {}),
+          },
+        }
+      : {}),
+    ...(scopedDepartmentId || scopedBatchId
+      ? {
+          user: {
+            ...(scopedDepartmentId ? { departmentId: scopedDepartmentId } : {}),
+            ...(scopedBatchId
+              ? {
+                  OR: [
+                    { batchId: scopedBatchId },
+                    { batchIds: { in: [scopedBatchId] } },
+                  ],
+                }
+              : {}),
+          },
+        }
+      : {}),
+  };
+
+  const submissionCount = await db.submission.count({ where: submissionWhere });
+  if (submissionCount > MAX_ANALYTICS_SUBMISSIONS && !studentId) {
+    throw new ApiError(
+      413,
+      "Report scope is too large. Select a test, student, or date range before loading analytics.",
+      { submissionCount, maxSubmissions: MAX_ANALYTICS_SUBMISSIONS },
+      "REPORT_SCOPE_TOO_LARGE"
+    );
+  }
+
   const submissions = await db.submission.findMany({
-    where: {
-      collegeId,
-      ...(testIds.length ? { testId: { in: testIds } } : {}),
-      ...(studentId ? { userId: studentId } : {}),
-      status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
-      ...(scopedDepartmentId || scopedBatchId
-        ? {
-            user: {
-              ...(scopedDepartmentId ? { departmentId: scopedDepartmentId } : {}),
-              ...(scopedBatchId ? { batchId: scopedBatchId } : {}),
-            },
-          }
-        : {}),
-    },
+    where: submissionWhere,
     include: {
-      user: { select: { id: true, fullName: true, studentId: true, departmentId: true, batchId: true } },
+      user: { select: { id: true, fullName: true, studentId: true, enrollNumber: true, enrollmentNumber: true, departmentId: true, batchId: true, batchIds: true } },
       test: { select: { id: true, title: true, subject: true, totalMarks: true } },
       violations: {
         select: {
@@ -246,7 +286,11 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
 
   const scopedSubmissions = submissions.filter((item) => {
     if (scopedDepartmentId && item.user?.departmentId !== scopedDepartmentId) return false;
-    if (scopedBatchId && item.user?.batchId !== scopedBatchId) return false;
+    if (
+      scopedBatchId &&
+      item.user?.batchId !== scopedBatchId &&
+      !(Array.isArray(item.user?.batchIds) && item.user.batchIds.some((id) => String(id) === String(scopedBatchId)))
+    ) return false;
 
     const eventDate = toValidDate(item.submittedAt || item.updatedAt || item.createdAt);
     if (dateFromValue && (!eventDate || eventDate < dateFromValue)) return false;
@@ -298,7 +342,7 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
     return {
       studentId: student.id,
       name: student.fullName,
-      rollNo: student.studentId,
+      rollNo: getStudentNumber(student),
       departmentId: student.departmentId,
       departmentName: student.department?.name || "-",
       batchId: student.batchId,
@@ -311,14 +355,24 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
     };
   });
 
+  const hasSelectedTest = Boolean(testId);
+  const selectedTest = hasSelectedTest
+    ? tests.find((test) => normalizeId(test.id) === normalizeId(testId)) || tests[0]
+    : null;
+  const notAttendedRows = hasSelectedTest ? studentRows.filter((row) => row.testsTaken === 0) : [];
+  const notAttendedStudents = notAttendedRows.map((row) => ({
+    studentId: row.studentId,
+    name: row.name,
+    rollNo: row.rollNo,
+    department: row.departmentName,
+    batch: row.batchName,
+  }));
+
   const attendedRows = studentRows.filter((row) => row.testsTaken > 0);
   const ranked = [...attendedRows].sort((a, b) => b.avgScore - a.avgScore).map((item, index) => ({ ...item, rank: index + 1 }));
   const avgScore = ranked.length ? ranked.reduce((sum, row) => sum + row.avgScore, 0) / ranked.length : 0;
   const passRate = scopedSubmissions.length
-    ? (scopedSubmissions.filter((row) => {
-        const totalMarks = Number(row.test?.totalMarks || 100);
-        return Number(row.score || 0) >= totalMarks * 0.4;
-      }).length / scopedSubmissions.length) * 100
+    ? (scopedSubmissions.filter((row) => getScorePercent(row) >= 40).length / scopedSubmissions.length) * 100
     : 0;
   const participatingStudents = attendedRows.length;
   const participationRate = studentRows.length ? (participatingStudents / studentRows.length) * 100 : 0;
@@ -421,8 +475,7 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
   const anomalyAlerts = [];
 
   scopedSubmissions.forEach((row) => {
-    const totalMarks = Number(row.test?.totalMarks || 100);
-    const scorePercent = totalMarks > 0 ? (Number(row.score || 0) / totalMarks) * 100 : Number(row.score || 0);
+    const scorePercent = getScorePercent(row);
     const mins = Number(row.timeSpentSeconds || 0) / 60;
     const violationCount = Number(row.violationCount || row.violations?.length || 0);
 
@@ -503,6 +556,12 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
     tableRows: ranked,
     attemptHistory,
     selectedStudent,
+    notAttended: {
+      count: hasSelectedTest ? notAttendedStudents.length : 0,
+      students: hasSelectedTest ? notAttendedStudents : [],
+      testId: hasSelectedTest ? testId : null,
+      testName: selectedTest?.title || null,
+    },
     anomalyAlerts: anomalyAlerts.slice(0, 100),
   });
 });
@@ -574,8 +633,6 @@ const fetchAnalyticsPayload = async (req, filters = {}) => {
 };
 
 const getReportSummaryDashboard = asyncHandler(async (req, res) => {
-  const m = await models.init();
-  const db = m.dbClient;
   const filters = resolveDateFilters(req.query || {});
   const analytics = await fetchAnalyticsPayload(req, filters);
   const tableRows = Array.isArray(analytics?.tableRows) ? analytics.tableRows : [];
@@ -604,8 +661,6 @@ const getReportSummaryDashboard = asyncHandler(async (req, res) => {
 });
 
 const getReportChartsDashboard = asyncHandler(async (req, res) => {
-  const m = await models.init();
-  const db = m.dbClient;
   const filters = resolveDateFilters(req.query || {});
   const analytics = await fetchAnalyticsPayload(req, filters);
   const topPerformers = (analytics?.tableRows || []).slice(0, 10).map((item) => ({
@@ -673,12 +728,19 @@ const getReportTableDashboard = asyncHandler(async (req, res) => {
       ...(filters.studentId ? { userId: filters.studentId } : {}),
       ...(scopedDepartmentId || scopedBatchId
         ? {
-            user: {
-              ...(scopedDepartmentId ? { departmentId: scopedDepartmentId } : {}),
-              ...(scopedBatchId ? { batchId: scopedBatchId } : {}),
-            },
-          }
-        : {}),
+          user: {
+            ...(scopedDepartmentId ? { departmentId: scopedDepartmentId } : {}),
+            ...(scopedBatchId
+              ? {
+                  OR: [
+                    { batchId: scopedBatchId },
+                    { batchIds: { in: [scopedBatchId] } },
+                  ],
+                }
+              : {}),
+          },
+        }
+      : {}),
       ...(filters.dateFrom || filters.dateTo
         ? {
             submittedAt: {
@@ -694,6 +756,8 @@ const getReportTableDashboard = asyncHandler(async (req, res) => {
           id: true,
           fullName: true,
           studentId: true,
+          enrollNumber: true,
+          enrollmentNumber: true,
           department: { select: { name: true } },
           batch: { select: { name: true } },
         },
@@ -723,9 +787,8 @@ const getReportTableDashboard = asyncHandler(async (req, res) => {
   }, {});
 
   let rows = submissions.map((submission) => {
-    const totalMarks = Number(submission.test?.totalMarks || 0);
     const score = Number(submission.score || 0);
-    const accuracy = totalMarks > 0 ? (score / totalMarks) * 100 : score;
+    const accuracy = getScorePercent(submission);
     const date = submission.submittedAt || submission.updatedAt || submission.createdAt || new Date();
 
     return {
@@ -733,12 +796,12 @@ const getReportTableDashboard = asyncHandler(async (req, res) => {
       submissionId: submission.id,
       studentId: resolveSubmissionStudentId(submission),
       studentName: submission.user?.fullName || "-",
-      studentRollNo: submission.user?.studentId || "-",
+      studentRollNo: getStudentNumber(submission.user),
       department: submission.user?.department?.name || "-",
       batch: submission.user?.batch?.name || "-",
       testName: submission.test?.title || "-",
       score,
-      accuracy: Number(accuracy.toFixed(2)),
+      accuracy,
       timeTaken: Number(submission.timeSpentSeconds || 0),
       attemptCount: Number(attemptsPerStudent[resolveSubmissionStudentId(submission)] || 0),
       status: submission.status || "IN_PROGRESS",
@@ -822,7 +885,14 @@ const getReportStudentDetailDashboard = asyncHandler(async (req, res) => {
       id: studentId,
       collegeId: req.collegeId,
       ...(scope.departmentId ? { departmentId: scope.departmentId } : {}),
-      ...(scope.batchId ? { batchId: scope.batchId } : {}),
+      ...(scope.batchId
+        ? {
+            OR: [
+              { batchId: scope.batchId },
+              { batchIds: { in: [scope.batchId] } },
+            ],
+          }
+        : {}),
     },
     include: {
       department: { select: { name: true } },
@@ -864,8 +934,7 @@ const getReportStudentDetailDashboard = asyncHandler(async (req, res) => {
 
   const tests = (student.submissions || []).map((submission) => {
     const totalQuestions = (submission.answers || []).length;
-    const totalMarks = Number(submission.test?.totalMarks || 100);
-    const accuracy = totalMarks > 0 ? (Number(submission.score || 0) / totalMarks) * 100 : Number(submission.score || 0);
+    const accuracy = getScorePercent(submission);
     const correct = Math.max(0, Math.min(totalQuestions, Math.round((accuracy / 100) * totalQuestions)));
     const incorrect = Math.max(0, totalQuestions - correct);
 
@@ -874,8 +943,8 @@ const getReportStudentDetailDashboard = asyncHandler(async (req, res) => {
       testId: submission.testId,
       testName: submission.test?.title || "Test",
       score: Number(submission.score || 0),
-      scorePercent: Number(accuracy.toFixed(2)),
-      accuracy: Number(accuracy.toFixed(2)),
+      scorePercent: accuracy,
+      accuracy,
       percentile: submission.percentile ?? null,
       timeTaken: Number(submission.timeSpentSeconds || 0),
       status: submission.status,
@@ -923,7 +992,7 @@ const getReportStudentDetailDashboard = asyncHandler(async (req, res) => {
     student: {
       id: student.id,
       name: student.fullName,
-      studentId: student.studentId,
+      studentId: getStudentNumber(student),
       department: student.department?.name || "-",
       batch: student.batch?.name || "-",
       rank: selected?.rank || null,
@@ -947,6 +1016,10 @@ const normalizeFilters = (filters = {}) => {
     testId: filters.testId || undefined,
     departmentId: filters.departmentId || undefined,
     batchId: filters.batchId || undefined,
+    semester: filters.semester || undefined,
+    academicYear: filters.academicYear || undefined,
+    remarks: filters.remarks || undefined,
+    logoUrl: filters.logoUrl || undefined,
     dateFrom: filters.dateFrom || undefined,
     dateTo: filters.dateTo || undefined,
   };
@@ -985,6 +1058,52 @@ const generateReport = asyncHandler(async (req, res) => {
   const m = await models.init();
   const db = m.dbClient;
   const filters = normalizeFilters(req.body.filters || {});
+  const adminDepartmentId = req.admin?.departmentId || null;
+
+  if (!adminDepartmentId) {
+    return res.status(403).json({ message: "Admin must be assigned to a department" });
+  }
+
+  if (filters.departmentId && String(filters.departmentId) !== String(adminDepartmentId)) {
+    return res.status(403).json({ message: "Cross-department report access denied" });
+  }
+
+  filters.departmentId = adminDepartmentId;
+
+  if (filters.batchId) {
+    const batch = await db.batch.findFirst({
+      where: { id: filters.batchId, collegeId: req.collegeId, departmentId: adminDepartmentId },
+      select: { id: true },
+    });
+
+    if (!batch) {
+      return res.status(403).json({ message: "Batch is outside the admin department scope" });
+    }
+  }
+
+  if (filters.studentId) {
+    const student = await db.student.findFirst({
+      where: { id: filters.studentId, collegeId: req.collegeId, departmentId: adminDepartmentId },
+      select: { id: true },
+    });
+
+    if (!student) {
+      return res.status(403).json({ message: "Student is outside the admin department scope" });
+    }
+  }
+
+  if (filters.testId) {
+    const scope = await buildAdminReportScope({
+      db,
+      req,
+      filters: { testId: filters.testId, departmentId: adminDepartmentId, batchId: filters.batchId },
+      testSelect: { id: true },
+    });
+
+    if (!scope.ok || scope.testIds.length === 0) {
+      return res.status(403).json({ message: "Test is not accessible for this department" });
+    }
+  }
   const validation = await validateScopedFilters({
     db,
     type: req.body.type,
@@ -1029,6 +1148,7 @@ const getReportJobs = asyncHandler(async (req, res) => {
     const filters = { ...(job.filters || {}) };
     const downloadExpiresAt = filters.resultUrlExpiresAt || null;
     delete filters.generatedData;
+    delete filters.generatedDataRef;
 
     return {
       ...job,
@@ -1070,10 +1190,9 @@ const downloadReport = asyncHandler(async (req, res) => {
     });
   }
 
-  const reportRows = Array.isArray(job.filters?.generatedData) ? job.filters.generatedData : [];
-  const reportData = {
-    rows: reportRows,
-  };
+  const reportData = job.filters?.generatedDataRef
+    ? await readReportPayload(job.filters.generatedDataRef)
+    : job.filters?.generatedData || { rows: [] };
 
   const htmlContent = generateAdminReportHTML(
     {
@@ -1084,7 +1203,11 @@ const downloadReport = asyncHandler(async (req, res) => {
     reportData
   );
 
-  const pdfBuffer = await renderHtmlToPdfBuffer(htmlContent);
+  const pdfBuffer = await renderHtmlToPdfBuffer(htmlContent, {
+    displayHeaderFooter: true,
+    footerTemplate:
+      '<div style="width:100%;font-size:10px;color:#94a3b8;padding:0 10mm;text-align:right;">Page <span class="pageNumber"></span> of <span class="totalPages"></span></div>',
+  });
 
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `attachment; filename="report-${reportJobId}.pdf"`);

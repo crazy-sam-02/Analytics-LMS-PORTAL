@@ -17,7 +17,6 @@ const navItems = [
   { to: "/super-admin/batches", label: "Batches", icon: Layers3 },
   { to: "/super-admin/events", label: "Events", icon: CalendarDays },
   { to: "/super-admin/reports", label: "Reports", icon: FileBarChart2 },
-  { to: "/super-admin/audit-logs", label: "Audit Logs", icon: ScrollText },
   { to: "/super-admin/settings", label: "Settings", icon: Settings },
 ];
 

@@ -159,7 +159,7 @@ export default function TestEnvironmentPage() {
       }
 
       await exitFullscreenIfActive();
-      navigate(`/tests/ongoing`, {
+      navigate(`/submission/${attempt_id}`, {
         replace: true,
         state: {
           submission: submissionResponse?.submission || submissionResponse || null,

@@ -23,10 +23,7 @@ export const fetchCurrentAdmin = createAsyncThunk("adminAuth/me", async () => {
 });
 
 export const logoutAdmin = createAsyncThunk("adminAuth/logout", async () => {
-  const refresh = adminTokenStorage.getRefresh();
-  if (refresh) {
-    await adminApi.logout(refresh);
-  }
+  await adminApi.logout(adminTokenStorage.getRefresh());
   adminTokenStorage.clear();
   return null;
 });

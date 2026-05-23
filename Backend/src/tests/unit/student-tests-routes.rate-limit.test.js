@@ -12,6 +12,10 @@ const mockEnv = {
     examViolationMax: 12,
     examSubmitWindowMs: 15_000,
     examSubmitMax: 3,
+    examListWindowMs: 30_000,
+    examListMax: 20,
+    examSessionWindowMs: 30_000,
+    examSessionMax: 30,
   },
 };
 
@@ -87,6 +91,8 @@ describe("student test route rate limit wiring", () => {
 
     expect(scopes).toEqual([
       "student-exam-start",
+      "student-exam-list",
+      "student-exam-session",
       "student-exam-answer",
       "student-exam-heartbeat",
       "student-exam-violation",
@@ -103,6 +109,8 @@ describe("student test route rate limit wiring", () => {
       "student-exam-heartbeat",
       "student-exam-violation",
       "student-exam-submit",
+      "student-exam-list",
+      "student-exam-session",
     ]);
   });
 });

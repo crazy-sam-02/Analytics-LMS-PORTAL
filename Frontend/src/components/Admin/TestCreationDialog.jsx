@@ -34,9 +34,14 @@ import {
   toggleQuestionBankSelected,
 } from "@/features/Admin/questionBankSlice";
 import {
+  fetchSuperQuestionBankQuestions,
+  fetchSuperQuestionSubjects,
+  setSuperQuestionBankFilters,
+  toggleSuperQuestionBankSelected,
+} from "@/features/SuperAdmin/superQuestionBankSlice";
+import {
   PRESET_CONFIGS,
   PROCTORING_PRESETS,
-  deriveTestTypeFromPreset,
   getDefaultFormPatchFromAdminSettings,
 } from "@/lib/testConfig";
 
@@ -78,6 +83,12 @@ const QUESTION_TYPE_OPTIONS = [
   { value: "paragraph", label: "Paragraph" },
 ];
 const DIFFICULTY_OPTIONS = ["EASY", "MEDIUM", "HARD"];
+const STUDENT_YEAR_OPTIONS = [
+  { value: 1, label: "1 YEAR" },
+  { value: 2, label: "2 YEAR" },
+  { value: 3, label: "3 YEAR" },
+  { value: 4, label: "4 YEAR" },
+];
 const ADMIN_STUDENTS_PAGE_LIMIT = 100;
 
 const resolveDepartmentId = (departmentRef) => {
@@ -88,20 +99,22 @@ const resolveDepartmentId = (departmentRef) => {
   return departmentRef.id || departmentRef._id || departmentRef.departmentId || null;
 };
 
+const normalizeId = (value) => String(value ?? "");
+
 export default function TestCreationDialog({ context = "admin", onCreated }) {
   const dispatch = useDispatch();
   const isSuperAdminContext = context === "super_admin";
   const testCreation = useSelector((state) => state.testCreation);
-  const departments = useSelector((state) => state.adminPanel.departments.data);
-  const batches = useSelector((state) => state.adminPanel.batches.data);
-  const students = useSelector((state) => state.adminPanel.students.data);
-  const studentUser = useSelector((state) => state.auth.user);
-  const adminUser = useSelector((state) => state.adminAuth.admin);
-  const superAdminUser = useSelector((state) => state.superAdminAuth.superAdmin);
+  const departments = useSelector((state) => state.adminPanel?.departments?.data || []);
+  const batches = useSelector((state) => state.adminPanel?.batches?.data || []);
+  const students = useSelector((state) => state.adminPanel?.students?.data || []);
+  const studentUser = useSelector((state) => state.auth?.user || null);
+  const adminUser = useSelector((state) => state.adminAuth?.admin || null);
+  const superAdminUser = useSelector((state) => state.superAdminAuth?.superAdmin || null);
   const scopedUser = isSuperAdminContext ? superAdminUser : (adminUser || studentUser);
   const currentUserDeptId = resolveDepartmentId(scopedUser?.departmentId || scopedUser?.department);
   const colleges = useSelector((state) => state.superAdminPanel.colleges);
-  const qb = useSelector((state) => state.questionBank);
+  const qb = useSelector((state) => (isSuperAdminContext ? state.superQuestionBank : state.questionBank));
   const { form, open, step, stepTitles, errors, isSubmitting, questionRenderLimit, mode } = testCreation;
   const isEditMode = mode === "edit";
   const draftKey = isSuperAdminContext ? SUPER_ADMIN_DRAFT_KEY : ADMIN_DRAFT_KEY;
@@ -125,6 +138,11 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
   const [superBatches, setSuperBatches] = useState([]);
   const [superDepartmentsLoaded, setSuperDepartmentsLoaded] = useState(false);
   const [superBatchesLoaded, setSuperBatchesLoaded] = useState(false);
+
+  const qbSetFilters = isSuperAdminContext ? setSuperQuestionBankFilters : setQuestionBankFilters;
+  const qbToggleSelected = isSuperAdminContext ? toggleSuperQuestionBankSelected : toggleQuestionBankSelected;
+  const qbFetchSubjects = isSuperAdminContext ? fetchSuperQuestionSubjects : fetchQuestionSubjects;
+  const qbFetchQuestions = isSuperAdminContext ? fetchSuperQuestionBankQuestions : fetchQuestionBankQuestions;
 
   const resetBodyInteractionLock = () => {
     document.body.style.pointerEvents = "";
@@ -184,17 +202,18 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
     if (open) {
       if (isSuperAdminContext) {
         dispatch(fetchSuperColleges());
+        dispatch(qbFetchSubjects());
       } else {
         dispatch(fetchDepartments());
         dispatch(fetchBatches());
         dispatch(fetchStudents(`?page=1&limit=${ADMIN_STUDENTS_PAGE_LIMIT}`));
-        dispatch(fetchQuestionSubjects());
+        dispatch(qbFetchSubjects());
       }
       document.body.style.overflow = "hidden"; // Prevent background scroll
     } else {
       document.body.style.overflow = "unset";
     }
-  }, [dispatch, isSuperAdminContext, open]);
+  }, [dispatch, isSuperAdminContext, open, qbFetchSubjects]);
 
   useEffect(() => {
     if (!open || isSuperAdminContext) return;
@@ -338,7 +357,7 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
   }, [colleges, form.allColleges, form.collegeIds, isSuperAdminContext, open]);
 
   useEffect(() => {
-    if (isSuperAdminContext || !open || step !== 3 || form.questionInputMode !== "question_bank") {
+    if (!open || step !== 3 || form.questionInputMode !== "question_bank") {
       return;
     }
 
@@ -348,17 +367,17 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
     }
 
     if (!qb.filters.subjectId && qb.subjects[0]?.id) {
-      dispatch(setQuestionBankFilters({ subjectId: qb.subjects[0].id }));
+      dispatch(qbSetFilters({ subjectId: qb.subjects[0].id }));
     }
 
     dispatch(
-      fetchQuestionBankQuestions({
+      qbFetchQuestions({
         filters: { ...qb.filters, subjectId: selectedSubject },
         page: qbPage,
         limit: qb.pagination.limit,
       })
     );
-  }, [dispatch, form.questionInputMode, isSuperAdminContext, open, qb.filters, qb.pagination.limit, qb.subjects, qbPage, step]);
+  }, [dispatch, form.questionInputMode, open, qb.filters, qb.pagination.limit, qb.subjects, qbPage, qbFetchQuestions, qbSetFilters, step]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -381,23 +400,31 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
   }, [batches, form.departmentId]);
 
   const scopedSuperDepartments = useMemo(() => {
+    const selectedCollegeIds = form.allColleges
+      ? (Array.isArray(colleges) ? colleges.map((college) => normalizeId(college.id)) : [])
+      : (Array.isArray(form.collegeIds) ? form.collegeIds.map((collegeId) => normalizeId(collegeId)) : []);
+
     return superDepartments.filter((department) => {
-      if (!form.allColleges && Array.isArray(form.collegeIds) && form.collegeIds.length > 0 && !form.collegeIds.includes(department.collegeId)) {
+      if (!form.allColleges && selectedCollegeIds.length > 0 && !selectedCollegeIds.includes(normalizeId(department.collegeId))) {
         return false;
       }
       return true;
     });
-  }, [form.allColleges, form.collegeIds, superDepartments]);
+  }, [colleges, form.allColleges, form.collegeIds, superDepartments]);
+
+  const hasSuperAdminCollegeScope = form.allColleges || (Array.isArray(form.collegeIds) && form.collegeIds.length > 0);
 
   const visibleSuperBatches = useMemo(() => {
     if (form.assignmentMethod !== "batch_wise") return [];
-    // For batch-wise assignment, ONLY show batches from selected departments
-    // Do NOT show entire college batches
-    if (!Array.isArray(form.departmentIds) || form.departmentIds.length === 0) {
+    const scopedCollegeIds = form.allColleges
+      ? (Array.isArray(colleges) ? colleges.map((college) => normalizeId(college.id)) : [])
+      : (Array.isArray(form.collegeIds) ? form.collegeIds.map((collegeId) => normalizeId(collegeId)) : []);
+
+    if (scopedCollegeIds.length === 0) {
       return [];
     }
-    return superBatches.filter((batch) => form.departmentIds.includes(batch.departmentId));
-  }, [form.assignmentMethod, form.departmentIds, superBatches]);
+    return superBatches.filter((batch) => scopedCollegeIds.includes(normalizeId(batch.collegeId)));
+  }, [colleges, form.allColleges, form.assignmentMethod, form.collegeIds, superBatches]);
 
   useEffect(() => {
     if (!isSuperAdminContext || !open) {
@@ -405,8 +432,8 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
     }
 
     const scopedCollegeIds = form.allColleges
-      ? (Array.isArray(colleges) ? colleges.map((college) => college.id) : [])
-      : (Array.isArray(form.collegeIds) ? form.collegeIds : []);
+      ? (Array.isArray(colleges) ? colleges.map((college) => normalizeId(college.id)) : [])
+      : (Array.isArray(form.collegeIds) ? form.collegeIds.map((collegeId) => normalizeId(collegeId)) : []);
 
     const scopedCollegeSet = new Set(scopedCollegeIds);
     const currentDepartmentIds = Array.isArray(form.departmentIds) ? form.departmentIds : [];
@@ -442,15 +469,10 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
       return;
     }
 
-    // For batch-wise assignment, only allow batches from selected departments
+    // For batch-wise assignment, only allow batches from selected colleges
     const allowedBatchIds = new Set(
       superBatches
-        .filter((batch) => {
-          if (!Array.isArray(form.departmentIds) || form.departmentIds.length === 0) {
-            return false; // No batches allowed if no departments selected
-          }
-          return form.departmentIds.includes(batch.departmentId);
-        })
+        .filter((batch) => scopedCollegeSet.has(normalizeId(batch.collegeId)))
         .map((batch) => batch.id)
     );
 
@@ -492,20 +514,20 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
     }, {});
   }, [scopedSuperDepartments]);
 
-  const groupedBatchesByCollege = useMemo(() => {
-    return visibleSuperBatches.reduce((acc, batch) => {
-      const key = batch.collegeId || "unknown";
-      if (!acc[key]) {
-        acc[key] = {
-          collegeId: key,
-          collegeName: batch.college?.name || "Unknown college",
-          items: [],
-        };
-      }
-      acc[key].items.push(batch);
-      return acc;
-    }, {});
-  }, [visibleSuperBatches]);
+  const selectedYears = useMemo(
+    () => [...new Set((Array.isArray(form.years) ? form.years : []).map(Number).filter((year) => year >= 1 && year <= 4))],
+    [form.years]
+  );
+
+  const selectedYearSet = useMemo(() => new Set(selectedYears.map(String)), [selectedYears]);
+
+  const toggleStudentYear = (year) => {
+    const existing = selectedYears;
+    const next = existing.includes(year)
+      ? existing.filter((item) => item !== year)
+      : [...existing, year].sort((a, b) => a - b);
+    dispatch(updateTestCreationField({ key: "years", value: next }));
+  };
 
   const normalizedQuestions = useMemo(() => {
     return form.questions.map((question, idx) => {
@@ -582,18 +604,31 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
   const assignedStudentsCount = useMemo(() => {
     const pool = isSuperAdminContext ? students : visibleStudents;
     if (!Array.isArray(pool) || pool.length === 0) return 0;
+    const yearScopedPool = selectedYearSet.size > 0
+      ? pool.filter((student) => selectedYearSet.has(String(student.year || "")))
+      : pool;
     if (form.assignmentMethod === "batch_wise") {
-      return pool.filter((student) => form.batchIds.includes(student.batchId)).length;
+      return yearScopedPool.filter((student) => {
+        const studentBatchIds = [...new Set([
+          ...(Array.isArray(student.batchIds) ? student.batchIds : []),
+          student.batchId,
+        ].filter(Boolean).map(String))];
+        return studentBatchIds.some((batchId) => form.batchIds.includes(batchId));
+      }).length;
+    }
+    if (isSuperAdminContext && Array.isArray(form.departmentIds) && form.departmentIds.length > 0) {
+      return yearScopedPool.filter((student) => form.departmentIds.includes(student.departmentId)).length;
     }
     if (form.departmentId) {
-      return pool.filter((student) => student.departmentId === form.departmentId).length;
+      return yearScopedPool.filter((student) => student.departmentId === form.departmentId).length;
     }
-    return pool.length;
-  }, [students, visibleStudents, isSuperAdminContext, form.assignmentMethod, form.batchIds, form.departmentId]);
+    return yearScopedPool.length;
+  }, [students, visibleStudents, isSuperAdminContext, selectedYearSet, form.assignmentMethod, form.batchIds, form.departmentId, form.departmentIds]);
 
   const publishChecklist = useMemo(() => {
     const scheduleValid = Boolean(form.startsAt && form.endsAt && new Date(form.endsAt).getTime() > new Date(form.startsAt).getTime());
-    const studentsAssigned = form.assignmentMethod === "batch_wise" ? form.batchIds.length > 0 : true;
+    const yearsSelected = selectedYears.length > 0;
+    const studentsAssigned = yearsSelected && (form.assignmentMethod === "batch_wise" ? form.batchIds.length > 0 : true);
     const noErrors = reviewSummary.invalidIndexes.length === 0;
     const proctoringSet = Number(form.restrictions.violationThreshold || 0) >= 1;
     return [
@@ -604,7 +639,7 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
       { label: "No question errors", done: noErrors },
       { label: "Proctoring set", done: proctoringSet },
     ];
-  }, [form, reviewSummary.invalidIndexes.length, reviewSummary.totalQuestions]);
+  }, [form, reviewSummary.invalidIndexes.length, reviewSummary.totalQuestions, selectedYears.length]);
 
   const getFirstErrorMessage = (nextErrors) => Object.values(nextErrors || {}).find(Boolean) || "Please complete required fields";
 
@@ -1143,6 +1178,35 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                   </header>
 
                   <div className="space-y-6">
+                    <div className="space-y-3 rounded-xl border border-border bg-background/60 px-4 py-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <p className="text-sm font-semibold text-text-primary">Student Year</p>
+                          <p className="text-xs text-text-secondary">Select one or more years before choosing department or batch assignment.</p>
+                        </div>
+                        <span className="text-xs font-medium text-text-secondary">{selectedYears.length} selected</span>
+                      </div>
+                      <div className="grid gap-2 sm:grid-cols-4">
+                        {STUDENT_YEAR_OPTIONS.map((year) => (
+                          <label
+                            key={year.value}
+                            className={`flex cursor-pointer items-center justify-between rounded-lg border px-3 py-2 text-sm transition-all ${
+                              selectedYearSet.has(String(year.value))
+                                ? "border-primary bg-primary/10 text-text-primary"
+                                : "border-border bg-card text-text-secondary hover:border-border"
+                            }`}
+                          >
+                            <span>{year.label}</span>
+                            <Checkbox
+                              checked={selectedYearSet.has(String(year.value))}
+                              onCheckedChange={() => toggleStudentYear(year.value)}
+                            />
+                          </label>
+                        ))}
+                      </div>
+                      {errors.years ? <p className="text-xs text-danger">{errors.years}</p> : null}
+                    </div>
+
                     {isSuperAdminContext ? (
                       <div className="space-y-3 rounded-xl border border-primary/30 bg-primary/10 px-4 py-3">
                         <p className="text-sm font-semibold text-primary-dark">Super Admin Targeting</p>
@@ -1211,7 +1275,7 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                           </div>
                         ) : null}
 
-                        {form.assignmentMethod === "department_wise" ? (
+                        {form.assignmentMethod === "department_wise" && hasSuperAdminCollegeScope ? (
                           <div className="space-y-2">
                             <label className="text-sm text-primary-dark">Departments (checkbox)</label>
                             <div className="max-h-60 space-y-3 overflow-y-auto rounded-xl border border-primary/30 bg-card p-3">
@@ -1243,15 +1307,15 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                         {form.assignmentMethod === "batch_wise" ? (
                           <div className="space-y-2">
                             <label className="text-sm text-primary-dark">Batches (checkbox)</label>
-                            {Array.isArray(form.departmentIds) && form.departmentIds.length === 0 ? (
+                            {!hasSuperAdminCollegeScope ? (
                               <div className="rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
-                                Select at least one department above to choose batches.
+                                Select at least one college above to view its batches.
                               </div>
                             ) : (
                               <div className="max-h-64 space-y-3 overflow-y-auto rounded-xl border border-primary/30 bg-card p-3">
                                 {visibleSuperBatches.map((batch) => (
                                   <label key={batch.id} className="flex items-center justify-between rounded-lg border border-border px-3 py-2 text-sm text-text-secondary">
-                                    <span>{batch.name} <span className="text-xs text-text-secondary">({batch.department?.name || "-"} / Students: {batch?._count?.students || 0})</span></span>
+                                    <span>{batch.name} <span className="text-xs text-text-secondary">(Students: {batch?._count?.students || 0})</span></span>
                                     <Checkbox
                                       checked={Array.isArray(form.batchIds) && form.batchIds.includes(batch.id)}
                                       onCheckedChange={(checked) => {
@@ -1264,7 +1328,7 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                                     />
                                   </label>
                                 ))}
-                                {visibleSuperBatches.length === 0 ? <p className="px-1 py-2 text-xs text-text-secondary">No batches found for selected departments.</p> : null}
+                                {visibleSuperBatches.length === 0 ? <p className="px-1 py-2 text-xs text-text-secondary">No batches found for selected colleges.</p> : null}
                               </div>
                             )}
                             {errors.batchIds ? <p className="text-xs text-danger">{errors.batchIds}</p> : null}
@@ -1371,7 +1435,7 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                         <TabsList className="h-auto w-full justify-start gap-2 rounded-xl bg-muted p-1">
                           <TabsTrigger className="h-10 flex-none rounded-lg px-4 data-active:bg-card data-active:text-text-primary data-active:shadow-sm" value="manual">Manual Entry</TabsTrigger>
                           <TabsTrigger className="h-10 flex-none rounded-lg px-4 data-active:bg-card data-active:text-text-primary data-active:shadow-sm" value="bulk_json">Bulk JSON</TabsTrigger>
-                          {!isSuperAdminContext ? <TabsTrigger className="h-10 flex-none rounded-lg px-4 data-active:bg-card data-active:text-text-primary data-active:shadow-sm" value="question_bank">Question Bank</TabsTrigger> : null}
+                          <TabsTrigger className="h-10 flex-none rounded-lg px-4 data-active:bg-card data-active:text-text-primary data-active:shadow-sm" value="question_bank">Question Bank</TabsTrigger>
                         </TabsList>
 
                         <TabsContent value="manual" className="mt-6 space-y-4">
@@ -1545,7 +1609,7 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                               value={qb.filters.subjectId || ""}
                               onValueChange={(value) => {
                                 setQbPage(1);
-                                dispatch(setQuestionBankFilters({ subjectId: value }));
+                                dispatch(qbSetFilters({ subjectId: value }));
                               }}
                             >
                               <SelectTrigger><SelectValue placeholder="Select subject" /></SelectTrigger>
@@ -1559,12 +1623,12 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                             <Input
                               placeholder="Search question"
                               value={qb.filters.search || ""}
-                              onChange={(e) => dispatch(setQuestionBankFilters({ search: e.target.value }))}
+                              onChange={(e) => dispatch(qbSetFilters({ search: e.target.value }))}
                             />
 
                             <Select
                               value={qb.filters.difficulty || "all"}
-                              onValueChange={(value) => dispatch(setQuestionBankFilters({ difficulty: value }))}
+                              onValueChange={(value) => dispatch(qbSetFilters({ difficulty: value }))}
                             >
                               <SelectTrigger><SelectValue placeholder="Difficulty" /></SelectTrigger>
                               <SelectContent>
@@ -1580,7 +1644,7 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                               onClick={() => {
                                 const subjectId = qb.filters.subjectId || qb.subjects[0]?.id || "";
                                 if (!subjectId) return;
-                                dispatch(fetchQuestionBankQuestions({ filters: { ...qb.filters, subjectId }, page: 1, limit: qb.pagination.limit }));
+                                dispatch(qbFetchQuestions({ filters: { ...qb.filters, subjectId }, page: 1, limit: qb.pagination.limit }));
                               }}
                             >
                               Apply
@@ -1591,7 +1655,7 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                             {qb.loading ? <p className="text-sm text-text-secondary">Loading question bank...</p> : null}
                             {qb.questions.map((item) => (
                               <label key={item.id} className="flex items-start gap-3 rounded-lg border border-border p-3 hover:bg-background">
-                                <Checkbox checked={qb.selected.includes(item.id)} onCheckedChange={() => dispatch(toggleQuestionBankSelected(item.id))} />
+                                <Checkbox checked={qb.selected.includes(item.id)} onCheckedChange={() => dispatch(qbToggleSelected(item.id))} />
                                 <div className="min-w-0">
                                   <p className="text-sm font-medium text-text-primary">{item.prompt}</p>
                                   <p className="mt-1 text-xs text-text-secondary">
@@ -1613,7 +1677,7 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                                   setQbPage(next);
                                   const subjectId = qb.filters.subjectId || qb.subjects[0]?.id || "";
                                   if (!subjectId) return;
-                                  dispatch(fetchQuestionBankQuestions({ filters: { ...qb.filters, subjectId }, page: next, limit: qb.pagination.limit }));
+                                  dispatch(qbFetchQuestions({ filters: { ...qb.filters, subjectId }, page: next, limit: qb.pagination.limit }));
                                 }}
                               >
                                 Prev
@@ -1627,7 +1691,7 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                                   setQbPage(next);
                                   const subjectId = qb.filters.subjectId || qb.subjects[0]?.id || "";
                                   if (!subjectId) return;
-                                  dispatch(fetchQuestionBankQuestions({ filters: { ...qb.filters, subjectId }, page: next, limit: qb.pagination.limit }));
+                                  dispatch(qbFetchQuestions({ filters: { ...qb.filters, subjectId }, page: next, limit: qb.pagination.limit }));
                                 }}
                               >
                                 Next

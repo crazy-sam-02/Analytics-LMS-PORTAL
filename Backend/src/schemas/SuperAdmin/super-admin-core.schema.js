@@ -25,9 +25,11 @@ const paginationQuerySchema = z.object({
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(20),
     search: z.string().optional(),
+    year: z.coerce.number().int().min(1).max(4).optional(),
     collegeId: idSchema.optional(),
     departmentId: idSchema.optional(),
     batchId: idSchema.optional(),
+    studentId: idSchema.optional(),
     status: z.string().optional(),
   }).optional().default({}),
 });
@@ -117,7 +119,7 @@ const updateAdminSchema = z.object({
 
 const resetAdminPasswordSchema = z.object({
   body: z.object({
-    password: z.string().min(8),
+    password: z.string().min(12).optional(),
   }),
   params: z.object({ adminId: idSchema }),
   query: z.object({}).optional().default({}),
@@ -145,6 +147,7 @@ const createStudentGlobalSchema = z.object({
     fullName: z.string().trim().min(2),
     email: z.string().trim().email(),
     enrollNumber: z.string().trim().min(3),
+    year: z.coerce.number().int().min(1).max(4),
     collegeId: idSchema,
     departmentId: idSchema.optional(),
     department: z.string().trim().min(2).optional(),
@@ -192,11 +195,24 @@ const createBatchGlobalSchema = z.object({
     name: z.string().trim().min(2),
     year: z.number().int().min(2000).max(2100),
     collegeId: idSchema,
-    departmentId: idSchema,
+    departmentId: idSchema.optional(),
+    departmentIds: z.array(idSchema).optional().default([]),
+    isGlobal: z.boolean().optional().default(false),
     studentIds: z.array(idSchema).optional().default([]),
   }),
   params: z.object({}).optional().default({}),
   query: z.object({}).optional().default({}),
+}).superRefine((input, ctx) => {
+  if (input.body.isGlobal) {
+    if (!Array.isArray(input.body.departmentIds) || input.body.departmentIds.length < 2) {
+      ctx.addIssue({ code: "custom", message: "Select at least two departments for a global batch" });
+    }
+    return;
+  }
+
+  if (!input.body.departmentId) {
+    ctx.addIssue({ code: "custom", message: "departmentId is required for a department batch" });
+  }
 });
 
 const updateBatchGlobalSchema = z.object({
@@ -204,6 +220,8 @@ const updateBatchGlobalSchema = z.object({
     name: z.string().trim().min(2).optional(),
     year: z.number().int().min(2000).max(2100).optional(),
     departmentId: idSchema.optional(),
+    departmentIds: z.array(idSchema).optional(),
+    isGlobal: z.boolean().optional(),
     isArchived: z.boolean().optional(),
   }),
   params: z.object({
@@ -215,6 +233,16 @@ const updateBatchGlobalSchema = z.object({
 const deleteBatchGlobalSchema = z.object({
   body: z.object({
     confirmationText: z.string().trim().min(1),
+  }),
+  params: z.object({
+    batchId: idSchema,
+  }),
+  query: z.object({}).optional().default({}),
+});
+
+const assignStudentsToGlobalBatchSchema = z.object({
+  body: z.object({
+    studentIds: z.array(idSchema).min(1),
   }),
   params: z.object({
     batchId: idSchema,
@@ -271,6 +299,7 @@ const createGlobalTestSchema = z.object({
     allColleges: z.boolean().default(false),
     collegeIds: z.array(idSchema).optional().default([]),
     assignmentMethod: z.enum(["department_wise", "batch_wise"]).default("department_wise"),
+    years: z.array(z.coerce.number().int().min(1).max(4)).min(1).max(4).default([1, 2, 3, 4]),
     departmentIds: z.array(idSchema).optional().default([]),
     batchIds: z.array(idSchema).optional().default([]),
     testType: z.enum([TEST_TYPES.STRICT, TEST_TYPES.STANDARD, TEST_TYPES.OPEN]).default(DEFAULT_TEST_CONFIGURATION.testType),
@@ -320,6 +349,7 @@ const updateGlobalTestSchema = z.object({
     allColleges: z.boolean().default(false),
     collegeIds: z.array(idSchema).optional().default([]),
     assignmentMethod: z.enum(["department_wise", "batch_wise"]).default("batch_wise"),
+    years: z.array(z.coerce.number().int().min(1).max(4)).min(1).max(4).default([1, 2, 3, 4]),
     departmentIds: z.array(idSchema).optional().default([]),
     batchIds: z.array(idSchema).optional().default([]),
     testType: z.enum([TEST_TYPES.STRICT, TEST_TYPES.STANDARD, TEST_TYPES.OPEN]).default(DEFAULT_TEST_CONFIGURATION.testType),
@@ -363,6 +393,7 @@ const cloneTestSchema = z.object({
   body: z.object({
     destinationCollegeId: idSchema,
     assignmentMethod: z.enum(["department_wise", "batch_wise"]).default("batch_wise"),
+    years: z.array(z.coerce.number().int().min(1).max(4)).min(1).max(4).optional(),
     departmentIds: z.array(idSchema).optional().default([]),
     batchIds: z.array(idSchema).optional().default([]),
   }),
@@ -509,6 +540,7 @@ module.exports = {
   createBatchGlobalSchema,
   updateBatchGlobalSchema,
   deleteBatchGlobalSchema,
+  assignStudentsToGlobalBatchSchema,
   toggleStudentStatusSchema,
   createGlobalTestSchema,
   updateGlobalTestSchema,

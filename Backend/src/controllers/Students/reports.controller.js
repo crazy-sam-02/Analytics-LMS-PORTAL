@@ -1,46 +1,72 @@
 const models = require("../../models");
 const { asyncHandler, ApiError } = require("../../utils/http");
+const {
+  completeSubmission,
+  findAnswerForQuestion,
+  getAnswerBoolean,
+  getAnswerSelectedOption,
+  getAnswerSelectedOptions,
+  getAnswerText,
+  isQuestionCorrect,
+} = require("../../services/test.service");
+const {
+  canRevealCorrectAnswers,
+  isTestCompleted,
+  maskCorrectAnswer,
+  resolveReviewMode,
+} = require("../../services/student-review-policy.service");
+const { clampPercent, getSubmissionScorePercent, getTestTotalMarks } = require("../../utils/score");
 
-const normalizeText = (value) => String(value || "").trim().toLowerCase();
+const toPercent = (value) => clampPercent(value);
 
-const parseOptions = (value) => {
-  if (Array.isArray(value)) {
-    return value.map((item) => String(item));
-  }
-
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value);
-      if (Array.isArray(parsed)) {
-        return parsed.map((item) => String(item));
-      }
-    } catch {
-      // Ignore parse errors and fallback to comma split.
-    }
-
-    return value
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
-  }
-
-  return [];
-};
-
-const compareMultiSelect = (actual, expected) => {
-  const actualSet = new Set(parseOptions(actual).map((item) => normalizeText(item)));
-  const expectedSet = new Set(parseOptions(expected).map((item) => normalizeText(item)));
-
-  if (actualSet.size !== expectedSet.size) return false;
-  return [...actualSet].every((item) => expectedSet.has(item));
-};
+const getSubmissionTotalMarks = (submission) => getTestTotalMarks(submission?.test);
 
 const formatAnswerValue = (value) => {
-  if (Array.isArray(value)) return value.join(", ");
+  if (Array.isArray(value)) return value.length ? value.join(", ") : "Not answered";
   if (value == null) return "Not answered";
   if (typeof value === "boolean") return value ? "True" : "False";
   const text = String(value).trim();
   return text || "Not answered";
+};
+
+const resolveStudentAnswerValue = (answer, type) => {
+  if (!answer) return null;
+  if (type === "MCQ_MULTI" || type === "MULTI_SELECT") return getAnswerSelectedOptions(answer);
+  if (type === "TRUE_FALSE" || type === "BOOLEAN") return getAnswerBoolean(answer);
+  return getAnswerSelectedOption(answer) ?? getAnswerText(answer) ?? getAnswerBoolean(answer);
+};
+
+const hasTestEnded = (test = {}) => {
+  const endsAt = test?.endsAt || test?.endDate || test?.end_date || test?.ends_at;
+  if (!endsAt) return false;
+  const endsAtMs = new Date(endsAt).getTime();
+  return Number.isFinite(endsAtMs) && endsAtMs <= Date.now();
+};
+
+const finalizeClosedStudentSubmissions = async ({ db, userId }) => {
+  const staleSubmissions = await db.submission.findMany({
+    where: {
+      userId,
+      status: "IN_PROGRESS",
+    },
+    include: {
+      test: true,
+    },
+  });
+
+  const closable = staleSubmissions.filter((submission) =>
+    isTestCompleted(submission.test) || hasTestEnded(submission.test)
+  );
+
+  if (closable.length > 0) {
+    await Promise.all(
+      closable.map((submission) =>
+        completeSubmission({ submissionId: submission.id, autoSubmitted: true })
+      )
+    );
+  }
+
+  return closable.length;
 };
 
 const getReport = asyncHandler(async (req, res) => {
@@ -48,6 +74,8 @@ const getReport = asyncHandler(async (req, res) => {
   const db = m.dbClient;
   const view = String(req.query.view || "overall").toLowerCase();
   const testId = String(req.query.test_id || "").trim();
+
+  await finalizeClosedStudentSubmissions({ db, userId: req.user.id });
 
   const baseWhere = {
     where: {
@@ -68,18 +96,30 @@ const getReport = asyncHandler(async (req, res) => {
     },
   });
 
-  const total = submissions.length;
-  const avgAccuracy = total > 0 ? submissions.reduce((acc, item) => acc + Number(item.accuracy || 0), 0) / total : 0;
-  const bestScore = total > 0 ? Math.max(...submissions.map((item) => Number(item.score || 0))) : 0;
+  const submissionsWithMetrics = submissions.map((item) => ({
+    ...item,
+    scorePercent: getSubmissionScorePercent(item),
+    totalMarks: getSubmissionTotalMarks(item),
+    obtainedMarks: Number(item.score || 0),
+  }));
 
-  const lineChart = submissions
+  const total = submissionsWithMetrics.length;
+  const avgScorePercent = total > 0 ? submissionsWithMetrics.reduce((acc, item) => acc + Number(item.scorePercent || 0), 0) / total : 0;
+  const bestAttempt = submissionsWithMetrics.reduce((best, current) => {
+    if (!best) return current;
+    return Number(current.scorePercent || 0) > Number(best.scorePercent || 0) ? current : best;
+  }, null);
+
+  const lineChart = submissionsWithMetrics
     .slice()
     .sort((a, b) => new Date(a.submittedAt).getTime() - new Date(b.submittedAt).getTime())
     .map((item) => ({
       date: new Date(item.submittedAt).toLocaleDateString(),
-      value: Number(item.accuracy || 0),
-      score: Number(item.score || 0),
-      accuracy: Number(item.accuracy || 0),
+      value: Number(item.scorePercent || 0),
+      score: Number(item.scorePercent || 0),
+      accuracy: Number(item.scorePercent || 0),
+      obtainedMarks: Number(item.obtainedMarks || 0),
+      totalMarks: Number(item.totalMarks || 0),
       label: item.test?.title || "Test",
     }));
 
@@ -121,15 +161,7 @@ const getReport = asyncHandler(async (req, res) => {
     const topicName = question.topic || answer.submission?.test?.subject || "General";
     const key = String(topicName);
 
-    const type = String(question.type || "").toUpperCase();
-    const isCorrect =
-      (type === "MCQ" || type === "MCQ_SINGLE" || type === "SINGLE_SELECT")
-        ? normalizeText(answer.selectedOption) === normalizeText(question.correctOption)
-        : (type === "MCQ_MULTI" || type === "MULTI_SELECT")
-          ? compareMultiSelect(answer.selectedOptions, question.correctOptions)
-          : (type === "TRUE_FALSE" || type === "BOOLEAN")
-            ? answer.answerBoolean === question.correctBoolean
-            : normalizeText(answer.answerText) === normalizeText(question.correctText);
+    const isCorrect = isQuestionCorrect(question, answer);
 
     const current = topicAgg.get(key) || { correct: 0, total: 0, topic: key };
     current.total += 1;
@@ -149,25 +181,35 @@ const getReport = asyncHandler(async (req, res) => {
   const payload = {
     overall: {
       totalTests: total,
-      accuracy: Number(avgAccuracy.toFixed(2)),
+      accuracy: toPercent(avgScorePercent),
       completion: 100,
       summary: {
         tests_taken: total,
-        avg_score: Number(avgAccuracy.toFixed(2)),
-        best_score: Number(bestScore.toFixed(2)),
+        avg_score: toPercent(avgScorePercent),
+        best_score: toPercent(bestAttempt?.scorePercent || 0),
+        best_score_percent: toPercent(bestAttempt?.scorePercent || 0),
+        best_score_obtained_marks: Number(bestAttempt?.obtainedMarks || 0),
+        best_score_total_marks: Number(bestAttempt?.totalMarks || 0),
         missed_tests: 0,
       },
       line_chart: lineChart,
       topic_performance: topicPerformance,
     },
-    testWise: submissions.map((item) => ({
+    testWise: submissionsWithMetrics.map((item) => ({
       submissionId: item.id,
       testId: item.testId,
       testName: item.test?.title || "Test",
       subject: item.test?.subject || "",
       endDate: item.test?.endsAt || null,
-      score: item.score,
-      accuracy: item.accuracy,
+      testStatus: item.test?.status || null,
+      test_status: item.test?.status || null,
+      isTestCompleted: isTestCompleted(item.test),
+      is_test_completed: isTestCompleted(item.test),
+      score: Number(item.scorePercent || 0),
+      scorePercent: Number(item.scorePercent || 0),
+      accuracy: Number(item.scorePercent || 0),
+      obtainedMarks: Number(item.obtainedMarks || 0),
+      totalMarks: Number(item.totalMarks || 0),
       timeSpentSeconds: item.timeSpentSeconds,
       submittedAt: item.submittedAt,
     })),
@@ -226,30 +268,21 @@ const getReport = asyncHandler(async (req, res) => {
     const higherCount = rankedScores.filter((item) => Number(item.score || 0) > Number(target.score || 0)).length;
     const percentile = Number((((totalRanked - higherCount) / totalRanked) * 100).toFixed(2));
 
-    const answerByQuestionId = new Map((target.answers || []).map((item) => [item.questionId, item]));
+    const revealQuestionDetails = canRevealCorrectAnswers(target.test);
+    const testCompleted = isTestCompleted(target.test);
+    const reviewMode = revealQuestionDetails ? "show_all" : resolveReviewMode(target.test);
     const question_breakdown = (target.test?.questions || []).map((question) => {
-      const answer = answerByQuestionId.get(question.id);
+      const answer = findAnswerForQuestion(target.answers, question);
       const type = String(question.type || "").toUpperCase();
-      const isCorrect = answer
-        ? (type === "MCQ" || type === "MCQ_SINGLE" || type === "SINGLE_SELECT")
-          ? normalizeText(answer.selectedOption) === normalizeText(question.correctOption)
-          : (type === "MCQ_MULTI" || type === "MULTI_SELECT")
-            ? compareMultiSelect(answer.selectedOptions, question.correctOptions)
-            : (type === "TRUE_FALSE" || type === "BOOLEAN")
-              ? answer.answerBoolean === question.correctBoolean
-              : normalizeText(answer.answerText) === normalizeText(question.correctText)
-        : false;
+      const isCorrect = isQuestionCorrect(question, answer);
 
-      const studentAnswer = formatAnswerValue(
-        (type === "MCQ_MULTI" || type === "MULTI_SELECT")
-          ? answer?.selectedOptions
-          : answer?.selectedOption ?? answer?.answerText ?? answer?.answerBoolean
-      );
-      const correctAnswer = formatAnswerValue(
+      const studentAnswer = formatAnswerValue(resolveStudentAnswerValue(answer, type));
+      const rawCorrectAnswer = formatAnswerValue(
         (type === "MCQ_MULTI" || type === "MULTI_SELECT")
           ? question.correctOptions
           : question.correctOption ?? question.correctText ?? question.correctBoolean
       );
+      const correctAnswer = maskCorrectAnswer(rawCorrectAnswer, target.test);
 
       return {
         question_id: question.id,
@@ -257,21 +290,23 @@ const getReport = asyncHandler(async (req, res) => {
         type: question.type,
         student_answer: studentAnswer,
         correct_answer: correctAnswer,
-        marks: isCorrect ? Number(question.marks || 0) : 0,
+        marks: revealQuestionDetails ? (isCorrect ? Number(question.marks || 0) : 0) : null,
         total_marks: Number(question.marks || 0),
-        is_correct: Boolean(isCorrect),
+        is_correct: revealQuestionDetails ? Boolean(isCorrect) : null,
         topic: question.topic || target.test?.subject || "General",
       };
     });
 
-    const totalMarks = (target.test?.questions || []).reduce((acc, question) => acc + Number(question.marks || 0), 0);
+    const totalMarks = getTestTotalMarks(target.test);
+    const obtainedMarks = Number(target.score || 0);
+    const percentage = getSubmissionScorePercent(target);
 
     payload.by_test = {
       attempt_id: target.id,
       submission_id: target.id,
-      total_marks: Number(target.test?.totalMarks || totalMarks),
-      obtained_marks: Number(target.score || 0),
-      percentage: Number(target.accuracy || 0),
+      total_marks: Number(totalMarks || 0),
+      obtained_marks: obtainedMarks,
+      percentage: toPercent(percentage),
       percentile,
       time_analytics: {
         total_time: Number(target.timeSpentSeconds || 0),
@@ -280,11 +315,20 @@ const getReport = asyncHandler(async (req, res) => {
             ? Number((Number(target.timeSpentSeconds || 0) / (target.test?.questions || []).length).toFixed(2))
             : 0,
       },
-      review_mode: "show_after_deadline",
+      review_mode: reviewMode,
+      test_status: target.test?.status || null,
+      testStatus: target.test?.status || null,
+      is_test_completed: testCompleted,
+      isTestCompleted: testCompleted,
+      can_review_answers: revealQuestionDetails,
+      canReviewAnswers: revealQuestionDetails,
       test: {
         id: target.test?.id,
         title: target.test?.title,
         subject: target.test?.subject,
+        status: target.test?.status,
+        test_status: target.test?.status,
+        is_completed: testCompleted,
         end_date: target.test?.endsAt,
       },
       questions: question_breakdown,

@@ -36,7 +36,7 @@ const loadXlsxBrowserLib = () =>
 
 const IMPORT_SAMPLE = [
   "fullName,email,employeeId,collegeCode,password,department",
-  "John Doe,john.doe@example.com,EMP1001,NVC,Admin@12345,Computer Science",
+  "John Doe,john.doe@example.com,EMP1001,NVC,Use-a-unique-temporary-password,Computer Science",
 ].join("\n");
 
 const normalizeColumnKey = (value) => String(value || "").toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -150,7 +150,12 @@ export default function AdminsPage() {
   };
 
   const resetPassword = async (adminId) => {
-    await superAdminApi.resetAdminPassword(adminId, { password: "Admin@12345" });
+    const result = await superAdminApi.resetAdminPassword(adminId, {});
+    if (result?.temporaryPassword) {
+      toast.success(`Temporary password: ${result.temporaryPassword}`);
+    } else {
+      toast.success("Admin password reset.");
+    }
     loadAdmins();
   };
 
@@ -172,7 +177,7 @@ export default function AdminsPage() {
       type: "reset",
       admin,
       title: "Reset Admin Password",
-      description: `Reset password for ${admin.fullName} to the default temporary password Admin@12345?`,
+      description: `Generate a unique temporary password for ${admin.fullName}? Share it securely and ask them to change it after login.`,
       confirmLabel: "Reset Password",
       confirmVariant: "outline",
     });

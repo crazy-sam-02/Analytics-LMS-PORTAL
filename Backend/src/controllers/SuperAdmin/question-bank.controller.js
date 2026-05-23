@@ -1,5 +1,6 @@
 const models = require("../../models");
 const { ApiError, asyncHandler } = require("../../utils/http");
+const { getPagination } = require("../../utils/pagination");
 
 const mapQuestionType = (type) => {
   const map = {
@@ -81,8 +82,7 @@ const getQuestionBank = asyncHandler(async (req, res) => {
   const m = await models.init();
   const db = m.dbClient;
   const superAdminId = req.superAdmin.id;
-  const page = Number(req.query.page || 1);
-  const limit = Number(req.query.limit || 20);
+  const { page, limit, skip } = getPagination(req.query);
 
   const fromDate = req.query.fromDate ? new Date(req.query.fromDate) : null;
   const toDate = req.query.toDate ? new Date(req.query.toDate) : null;
@@ -125,7 +125,7 @@ const getQuestionBank = asyncHandler(async (req, res) => {
         subjectRef: true,
       },
       orderBy: { createdAt: "desc" },
-      skip: (page - 1) * limit,
+      skip,
       take: limit,
     }),
   ]);

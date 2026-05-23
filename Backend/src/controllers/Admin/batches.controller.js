@@ -21,26 +21,47 @@ const parseCsv = (csvText) => {
   });
 };
 
+const getAdminDepartmentId = (req) => {
+  const departmentId = req.admin?.departmentId || null;
+  if (!departmentId) {
+    throw new ApiError(403, "Admin is not linked to a department", null, "ADMIN_DEPARTMENT_REQUIRED");
+  }
+  return departmentId;
+};
+
+const assertAdminDepartmentScope = (req, departmentId, message = "Cross-department access denied") => {
+  const adminDepartmentId = getAdminDepartmentId(req);
+  if (departmentId && String(departmentId) !== String(adminDepartmentId)) {
+    throw new ApiError(403, message, null, "CROSS_DEPARTMENT_ACCESS_DENIED");
+  }
+  return adminDepartmentId;
+};
+
 const getStudentBatchIds = (student) => {
   const existing = Array.isArray(student?.batchIds) ? student.batchIds : [];
   const legacy = student?.batchId ? [student.batchId] : [];
   const merged = [...existing, ...legacy].filter(Boolean).map((id) => String(id));
   return [...new Set(merged)];
 };
+const getStudentNumber = (student = {}) => student.enrollNumber || student.enrollmentNumber || student.studentId;
 
 const addBatchIdToStudent = (student, batchId) => {
   const merged = [...getStudentBatchIds(student), String(batchId)].filter(Boolean);
   return [...new Set(merged)];
 };
 
-const assignBatchToStudents = async ({ db, collegeId, studentIds, batchId, departmentId }) => {
+const assignBatchToStudents = async ({ db, collegeId, studentIds, batchId, departmentId, isGlobalBatch = false }) => {
   const uniqueIds = [...new Set((studentIds || []).map((id) => String(id)).filter(Boolean))];
   if (uniqueIds.length === 0) {
     return { updated: 0 };
   }
 
   const students = await db.student.findMany({
-    where: { id: { in: uniqueIds }, collegeId },
+    where: {
+      id: { in: uniqueIds },
+      collegeId,
+      ...(isGlobalBatch ? {} : { departmentId }),
+    },
     select: { id: true, batchIds: true, batchId: true },
   });
 
@@ -50,7 +71,7 @@ const assignBatchToStudents = async ({ db, collegeId, studentIds, batchId, depar
       data: {
         batchIds: addBatchIdToStudent(student, batchId),
         batchId,
-        departmentId,
+        ...(isGlobalBatch ? {} : { departmentId }),
       },
     })
   );
@@ -125,7 +146,12 @@ const getBatchDetail = asyncHandler(async (req, res) => {
     throw new ApiError(404, "Batch not found");
   }
 
-  res.status(200).json(batch);
+  res.status(200).json({
+    ...batch,
+    students: Array.isArray(batch.students)
+      ? batch.students.map((student) => ({ ...student, studentId: getStudentNumber(student) }))
+      : [],
+  });
 });
 
 const createBatch = asyncHandler(async (req, res) => {
@@ -133,6 +159,7 @@ const createBatch = asyncHandler(async (req, res) => {
   const db = m.dbClient;
   const collegeId = req.collegeId;
   const { name, year, departmentId, studentIds } = req.body;
+  assertAdminDepartmentScope(req, departmentId, "Admins can create batches only in their own department");
 
   const duplicate = await db.batch.findFirst({
     where: {
@@ -174,6 +201,7 @@ const createBatch = asyncHandler(async (req, res) => {
       studentIds,
       batchId: batch.id,
       departmentId,
+      isGlobalBatch: Boolean(batch.isGlobal),
     });
   }
 
@@ -204,6 +232,7 @@ const assignStudentsToBatch = asyncHandler(async (req, res) => {
   if (!batch) {
     throw new ApiError(404, "Batch not found");
   }
+  assertAdminDepartmentScope(req, batch.departmentId, "Batch is outside the admin department scope");
 
   const result = await assignBatchToStudents({
     db,
@@ -211,6 +240,7 @@ const assignStudentsToBatch = asyncHandler(async (req, res) => {
     studentIds,
     batchId,
     departmentId: batch.departmentId,
+    isGlobalBatch: Boolean(batch.isGlobal),
   });
 
   await createAuditLog({
@@ -239,6 +269,7 @@ const bulkAddStudentsToBatch = asyncHandler(async (req, res) => {
   if (!batch) {
     throw new ApiError(404, "Batch not found");
   }
+  assertAdminDepartmentScope(req, batch.departmentId, "Batch is outside the admin department scope");
 
   const parsedRows = csvData ? parseCsv(csvData) : [];
   const fromCsvEmails = parsedRows.map((row) => row.email).filter(Boolean);
@@ -275,6 +306,7 @@ const bulkAddStudentsToBatch = asyncHandler(async (req, res) => {
     studentIds: finalIds,
     batchId,
     departmentId: batch.departmentId,
+    isGlobalBatch: Boolean(batch.isGlobal),
   });
 
   await createAuditLog({
@@ -312,6 +344,8 @@ const removeStudentFromBatch = asyncHandler(async (req, res) => {
   if (!batch || !student || !currentBatchIds.includes(String(batchId))) {
     throw new ApiError(404, "Batch or student not found");
   }
+  assertAdminDepartmentScope(req, batch.departmentId, "Batch is outside the admin department scope");
+  assertAdminDepartmentScope(req, student.departmentId, "Student is outside the admin department scope");
 
   const activeSubmission = await db.submission.findFirst({
     where: {
@@ -393,6 +427,7 @@ const assignTestToBatch = asyncHandler(async (req, res) => {
   if (!test || !batch) {
     throw new ApiError(404, "Test or batch not found");
   }
+  assertAdminDepartmentScope(req, batch.departmentId, "Batch is outside the admin department scope");
 
   if (test.isGlobal) {
     throw new ApiError(
@@ -457,6 +492,7 @@ const assignTestToDepartment = asyncHandler(async (req, res) => {
   if (!test || !department) {
     throw new ApiError(404, "Test or department not found");
   }
+  assertAdminDepartmentScope(req, department.id, "Department is outside the admin department scope");
 
   if (test.isGlobal) {
     throw new ApiError(
@@ -522,6 +558,7 @@ const archiveBatch = asyncHandler(async (req, res) => {
   if (!batch) {
     throw new ApiError(404, "Batch not found");
   }
+  assertAdminDepartmentScope(req, batch.departmentId, "Batch is outside the admin department scope");
 
   const now = new Date();
   const futureTests = await db.test.findMany({
@@ -593,6 +630,7 @@ const deleteBatch = asyncHandler(async (req, res) => {
   if (!batch) {
     throw new ApiError(404, "Batch not found");
   }
+  assertAdminDepartmentScope(req, batch.departmentId, "Batch is outside the admin department scope");
 
   const result = await db.$transaction(async (tx) => {
     const removedAssignments = await tx.testBatch.deleteMany({

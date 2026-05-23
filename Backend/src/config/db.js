@@ -72,6 +72,7 @@ const RELATIONS = {
   },
   batch: {
     department: { model: "department", type: "one", sourceField: "departmentId", targetField: "id" },
+    departments: { model: "department", type: "many", sourceField: "departmentIds", targetField: "id" },
     college: { model: "college", type: "one", sourceField: "collegeId", targetField: "id" },
     students: { model: "student", type: "many", sourceField: "id", targetField: "batchIds" },
     tests: { model: "test", type: "many", sourceField: "id", targetField: "batchId" },
@@ -232,6 +233,7 @@ const OBJECT_ID_FIELDS = new Set([
   "id",
   "collegeId",
   "departmentId",
+  "departmentIds",
   "headId",
   "batchId",
   "batchIds",
@@ -622,6 +624,99 @@ function extractRelationFilters(filter) {
   return { cleanFilter, relations };
 }
 
+const hasFilterKeys = (filter) => filter && typeof filter === "object" && Object.keys(filter).length > 0;
+
+const andFilters = (filters) => {
+  const present = filters.filter(hasFilterKeys);
+  if (present.length === 0) {
+    return {};
+  }
+  if (present.length === 1) {
+    return present[0];
+  }
+  return { $and: present };
+};
+
+async function relationSpecToParentFilter(modelName, relationName, filterSpec) {
+  const relation = RELATIONS[modelName] && RELATIONS[modelName][relationName];
+  if (!relation || !filterSpec || typeof filterSpec !== "object" || Array.isArray(filterSpec)) {
+    return {};
+  }
+
+  const relCollection = getCollection(relation.model);
+  const sourceField = toDocumentFieldName(relation.sourceField);
+  const targetField = toDocumentFieldName(relation.targetField);
+  const conditions = [];
+
+  const matchingParentValues = async (where) => {
+    const subFilter = await resolveRelationFilters(relation.model, toMongoFilter(relation.model, where || {}));
+    return relCollection.distinct(targetField, subFilter);
+  };
+
+  if (Object.prototype.hasOwnProperty.call(filterSpec, "some")) {
+    const parentValues = await matchingParentValues(filterSpec.some);
+    conditions.push({ [sourceField]: { $in: normalizeLookupValue(relation.sourceField, parentValues) } });
+  }
+
+  if (Object.prototype.hasOwnProperty.call(filterSpec, "none")) {
+    const parentValues = await matchingParentValues(filterSpec.none);
+    if (parentValues.length > 0) {
+      conditions.push({ [sourceField]: { $nin: normalizeLookupValue(relation.sourceField, parentValues) } });
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(filterSpec, "every")) {
+    const matchingFilter = await resolveRelationFilters(relation.model, toMongoFilter(relation.model, filterSpec.every || {}));
+    const violatingFilter = hasFilterKeys(matchingFilter) ? { $nor: [matchingFilter] } : { $expr: { $eq: [1, 0] } };
+    const violatingParentValues = await relCollection.distinct(targetField, violatingFilter);
+    if (violatingParentValues.length > 0) {
+      conditions.push({ [sourceField]: { $nin: normalizeLookupValue(relation.sourceField, violatingParentValues) } });
+    }
+  }
+
+  if (
+    relation.type === "one" &&
+    !Object.prototype.hasOwnProperty.call(filterSpec, "some") &&
+    !Object.prototype.hasOwnProperty.call(filterSpec, "none") &&
+    !Object.prototype.hasOwnProperty.call(filterSpec, "every")
+  ) {
+    const parentValues = await matchingParentValues(filterSpec);
+    conditions.push({ [sourceField]: { $in: normalizeLookupValue(relation.sourceField, parentValues) } });
+  }
+
+  return andFilters(conditions);
+}
+
+async function resolveRelationFilters(modelName, filter) {
+  if (!filter || typeof filter !== "object" || Array.isArray(filter)) {
+    return filter || {};
+  }
+
+  const cleanFilter = {};
+  const relationFilters = [];
+
+  for (const [key, value] of Object.entries(filter)) {
+    if (key.startsWith("__rel__")) {
+      relationFilters.push(await relationSpecToParentFilter(modelName, key.slice(7), value));
+      continue;
+    }
+
+    if (["$and", "$or", "$nor"].includes(key) && Array.isArray(value)) {
+      cleanFilter[key] = await Promise.all(value.map((item) => resolveRelationFilters(modelName, item)));
+      continue;
+    }
+
+    if (key === "$not" && value && typeof value === "object") {
+      cleanFilter[key] = await resolveRelationFilters(modelName, value);
+      continue;
+    }
+
+    cleanFilter[key] = value;
+  }
+
+  return andFilters([cleanFilter, ...relationFilters]);
+}
+
 function toMongoSort(orderBy) {
   if (!orderBy) {
     return undefined;
@@ -930,7 +1025,8 @@ function modelClient(modelName) {
       await ensureConnected();
       const collection = getCollection(modelName);
       const mongoFilter = toMongoFilter(modelName, args.where);
-      const { cleanFilter, relations } = extractRelationFilters(mongoFilter);
+      const resolvedFilter = await resolveRelationFilters(modelName, mongoFilter);
+      const { cleanFilter, relations } = extractRelationFilters(resolvedFilter);
       const sort = toMongoSort(args.orderBy);
 
       // If no relation filters, use native MongoDB pagination
@@ -990,7 +1086,8 @@ function modelClient(modelName) {
       const collection = getCollection(modelName);
       const normalizedWhere = normalizeCompoundWhere(modelName, args.where || {});
       const mongoFilter = toMongoFilter(modelName, normalizedWhere);
-      const { cleanFilter } = extractRelationFilters(mongoFilter);
+      const resolvedFilter = await resolveRelationFilters(modelName, mongoFilter);
+      const { cleanFilter } = extractRelationFilters(resolvedFilter);
 
       const rawDoc = await collection.findOne(cleanFilter);
       const doc = cleanDoc(rawDoc);
@@ -1069,7 +1166,8 @@ function modelClient(modelName) {
       const collection = getCollection(modelName);
       const normalizedWhere = normalizeCompoundWhere(modelName, args.where || {});
       const mongoFilter = toMongoFilter(modelName, normalizedWhere);
-      const { cleanFilter } = extractRelationFilters(mongoFilter);
+      const resolvedFilter = await resolveRelationFilters(modelName, mongoFilter);
+      const { cleanFilter } = extractRelationFilters(resolvedFilter);
 
       const updateData = {
         ...normalizeDocumentForWrite(args.data || {}),
@@ -1099,7 +1197,8 @@ function modelClient(modelName) {
       await ensureConnected();
       const collection = getCollection(modelName);
       const mongoFilter = toMongoFilter(modelName, args.where);
-      const { cleanFilter, relations } = extractRelationFilters(mongoFilter);
+      const resolvedFilter = await resolveRelationFilters(modelName, mongoFilter);
+      const { cleanFilter, relations } = extractRelationFilters(resolvedFilter);
 
       if (Object.keys(relations).length > 0) {
         // Relations in updateMany where — need to resolve IDs first
@@ -1129,7 +1228,8 @@ function modelClient(modelName) {
       const collection = getCollection(modelName);
       const normalizedWhere = normalizeCompoundWhere(modelName, args.where || {});
       const mongoFilter = toMongoFilter(modelName, normalizedWhere);
-      const { cleanFilter } = extractRelationFilters(mongoFilter);
+      const resolvedFilter = await resolveRelationFilters(modelName, mongoFilter);
+      const { cleanFilter } = extractRelationFilters(resolvedFilter);
 
       const existing = await collection.findOne(cleanFilter);
       if (!existing) {
@@ -1144,7 +1244,8 @@ function modelClient(modelName) {
       await ensureConnected();
       const collection = getCollection(modelName);
       const mongoFilter = toMongoFilter(modelName, args.where);
-      const { cleanFilter, relations } = extractRelationFilters(mongoFilter);
+      const resolvedFilter = await resolveRelationFilters(modelName, mongoFilter);
+      const { cleanFilter, relations } = extractRelationFilters(resolvedFilter);
 
       if (Object.keys(relations).length > 0) {
         const candidates = await collection.find(cleanFilter).toArray();
@@ -1175,7 +1276,8 @@ function modelClient(modelName) {
       await ensureConnected();
       const collection = getCollection(modelName);
       const mongoFilter = toMongoFilter(modelName, args.where);
-      const { cleanFilter, relations } = extractRelationFilters(mongoFilter);
+      const resolvedFilter = await resolveRelationFilters(modelName, mongoFilter);
+      const { cleanFilter, relations } = extractRelationFilters(resolvedFilter);
 
       if (Object.keys(relations).length > 0) {
         const candidates = await collection.find(cleanFilter).toArray();
@@ -1191,7 +1293,8 @@ function modelClient(modelName) {
       await ensureConnected();
       const collection = getCollection(modelName);
       const mongoFilter = toMongoFilter(modelName, args.where);
-      const { cleanFilter } = extractRelationFilters(mongoFilter);
+      const resolvedFilter = await resolveRelationFilters(modelName, mongoFilter);
+      const { cleanFilter } = extractRelationFilters(resolvedFilter);
       const by = Array.isArray(args.by) ? args.by : [];
 
       // Build MongoDB aggregation pipeline for groupBy

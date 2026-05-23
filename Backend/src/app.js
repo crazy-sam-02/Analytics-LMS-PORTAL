@@ -6,6 +6,13 @@ const morgan = require("morgan");
 const compression = require("compression");
 
 const env = require("./config/env");
+
+// Allow k6/test runs to disable rate limiting without altering route wiring.
+// Set RATE_LIMIT_DISABLED=true (or 1) in environment.
+const isRateLimitDisabled =
+  String(process.env.RATE_LIMIT_DISABLED || "").toLowerCase() === "true" ||
+  String(process.env.RATE_LIMIT_DISABLED || "") === "1";
+
 const { getRedisHealthSnapshot } = require("./config/redis");
 const studentAuthRoutes = require("./routes/Students/auth.routes");
 const studentDashboardRoutes = require("./routes/Students/dashboard.routes");
@@ -40,7 +47,6 @@ const superAdminDepartmentsRoutes = require("./routes/SuperAdmin/departments.rou
 const superAdminEventsRoutes = require("./routes/SuperAdmin/events.routes");
 const superAdminReportsRoutes = require("./routes/SuperAdmin/reports.routes");
 const superAdminAnalyticsRoutes = require("./routes/SuperAdmin/analytics.routes");
-const superAdminAuditLogsRoutes = require("./routes/SuperAdmin/audit-logs.routes");
 const superAdminSettingsRoutes = require("./routes/SuperAdmin/settings.routes");
 const superAdminHealthRoutes = require("./routes/SuperAdmin/health.routes");
 const superAdminQuestionBankRoutes = require("./routes/SuperAdmin/question-bank.routes");
@@ -50,36 +56,60 @@ const { createRateLimiter, authKeyByIp } = require("./middleware/rate-limit");
 const { createResponseCache, createResponseCacheInvalidationHook } = require("./middleware/response-cache");
 const { notFound, errorHandler } = require("./middleware/error-handler");
 const { setupCompleteValidationSystem } = require("./config/validation-integration.setup");
+const { getDb } = require("./utils/db");
 
 const app = express();
 app.set("trust proxy", 1);
 
-const authStrictLimiter = createRateLimiter({
-  scope: "auth-login",
-  routeLabel: "/api/*/auth/login",
-  windowMs: env.rateLimit.authLoginWindowMs,
-  max: env.rateLimit.authLoginMax,
-  keySelector: authKeyByIp,
-  message: "Too many login attempts. Try again in a few minutes.",
-});
+const authStrictLimiter = isRateLimitDisabled
+  ? createRateLimiter({ scope: "noop", windowMs: 1, max: 999999999, skip: () => true })
+  : createRateLimiter({
+      scope: "auth-login",
+      routeLabel: "/api/*/auth/login",
+      windowMs: env.rateLimit.authLoginWindowMs,
+      max: env.rateLimit.authLoginMax,
+      keySelector: authKeyByIp,
+      failOpen: false,
+      message: "Too many login attempts. Try again in a few minutes.",
+    });
 
-const authRefreshLimiter = createRateLimiter({
-  scope: "auth-refresh",
-  routeLabel: "/api/*/auth/refresh",
-  windowMs: env.rateLimit.authRefreshWindowMs,
-  max: env.rateLimit.authRefreshMax,
-  keySelector: authKeyByIp,
-  message: "Too many token refresh attempts. Please retry shortly.",
-});
 
-const generalApiLimiter = createRateLimiter({
-  scope: "api-general",
-  routeLabel: "/api/*",
-  windowMs: env.rateLimit.generalApiWindowMs,
-  max: env.rateLimit.generalApiMax,
-  skip: (req) => req.path === "/health",
-  message: "Too many requests. Please slow down and try again.",
-});
+const authRefreshLimiter = isRateLimitDisabled
+  ? createRateLimiter({
+      scope: "noop",
+      windowMs: 1,
+      max: 999999999,
+      skip: () => true,
+    })
+  : createRateLimiter({
+      scope: "auth-refresh",
+      routeLabel: "/api/*/auth/refresh",
+      windowMs: env.rateLimit.authRefreshWindowMs,
+      max: env.rateLimit.authRefreshMax,
+      keySelector: authKeyByIp,
+      failOpen: false,
+      message: "Too many token refresh attempts. Please retry shortly.",
+    });
+
+
+
+const generalApiLimiter = isRateLimitDisabled
+  ? createRateLimiter({
+      scope: "noop",
+      windowMs: 1,
+      max: 999999999,
+      skip: () => true,
+    })
+  : createRateLimiter({
+      scope: "api-general",
+      routeLabel: "/api/*",
+      windowMs: env.rateLimit.generalApiWindowMs,
+      max: env.rateLimit.generalApiMax,
+      skip: (req) => req.path === "/health",
+      message: "Too many requests. Please slow down and try again.",
+    });
+
+
 
 const adminReportsCache = createResponseCache({
   scope: "admin-reports",
@@ -162,7 +192,7 @@ app.use(
 app.use(helmet());
 app.use(compression());
 app.use(morgan("dev"));
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: env.requestBodyLimit }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 app.use(createResponseCacheInvalidationHook());
@@ -217,7 +247,12 @@ app.use((req, res, next) => {
     return next();
   }
 
-  if (req.path.startsWith("/api/tests/") || req.path.startsWith("/api/attempts/")) {
+  if (
+    req.path.startsWith("/api/tests/") ||
+    req.path.startsWith("/api/attempts/") ||
+    req.path.startsWith("/api/results/") ||
+    req.path.startsWith("/api/submission/")
+  ) {
     res.setHeader("Cache-Control", "no-store");
     return next();
   }
@@ -245,7 +280,8 @@ app.use((req, res, next) => {
 app.get("/api/health", async (_req, res) => {
   const checks = {};
   try {
-    await require("mongoose").connection.db.admin().ping();
+    const database = await getDb();
+    await database.college.count();
     checks.mongodb = "ok";
   } catch {
     checks.mongodb = "down";
@@ -301,7 +337,7 @@ app.use("/api/super-admin/departments", superAdminDepartmentsRoutes);
 app.use("/api/super-admin/events", superAdminEventsRoutes);
 app.use("/api/super-admin/reports", superAdminReportsRoutes);
 app.use("/api/super-admin/analytics", superAdminAnalyticsRoutes);
-app.use("/api/super-admin/audit-logs", superAdminAuditLogsRoutes);
+  
 app.use("/api/super-admin/settings", superAdminSettingsRoutes);
 app.use("/api/super-admin/system", superAdminHealthRoutes);
 app.use("/api/super-admin/question-bank", superAdminQuestionBankRoutes);
@@ -320,23 +356,16 @@ app.use("/api/superadmin/departments", superAdminDepartmentsRoutes);
 app.use("/api/superadmin/events", superAdminEventsRoutes);
 app.use("/api/superadmin/reports", superAdminReportsRoutes);
 app.use("/api/superadmin/analytics", superAdminAnalyticsRoutes);
-app.use("/api/superadmin/logs", superAdminAuditLogsRoutes);
+ 
 app.use("/api/superadmin/settings", superAdminSettingsRoutes);
 app.use("/api/superadmin/system", superAdminHealthRoutes);
 app.use("/api/superadmin/question-bank", superAdminQuestionBankRoutes);
 app.use("/api/superadmin/questions", superAdminQuestionBankRoutes);
 app.use("/api/superadmin/subjects", superAdminSubjectsRoutes);
 
+setupCompleteValidationSystem(app);
+
 app.use(notFound);
 app.use(errorHandler);
-
-// Validation integration setup (registers monitoring routes and alerts)
-try {
-  setupCompleteValidationSystem(app);
-} catch (e) {
-  // Log and continue; do not prevent app from starting
-  // eslint-disable-next-line no-console
-  console.error("Validation integration setup failed:", e && e.message ? e.message : e);
-}
 
 module.exports = app;

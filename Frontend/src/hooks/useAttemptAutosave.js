@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useDispatch, useSelector } from "react-redux";
-import { clearChangedAnswerIds, saveAttemptAnswers, setSaveStatus } from "@/features/Students/testSlice";
+import { clearSavedAnswerSnapshots, restoreDraftAnswers, saveAttemptAnswers, setSaveStatus } from "@/features/Students/testSlice";
 
 const localDraftKey = (attemptId) => `lms:attempt:draft:${attemptId}`;
 
@@ -13,8 +13,9 @@ export const useAttemptAutosave = () => {
   const debounceTimerRef = useRef(null);
   const isFlushingRef = useRef(false);
   const cooldownUntilRef = useRef(0);
+  const restoredAttemptRef = useRef(null);
 
-  const { attempt_id, test_id, answers, changed_answer_ids } = useSelector((state) => state.test);
+  const { attempt_id, test_id, answers, changed_answer_ids, question_order } = useSelector((state) => state.test);
 
   const changedPayload = useMemo(() => {
     return changed_answer_ids
@@ -42,22 +43,19 @@ export const useAttemptAutosave = () => {
     }
   }, [attempt_id]);
 
-  const removeDraftFromSession = useCallback(() => {
-    if (!attempt_id) return;
-
-    try {
-      sessionStorage.removeItem(localDraftKey(attempt_id));
-    } catch {
-      // Ignore storage delete failures.
-    }
-  }, [attempt_id]);
-
   const flush = useCallback(async () => {
     if (!attempt_id || !test_id || !changedPayload.length || isFlushingRef.current) {
       return;
     }
 
     if (Date.now() < cooldownUntilRef.current) {
+      return;
+    }
+
+    writeDraftToSession(changedPayload);
+
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      dispatch(setSaveStatus("error"));
       return;
     }
 
@@ -79,9 +77,8 @@ export const useAttemptAutosave = () => {
             })
           ).unwrap();
 
-          dispatch(clearChangedAnswerIds(changedPayload.map((item) => item.question_id)));
+          dispatch(clearSavedAnswerSnapshots(changedPayload));
           dispatch(setSaveStatus("saved"));
-          removeDraftFromSession();
           isFlushingRef.current = false;
           return;
         } catch (error) {
@@ -104,7 +101,28 @@ export const useAttemptAutosave = () => {
       dispatch(setSaveStatus("error"));
       isFlushingRef.current = false;
     }
-  }, [attempt_id, changedPayload, dispatch, removeDraftFromSession, test_id, writeDraftToSession]);
+  }, [attempt_id, changedPayload, dispatch, test_id, writeDraftToSession]);
+
+  useEffect(() => {
+    if (!attempt_id || !test_id || restoredAttemptRef.current === attempt_id || question_order.length === 0) {
+      return;
+    }
+
+    restoredAttemptRef.current = attempt_id;
+
+    let parsed = [];
+
+    try {
+      const raw = sessionStorage.getItem(localDraftKey(attempt_id));
+      parsed = raw ? JSON.parse(raw) : [];
+    } catch {
+      parsed = [];
+    }
+
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      dispatch(restoreDraftAnswers(parsed));
+    }
+  }, [attempt_id, dispatch, question_order.length, test_id]);
 
   useEffect(() => {
     if (!attempt_id) {
@@ -119,6 +137,8 @@ export const useAttemptAutosave = () => {
       return undefined;
     }
 
+    writeDraftToSession(changedPayload);
+
     debounceTimerRef.current = window.setTimeout(() => {
       flush();
     }, 2000);
@@ -128,7 +148,7 @@ export const useAttemptAutosave = () => {
         window.clearTimeout(debounceTimerRef.current);
       }
     };
-  }, [attempt_id, changedPayload.length]);
+  }, [attempt_id, changedPayload, changedPayload.length, flush, writeDraftToSession]);
 
   useEffect(() => {
     if (!attempt_id || !test_id) {
@@ -168,7 +188,11 @@ export const useAttemptAutosave = () => {
             test_id,
             changedAnswers: parsed,
           })
-        ).unwrap().catch(() => null);
+        ).unwrap()
+          .then(() => {
+            dispatch(clearSavedAnswerSnapshots(parsed));
+          })
+          .catch(() => null);
       }
 
       flush();

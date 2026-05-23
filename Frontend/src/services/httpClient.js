@@ -1,30 +1,28 @@
 import axios from "axios";
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:5000/api";
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
 const STUDENT_ACCESS_TOKEN_KEY = "student_access_token";
+const STUDENT_REFRESH_TOKEN_KEY = "student_refresh_token";
 
-const readStoredAccessToken = () => {
+const removeStoredStudentAccessToken = () => {
   try {
-    return localStorage.getItem(STUDENT_ACCESS_TOKEN_KEY) || null;
+    localStorage.removeItem(STUDENT_ACCESS_TOKEN_KEY);
+  } catch {
+    // Ignore storage cleanup failures.
+  }
+};
+
+const getStoredStudentRefreshToken = () => {
+  try {
+    return localStorage.getItem(STUDENT_REFRESH_TOKEN_KEY) || sessionStorage.getItem(STUDENT_REFRESH_TOKEN_KEY) || null;
   } catch {
     return null;
   }
 };
 
-const persistStoredAccessToken = (token) => {
-  try {
-    if (token) {
-      localStorage.setItem(STUDENT_ACCESS_TOKEN_KEY, token);
-      return;
-    }
+removeStoredStudentAccessToken();
 
-    localStorage.removeItem(STUDENT_ACCESS_TOKEN_KEY);
-  } catch {
-    // Ignore storage failures.
-  }
-};
-
-let accessToken = readStoredAccessToken();
+let accessToken = null;
 let isRefreshing = false;
 let refreshWaitQueue = [];
 
@@ -59,7 +57,7 @@ const flushQueue = (error, token) => {
 
 export const setAccessToken = (token) => {
   accessToken = token || null;
-  persistStoredAccessToken(accessToken);
+  removeStoredStudentAccessToken();
 };
 
 export const getAccessToken = () => accessToken;
@@ -129,7 +127,9 @@ httpClient.interceptors.response.use(
     try {
       const refreshResponse = await axios.post(
         `${API_BASE}/auth/refresh`,
-        {},
+        {
+          ...(getStoredStudentRefreshToken() ? { refreshToken: getStoredStudentRefreshToken() } : {}),
+        },
         {
           withCredentials: true,
         }

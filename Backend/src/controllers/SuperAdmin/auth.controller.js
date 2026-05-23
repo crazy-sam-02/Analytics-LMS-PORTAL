@@ -9,6 +9,16 @@ const {
   invalidateRefreshToken,
 } = require("../../services/refresh-token-cache.service");
 
+const SUPER_ADMIN_REFRESH_COOKIE = "lms_super_admin_refresh_token";
+
+const getRefreshCookieOptions = () => ({
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
+  sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+  path: "/api/super-admin/auth",
+  maxAge: 1000 * 60 * 60 * 24 * 7,
+});
+
 const verifyRefreshPayloadOrThrow = (refreshToken) => {
   try {
     return verifyRefreshToken(refreshToken);
@@ -59,6 +69,7 @@ const superAdminLogin = asyncHandler(async (req, res) => {
       }
     });
     await cacheRefreshToken("super-admin", refreshToken, refreshRecord);
+    res.cookie(SUPER_ADMIN_REFRESH_COOKIE, refreshToken, getRefreshCookieOptions());
 
     return res.status(200).json({
       accessToken,
@@ -101,6 +112,7 @@ const superAdminLogin = asyncHandler(async (req, res) => {
     }
   });
   await cacheRefreshToken("super-admin", refreshToken, refreshRecord);
+  res.cookie(SUPER_ADMIN_REFRESH_COOKIE, refreshToken, getRefreshCookieOptions());
 
   res.status(200).json({
     accessToken,
@@ -115,7 +127,11 @@ const superAdminLogin = asyncHandler(async (req, res) => {
 });
 
 const superAdminRefresh = asyncHandler(async (req, res) => {
-  const { refreshToken } = req.body;
+  const refreshToken = req.cookies?.[SUPER_ADMIN_REFRESH_COOKIE] || req.body?.refreshToken;
+
+  if (!refreshToken) {
+    throw new ApiError(400, "Refresh token required");
+  }
 
   let dbToken = await getCachedRefreshToken("super-admin", refreshToken);
   if (!dbToken) {
@@ -149,7 +165,7 @@ const superAdminRefresh = asyncHandler(async (req, res) => {
 });
 
 const superAdminLogout = asyncHandler(async (req, res) => {
-  const { refreshToken } = req.body;
+  const refreshToken = req.cookies?.[SUPER_ADMIN_REFRESH_COOKIE] || req.body?.refreshToken;
 
   if (refreshToken) {
     const m5 = await models.init();
@@ -161,6 +177,7 @@ const superAdminLogout = asyncHandler(async (req, res) => {
     await invalidateRefreshToken("super-admin", refreshToken);
   }
 
+  res.clearCookie(SUPER_ADMIN_REFRESH_COOKIE, getRefreshCookieOptions());
   res.status(200).json({ message: "Logged out" });
 });
 

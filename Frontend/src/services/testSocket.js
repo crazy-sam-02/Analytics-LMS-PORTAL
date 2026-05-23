@@ -1,35 +1,53 @@
 import { io } from "socket.io-client";
 import { getAccessToken } from "@/services/httpClient";
+import { adminTokenStorage, superAdminTokenStorage } from "@/services/api";
 
-let socket = null;
+const socketsByRole = new Map();
 
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || (import.meta.env.VITE_API_BASE_URL || "http://localhost:5000/api").replace(/\/api\/?$/, "");
+const getSocketUrl = () => {
+  if (import.meta.env.VITE_SOCKET_URL) {
+    return import.meta.env.VITE_SOCKET_URL;
+  }
+
+  if (import.meta.env.VITE_API_BASE_URL) {
+    return import.meta.env.VITE_API_BASE_URL.replace(/\/api\/?$/, "");
+  }
+
+  return typeof window !== "undefined" ? window.location.origin : "";
+};
 
 const getSocketToken = (role = "student") => {
   if (role === "admin") {
-    return localStorage.getItem("lms_admin_access_token") || "";
+    return adminTokenStorage.getAccess() || "";
+  }
+  if (role === "super-admin") {
+    return superAdminTokenStorage.getAccess() || "";
   }
   return getAccessToken() || "";
 };
 
 export const connectTestSocket = (role = "student") => {
+  const normalizedRole = role || "student";
+  let socket = socketsByRole.get(normalizedRole);
+
   if (socket?.connected) {
     return socket;
   }
 
   if (!socket) {
-    socket = io(SOCKET_URL, {
+    socket = io(getSocketUrl(), {
       transports: ["websocket"],
       withCredentials: true,
       autoConnect: false,
       auth: {
-        token: getSocketToken(role) ? `Bearer ${getSocketToken(role)}` : "",
+        token: getSocketToken(normalizedRole) ? `Bearer ${getSocketToken(normalizedRole)}` : "",
       },
     });
+    socketsByRole.set(normalizedRole, socket);
   }
 
   socket.auth = {
-    token: getSocketToken(role) ? `Bearer ${getSocketToken(role)}` : "",
+    token: getSocketToken(normalizedRole) ? `Bearer ${getSocketToken(normalizedRole)}` : "",
   };
 
   if (!socket.connected) {
@@ -39,20 +57,34 @@ export const connectTestSocket = (role = "student") => {
   return socket;
 };
 
-export const getTestSocket = () => socket;
+export const getTestSocket = (role = "student") => socketsByRole.get(role || "student") || null;
 
-export const disconnectTestSocket = () => {
-  if (socket?.connected) {
-    socket.disconnect();
+export const disconnectTestSocket = (role = null) => {
+  if (role) {
+    const socket = socketsByRole.get(role);
+    if (socket?.connected) {
+      socket.disconnect();
+    }
+    socketsByRole.delete(role);
+    return;
   }
+
+  for (const socket of socketsByRole.values()) {
+    if (socket?.connected) {
+      socket.disconnect();
+    }
+  }
+  socketsByRole.clear();
 };
 
-export const joinTestRoom = (testId) => {
+export const joinTestRoom = (testId, role = "student") => {
+  const socket = getTestSocket(role);
   if (!socket || !testId) return;
   socket.emit("join_test_room", { testId });
 };
 
-export const leaveTestRoom = (testId) => {
+export const leaveTestRoom = (testId, role = "student") => {
+  const socket = getTestSocket(role);
   if (!socket || !testId) return;
   socket.emit("leave_test_room", { testId });
 };

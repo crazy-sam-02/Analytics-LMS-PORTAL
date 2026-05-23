@@ -1,14 +1,30 @@
 const models = require("../../models");
-const { completeSubmission, calculateSubmissionScore } = require("../../services/test.service");
+const {
+  completeSubmission,
+  calculateSubmissionScore,
+  findAnswerForQuestion,
+  getAnswerBoolean,
+  getAnswerSelectedOption,
+  getAnswerSelectedOptions,
+  getAnswerText,
+  isAnswerProvided,
+  isQuestionCorrect,
+} = require("../../services/test.service");
+const {
+  canRevealCorrectAnswers,
+  isTestCompleted,
+  maskCorrectAnswer,
+  resolveReviewMode,
+} = require("../../services/student-review-policy.service");
 const { createAuditLog } = require("../../services/audit.service");
 const { withRedisLock } = require("../../services/redis-lock.service");
 const { setExamState, clearExamState } = require("../../services/exam-state-cache.service");
 const { emitToCollege, emitToUser, emitToTestRoom } = require("../../realtime/socket");
 const { ApiError, asyncHandler } = require("../../utils/http");
+const { getSubmissionScorePercent, getTestTotalMarks } = require("../../utils/score");
 const { getCachedTestQuestions, setCachedTestQuestions } = require("../../services/test-cache.service");
 const { attachResolvedTestConfiguration } = require("../../services/test-config.service");
 const {
-  ASSIGNMENT_METHOD,
   buildStudentAssignmentScope,
   isStudentAssignedToTest,
 } = require("../../services/student-test-assignment.service");
@@ -33,10 +49,53 @@ const isSubmissionExpired = (submission) => {
   return Date.now() > startedAt + durationMins * 60 * 1000;
 };
 
+const hasTestEnded = (test = {}) => {
+  const endsAt = test?.endsAt || test?.endDate || test?.end_date || test?.ends_at;
+  if (!endsAt) return false;
+  const endsAtMs = new Date(endsAt).getTime();
+  return Number.isFinite(endsAtMs) && endsAtMs <= Date.now();
+};
+
 const heartbeatAgeSeconds = (lastHeartbeatAt) => {
   if (!lastHeartbeatAt) return Number.POSITIVE_INFINITY;
   const ms = Date.now() - new Date(lastHeartbeatAt).getTime();
   return Math.max(0, Math.floor(ms / 1000));
+};
+
+const resolveQuestionForSubmission = async ({ db, questionId, testId }) => {
+  let question = await db.question.findUnique({
+    where: { id: questionId },
+  });
+
+  if (!question || question.testId !== testId) {
+    question = await db.question.findFirst({
+      where: {
+        sourceQuestionId: questionId,
+        testId,
+      },
+    });
+  }
+
+  if (!question || question.testId !== testId) {
+    throw new ApiError(403, "Question not found in this test", null, "QUESTION_NOT_IN_TEST");
+  }
+
+  return question;
+};
+
+const formatAnswerValue = (value) => {
+  if (Array.isArray(value)) return value.length ? value.join(", ") : "Not answered";
+  if (value == null) return "Not answered";
+  if (typeof value === "boolean") return value ? "True" : "False";
+  const text = String(value).trim();
+  return text || "Not answered";
+};
+
+const resolveStudentAnswerValue = (answer, type) => {
+  if (!answer) return null;
+  if (type === "MCQ_MULTI" || type === "MULTI_SELECT") return getAnswerSelectedOptions(answer);
+  if (type === "TRUE_FALSE" || type === "BOOLEAN") return getAnswerBoolean(answer);
+  return getAnswerSelectedOption(answer) ?? getAnswerText(answer) ?? getAnswerBoolean(answer);
 };
 
 const assertSessionOwnership = async ({ db, req, userId, testId, submissionId }) => {
@@ -140,7 +199,7 @@ const listOngoingTests = asyncHandler(async (req, res) => {
 
     const inProgressSubmission = latestSubmission?.status === "IN_PROGRESS" ? latestSubmission : null;
     const totalQuestions = test.questions?.length || 0;
-    const answered = inProgressSubmission?.answers?.length || 0;
+    const answered = (inProgressSubmission?.answers || []).filter(isAnswerProvided).length;
 
     const progress = inProgressSubmission
       ? totalQuestions > 0
@@ -290,9 +349,19 @@ const startTest = asyncHandler(async (req, res) => {
   }
 
   const now = new Date();
-  if (test.startsAt > now || test.endsAt < now) {
-    throw new ApiError(403, "Test is not active");
+  // During local automated load/k6 runs we sometimes bypass time-window checks.
+  // This is intentionally ignored in production so scheduled test windows cannot
+  // be opened by a misplaced environment variable.
+  const bypassWindow =
+    process.env.NODE_ENV !== "production" &&
+    String(process.env.K6_BYPASS_TEST_WINDOW || "").toLowerCase().match(/^(true|1|yes|on)$/);
+  if (!bypassWindow) {
+    if (test.startsAt > now || test.endsAt < now) {
+      throw new ApiError(403, "Test is not active");
+    }
   }
+
+
 
   const assignedViaMapping = await db.testBatch.findFirst({
     where: {
@@ -391,10 +460,21 @@ const startTest = asyncHandler(async (req, res) => {
     }
   }
 
-  const latestSubmission = await db.submission.findFirst({
+  let latestSubmission = await db.submission.findFirst({
     where: { userId, testId },
     orderBy: { attemptNumber: "desc" },
+    include: { answers: true, violations: true },
   });
+
+  if (latestSubmission?.status === "IN_PROGRESS" && isSubmissionExpired({ ...latestSubmission, test })) {
+    await completeSubmission({ submissionId: latestSubmission.id, autoSubmitted: true });
+    await clearExamState({ userId, testId });
+    latestSubmission = await db.submission.findFirst({
+      where: { userId, testId },
+      orderBy: { attemptNumber: "desc" },
+      include: { answers: true, violations: true },
+    });
+  }
 
   const currentAttemptCount = latestSubmission?.attemptNumber || 0;
 
@@ -402,18 +482,10 @@ const startTest = asyncHandler(async (req, res) => {
     throw new ApiError(403, "Maximum attempts reached for this test");
   }
 
+  const isResumingInProgressSubmission = latestSubmission?.status === "IN_PROGRESS";
   const submission =
-    latestSubmission?.status === "IN_PROGRESS"
-      ? await db.submission.update({
-          where: { id: latestSubmission.id },
-          data: {
-            startedAt: now,
-            submittedAt: null,
-            score: 0,
-            accuracy: 0,
-            timeSpentSeconds: 0,
-          },
-        })
+    isResumingInProgressSubmission
+      ? latestSubmission
       : await db.submission
           .create({
             data: {
@@ -449,8 +521,8 @@ const startTest = asyncHandler(async (req, res) => {
     },
     update: {
       submissionId: submission.id,
-      startedAt: now,
-      expiresAt: new Date(now.getTime() + test.durationMins * 60 * 1000),
+      startedAt: submission.startedAt || now,
+      expiresAt: new Date(new Date(submission.startedAt || now).getTime() + test.durationMins * 60 * 1000),
       endedAt: null,
       lastHeartbeatAt: now,
       connectionStatus: "ONLINE",
@@ -460,7 +532,8 @@ const startTest = asyncHandler(async (req, res) => {
       userId,
       testId,
       submissionId: submission.id,
-      expiresAt: new Date(now.getTime() + test.durationMins * 60 * 1000),
+      startedAt: submission.startedAt || now,
+      expiresAt: new Date(new Date(submission.startedAt || now).getTime() + test.durationMins * 60 * 1000),
       lastHeartbeatAt: now,
       connectionStatus: "ONLINE",
       ...(clientSessionId ? { clientSessionId } : {}),
@@ -532,9 +605,9 @@ const startTest = asyncHandler(async (req, res) => {
       });
 
       return res.status(200).json({
-        resumed: false,
+        resumed: isResumingInProgressSubmission,
         serverTime: Date.now(),
-        server_end_time: new Date(now.getTime() + test.durationMins * 60 * 1000).getTime(),
+        server_end_time: new Date(new Date(submission.startedAt || now).getTime() + test.durationMins * 60 * 1000).getTime(),
         test_type: hydratedTest.test_type,
         proctoring_config: hydratedTest.proctoring_config,
         question_order: Array.isArray(cachedQuestions) ? cachedQuestions.map((question) => question.id).filter(Boolean) : [],
@@ -797,30 +870,52 @@ const saveAnswer = asyncHandler(async (req, res) => {
     clientSessionId,
   });
 
-  const answer = await db.answer.upsert({
-    where: {
-      submissionId_questionId: {
-        submissionId,
-        questionId,
-      },
-    },
-    update: {
-      selectedOption: selectedOption ?? null,
-      selectedOptions: Array.isArray(selectedOptions) ? selectedOptions : [],
-      answerText: answerText ?? null,
-      answerBoolean: typeof answerBoolean === "boolean" ? answerBoolean : null,
-      markedForReview: Boolean(markedForReview),
-    },
-    create: {
-      submissionId,
-      questionId,
-      selectedOption: selectedOption ?? null,
-      selectedOptions: Array.isArray(selectedOptions) ? selectedOptions : [],
-      answerText: answerText ?? null,
-      answerBoolean: typeof answerBoolean === "boolean" ? answerBoolean : null,
-      markedForReview: Boolean(markedForReview),
-    },
+  const resolvedQuestion = await resolveQuestionForSubmission({
+    db,
+    questionId,
+    testId: submission.testId,
   });
+
+  const normalizedAnswer = {
+    submissionId,
+    questionId: resolvedQuestion.id,
+    selectedOption: selectedOption ?? null,
+    selectedOptions: Array.isArray(selectedOptions) ? selectedOptions : [],
+    answerText: answerText ?? null,
+    answerBoolean: typeof answerBoolean === "boolean" ? answerBoolean : null,
+    markedForReview: Boolean(markedForReview),
+  };
+
+  let answer = null;
+  if (!isAnswerProvided(normalizedAnswer) && !normalizedAnswer.markedForReview) {
+    const existing = await db.answer.findFirst({
+      where: {
+        submissionId,
+        questionId: resolvedQuestion.id,
+      },
+    });
+
+    if (existing) {
+      await db.answer.delete({ where: { id: existing.id } });
+    }
+  } else {
+    answer = await db.answer.upsert({
+      where: {
+        submissionId_questionId: {
+          submissionId,
+          questionId: resolvedQuestion.id,
+        },
+      },
+      update: {
+        selectedOption: normalizedAnswer.selectedOption,
+        selectedOptions: normalizedAnswer.selectedOptions,
+        answerText: normalizedAnswer.answerText,
+        answerBoolean: normalizedAnswer.answerBoolean,
+        markedForReview: normalizedAnswer.markedForReview,
+      },
+      create: normalizedAnswer,
+    });
+  }
 
   await db.submission.update({
     where: { id: submissionId },
@@ -829,11 +924,22 @@ const saveAnswer = asyncHandler(async (req, res) => {
     },
   });
 
-  const [answerCount, questionCount, violationCount] = await Promise.all([
-    db.answer.count({ where: { submissionId } }),
+  const [answersForProgress, questionCount, violationCount] = await Promise.all([
+    db.answer.findMany({
+      where: { submissionId },
+      select: {
+        selectedOption: true,
+        selectedOptions: true,
+        answerText: true,
+        answerBoolean: true,
+        selectedBoolean: true,
+        selectedText: true,
+      },
+    }),
     db.question.count({ where: { testId: submission.testId } }),
     db.violation.count({ where: { submissionId } }),
   ]);
+  const answerCount = answersForProgress.filter(isAnswerProvided).length;
   const progress = questionCount > 0 ? Math.round((answerCount / questionCount) * 100) : 0;
 
   await setExamState({
@@ -869,7 +975,7 @@ const saveAnswer = asyncHandler(async (req, res) => {
     connectionStatus: "ONLINE",
   });
 
-  res.status(200).json({ message: "Answer saved", answer });
+  res.status(200).json({ message: answer ? "Answer saved" : "Answer cleared", answer });
 });
 
 const reportViolation = asyncHandler(async (req, res) => {
@@ -932,10 +1038,21 @@ const reportViolation = asyncHandler(async (req, res) => {
     },
   });
 
-  const [answerCountForState, questionCountForState] = await Promise.all([
-    db.answer.count({ where: { submissionId } }),
+  const [answersForState, questionCountForState] = await Promise.all([
+    db.answer.findMany({
+      where: { submissionId },
+      select: {
+        selectedOption: true,
+        selectedOptions: true,
+        answerText: true,
+        answerBoolean: true,
+        selectedBoolean: true,
+        selectedText: true,
+      },
+    }),
     db.question.count({ where: { testId: submission.testId } }),
   ]);
+  const answerCountForState = answersForState.filter(isAnswerProvided).length;
   const progressForState = questionCountForState > 0
     ? Math.round((answerCountForState / questionCountForState) * 100)
     : 0;
@@ -1169,7 +1286,7 @@ const getAttemptResult = asyncHandler(async (req, res) => {
   const db = m.dbClient;
   const attemptId = req.params.attemptId;
 
-  const submission = await db.submission.findUnique({
+  let submission = await db.submission.findUnique({
     where: { id: attemptId },
     include: {
       test: {
@@ -1189,6 +1306,29 @@ const getAttemptResult = asyncHandler(async (req, res) => {
 
   if (!submission || submission.userId !== req.user.id) {
     throw new ApiError(404, "Attempt not found", null, "ATTEMPT_NOT_FOUND");
+  }
+
+  if (submission.status === "IN_PROGRESS") {
+    if (isTestCompleted(submission.test) || hasTestEnded(submission.test)) {
+      await completeSubmission({ submissionId: submission.id, autoSubmitted: true });
+      submission = await db.submission.findUnique({
+        where: { id: attemptId },
+        include: {
+          test: {
+            include: {
+              questions: {
+                orderBy: { order: "asc" },
+              },
+            },
+          },
+          answers: {
+            include: {
+              question: true,
+            },
+          },
+        },
+      });
+    }
   }
 
   if (submission.status === "IN_PROGRESS") {
@@ -1216,39 +1356,35 @@ const getAttemptResult = asyncHandler(async (req, res) => {
   const higherCount = rankedScores.filter((item) => Number(item.score || 0) > Number(summary.score || 0)).length;
   const percentile = Number((((total - higherCount) / total) * 100).toFixed(2));
   const hydratedTest = attachResolvedTestConfiguration(submission.test);
+  const totalMarks = getTestTotalMarks(submission.test);
+  const scorePercent = getSubmissionScorePercent({
+    ...submission,
+    score: Number(summary.score || submission.score || 0),
+  });
 
-  const answerByQuestionId = new Map(submission.answers.map((item) => [item.questionId, item]));
+  const revealQuestionDetails = canRevealCorrectAnswers(submission.test);
+  const testCompleted = isTestCompleted(submission.test);
+  const reviewMode = revealQuestionDetails ? "show_all" : resolveReviewMode(submission.test);
   const question_breakdown = (submission.test?.questions || []).map((question) => {
-    const answer = answerByQuestionId.get(question.id);
-    const studentAnswer =
-      (Array.isArray(answer?.selectedOptions) && answer.selectedOptions.length > 0
-        ? answer.selectedOptions
-        : answer?.selectedOption) ??
-      answer?.answerText ??
-      answer?.answerBoolean ??
-      "Not answered";
-    const correctAnswer =
-      (Array.isArray(question.correctOptions) && question.correctOptions.length > 0
+    const answer = findAnswerForQuestion(submission.answers, question);
+    const type = String(question.type || "").toUpperCase();
+    const studentAnswer = formatAnswerValue(resolveStudentAnswerValue(answer, type));
+    const rawCorrectAnswer = formatAnswerValue(
+      type === "MCQ_MULTI" || type === "MULTI_SELECT"
         ? question.correctOptions
-        : question.correctOption) ??
-      question.correctText ??
-      question.correctBoolean ??
-      "-";
-    const isCorrect =
-      answer &&
-      ((question.type === "MCQ" && answer.selectedOption === question.correctOption) ||
-        (question.type === "TRUE_FALSE" && answer.answerBoolean === question.correctBoolean) ||
-        ((question.type === "FILL_BLANK" || question.type === "PARAGRAPH") &&
-          String(answer.answerText || "").trim().toLowerCase() === String(question.correctText || "").trim().toLowerCase()));
+        : question.correctOption ?? question.correctText ?? question.correctBoolean
+    );
+    const correctAnswer = maskCorrectAnswer(rawCorrectAnswer, submission.test);
+    const isCorrect = isQuestionCorrect(question, answer);
 
     return {
       question_id: question.id,
       prompt: question.prompt,
       student_answer: studentAnswer,
       correct_answer: correctAnswer,
-      marks: isCorrect ? Number(question.marks || 0) : 0,
+      marks: revealQuestionDetails ? (isCorrect ? Number(question.marks || 0) : 0) : null,
       total_marks: Number(question.marks || 0),
-      is_correct: Boolean(isCorrect),
+      is_correct: revealQuestionDetails ? Boolean(isCorrect) : null,
       topic: "-",
     };
   });
@@ -1258,14 +1394,27 @@ const getAttemptResult = asyncHandler(async (req, res) => {
     submission_id: submission.id,
     test_id: submission.testId,
     score: Number(summary.score || submission.score || 0),
+    total_marks: totalMarks,
+    percentage: scorePercent,
+    score_percent: scorePercent,
+    accuracy: scorePercent,
     percentile,
     time_taken: Number(submission.timeSpentSeconds || 0),
-    review_mode: "show_after_deadline",
+    review_mode: reviewMode,
+    test_status: hydratedTest?.status || null,
+    testStatus: hydratedTest?.status || null,
+    is_test_completed: testCompleted,
+    isTestCompleted: testCompleted,
+    can_review_answers: revealQuestionDetails,
+    canReviewAnswers: revealQuestionDetails,
     submit_reason: submission.status === "AUTO_SUBMITTED" ? "AUTO_SUBMITTED" : "STUDENT_SUBMITTED",
     test: {
       id: hydratedTest?.id,
       title: hydratedTest?.title,
       subject: hydratedTest?.subject,
+      status: hydratedTest?.status,
+      test_status: hydratedTest?.status,
+      is_completed: testCompleted,
       end_date: hydratedTest?.endsAt,
       test_type: hydratedTest?.test_type || null,
       proctoring_preset: hydratedTest?.proctoring_preset || null,

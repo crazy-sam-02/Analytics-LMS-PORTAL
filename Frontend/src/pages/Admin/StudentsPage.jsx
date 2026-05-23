@@ -34,14 +34,15 @@ const loadXlsxBrowserLib = () =>
   });
 
 const IMPORT_SAMPLE = [
-  "fullName,email,enrollNumber,department,batch",
-  "Alice Doe,alice@example.com,20261001,Computer Science,CSE-2027-A",
+  "fullName,email,enrollNumber,department,year,batch",
+  "Alice Doe,alice@example.com,20261001,Computer Science,1,CSE-2027-A",
 ].join("\n");
+const YEAR_OPTIONS = ["1", "2", "3", "4"];
 
 export default function StudentsPage() {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
-  const [directoryFilters, setDirectoryFilters] = useState({ departmentId: "", batchId: "" });
+  const [directoryFilters, setDirectoryFilters] = useState({ departmentId: "", batchId: "", year: "" });
   const [page, setPage] = useState(1);
   const [selectedStudentId, setSelectedStudentId] = useState("");
   const [batchIdInput, setBatchIdInput] = useState("");
@@ -54,6 +55,7 @@ export default function StudentsPage() {
     email: "",
     department: "",
     enrollNumber: "",
+    year: "",
     batch: "",
   });
   const [createdCredentials, setCreatedCredentials] = useState(null);
@@ -61,7 +63,7 @@ export default function StudentsPage() {
   const toCell = (value) => String(value ?? "").replace(/,/g, " ").trim();
 
   const rowsToCsv = (rows) => {
-    const header = ["fullName", "email", "studentId", "enrollNumber", "department", "batch"];
+    const header = ["fullName", "email", "studentId", "enrollNumber", "department", "year", "batch"];
     const lines = rows.map((row) => {
       const normalized = {
         fullName: row.fullName ?? row.fullname ?? row.name ?? "",
@@ -69,6 +71,7 @@ export default function StudentsPage() {
         studentId: row.studentId ?? row.studentid ?? row.student_id ?? "",
         enrollNumber: row.enrollNumber ?? row.enrollnumber ?? row.enroll_number ?? "",
         department: row.department ?? row.departmentName ?? row.departmentname ?? "",
+        year: row.year ?? row.studentYear ?? row.studentyear ?? row.student_year ?? "",
         batch: row.batch ?? row.batchName ?? row.batchname ?? "",
       };
       return [
@@ -77,6 +80,7 @@ export default function StudentsPage() {
         toCell(normalized.studentId),
         toCell(normalized.enrollNumber),
         toCell(normalized.department),
+        toCell(normalized.year),
         toCell(normalized.batch),
       ].join(",");
     });
@@ -121,7 +125,7 @@ export default function StudentsPage() {
   };
 
   const studentsQuery = useQuery({
-    queryKey: ["admin-students", search, page, directoryFilters.departmentId, directoryFilters.batchId],
+    queryKey: ["admin-students", search, page, directoryFilters.departmentId, directoryFilters.batchId, directoryFilters.year],
     queryFn: () => {
       const params = new URLSearchParams();
       params.set("limit", "20");
@@ -129,6 +133,7 @@ export default function StudentsPage() {
       if (search.trim()) params.set("search", search.trim());
       if (directoryFilters.departmentId) params.set("departmentId", directoryFilters.departmentId);
       if (directoryFilters.batchId) params.set("batchId", directoryFilters.batchId);
+      if (directoryFilters.year) params.set("year", directoryFilters.year);
       return adminApi.getStudents(`?${params.toString()}`);
     },
   });
@@ -194,7 +199,7 @@ export default function StudentsPage() {
     onSuccess: (payload) => {
       toast.success("Student account created");
       setCreatedCredentials(payload.credentials || null);
-      setStudentForm({ fullName: "", email: "", department: "", enrollNumber: "", batch: "" });
+      setStudentForm({ fullName: "", email: "", department: "", enrollNumber: "", year: "", batch: "" });
       setBanner({ type: "success", title: "Student created", message: "Student can login directly using email and generated password." });
       queryClient.invalidateQueries({ queryKey: ["admin-students"] });
     },
@@ -227,8 +232,8 @@ export default function StudentsPage() {
     const adminDeptId = admin?.department?.id || admin?.departmentId || "";
     setDirectoryFilters((prev) => ({ ...prev, departmentId: prev.departmentId || adminDeptId }));
     // Default student create form department to admin's department name if available
-    if (admin?.department?.name && !studentForm.department) {
-      setStudentForm((prev) => ({ ...prev, department: admin.department.name }));
+    if (admin?.department?.name) {
+      setStudentForm((prev) => (prev.department ? prev : { ...prev, department: admin.department.name }));
     }
   }, [admin]);
   const selectedStudent = studentProfileQuery.data;
@@ -299,13 +304,33 @@ export default function StudentsPage() {
             </select>
             <select
               className="h-10 rounded-md border border-border px-3 text-sm"
+              value={studentForm.year}
+              onChange={(event) => setStudentForm((prev) => ({ ...prev, year: event.target.value }))}
+            >
+              <option value="">Select Year</option>
+              <option value="1">1 YEAR</option>
+              <option value="2">2 YEAR</option>
+              <option value="3">3 YEAR</option>
+              <option value="4">4 YEAR</option>
+            </select>
+            <select
+              className="h-10 rounded-md border border-border px-3 text-sm"
               value={studentForm.batch}
               onChange={(event) => setStudentForm((prev) => ({ ...prev, batch: event.target.value }))}
             >
               <option value="">Select batch (optional)</option>
               {Array.isArray(batches)
                 ? batches
-                    .filter((batch) => !studentForm.department || String(batch.departmentId) === String(studentForm.department) || String(batch.department?.id) === String(studentForm.department))
+                    .filter((batch) => {
+                      if (!studentForm.department) return true;
+                      const selected = String(studentForm.department).toLowerCase();
+                      const batchDeptName = String(batch.department?.name || "").toLowerCase();
+                      return (
+                        String(batch.departmentId) === String(studentForm.department) ||
+                        String(batch.department?.id) === String(studentForm.department) ||
+                        (batchDeptName && batchDeptName === selected)
+                      );
+                    })
                     .map((batch) => (
                       <option key={batch.id} value={batch.id}>{batch.name}</option>
                     ))
@@ -317,14 +342,18 @@ export default function StudentsPage() {
               onChange={(event) => setStudentForm((prev) => ({ ...prev, enrollNumber: event.target.value }))}
             />
           </div>
-          <p className="text-xs text-text-secondary">Student ID is auto-generated by the system. Password rule: First 3 letters of full name (first letter capitalized) + @ + last 3 digits of enroll number.</p>
+          <p className="text-xs text-text-secondary">Student ID uses the entered enroll number exactly. Password rule: First 3 letters of full name (first letter capitalized) + @ + last 3 digits of enroll number.</p>
           <Button
-            onClick={() => createStudentMutation.mutate(studentForm)}
+            onClick={() => createStudentMutation.mutate({
+              ...studentForm,
+              year: studentForm.year ? Number(studentForm.year) : undefined,
+            })}
             disabled={
               createStudentMutation.isPending ||
               !studentForm.fullName.trim() ||
               !studentForm.email.trim() ||
               !studentForm.department.trim() ||
+              !studentForm.year ||
               !studentForm.enrollNumber.trim()
             }
           >
@@ -348,9 +377,9 @@ export default function StudentsPage() {
         <CardContent className="space-y-3">
           <div className="rounded-lg border border-border bg-background p-3 text-xs text-text-secondary">
             <p className="font-semibold text-text-secondary">Excel format (first row headers):</p>
-            <p className="mt-1">fullName, email, enrollNumber, department, batch</p>
-            <p className="mt-1">Optional: studentId (if omitted, system auto-generates it)</p>
-            <p className="mt-1">Example: Alice Doe, alice@example.com, 20261001, Computer Science, CSE-2027-A</p>
+            <p className="mt-1">fullName, email, enrollNumber, department, year, batch</p>
+            <p className="mt-1">Student ID will use the enrollNumber value exactly.</p>
+            <p className="mt-1">Example: Alice Doe, alice@example.com, 20261001, Computer Science, 1, CSE-2027-A</p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
             <Input type="file" accept=".xlsx,.xls,.csv" onChange={handleImportFile} className="max-w-md" />
@@ -384,7 +413,7 @@ export default function StudentsPage() {
           <CardDescription>Search/filter, inspect profile, reassign batch, and monitor bulk-import jobs.</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="mb-4 grid gap-2 md:grid-cols-4">
+          <div className="mb-4 grid gap-2 md:grid-cols-5">
             <Input placeholder="Search by name/email" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} />
             <select
               className="h-10 rounded-md border border-border px-3 text-sm"
@@ -421,6 +450,19 @@ export default function StudentsPage() {
                     ))
                 : null}
             </select>
+            <select
+              className="h-10 rounded-md border border-border px-3 text-sm"
+              value={directoryFilters.year}
+              onChange={(event) => {
+                setDirectoryFilters((prev) => ({ ...prev, year: event.target.value }));
+                setPage(1);
+              }}
+            >
+              <option value="">All years</option>
+              {YEAR_OPTIONS.map((year) => (
+                <option key={year} value={year}>{year} YEAR</option>
+              ))}
+            </select>
             <Button variant="outline" onClick={() => studentsQuery.refetch()}>Search</Button>
           </div>
           <div className="grid gap-6 xl:grid-cols-[1fr_1.2fr]">
@@ -454,7 +496,7 @@ export default function StudentsPage() {
                     </div>
                     <div className="text-right text-xs text-text-secondary">
                       <p>{student.department?.name || "-"}</p>
-                      <p className="max-w-[140px] truncate">{batchLabel}</p>
+                      <p className="max-w-35 truncate">{batchLabel}</p>
                     </div>
                   </button>
                 );
@@ -484,6 +526,7 @@ export default function StudentsPage() {
                   <p className="text-base font-semibold text-text-primary">{selectedStudent.fullName}</p>
                   <p className="text-xs text-text-secondary">{selectedStudent.email} • {selectedStudent.studentId}</p>
                   <p className="text-xs text-text-secondary">Department: {selectedStudent.department?.name || "-"}</p>
+                  <p className="text-xs text-text-secondary">Year: {selectedStudent.year ? `${selectedStudent.year} YEAR` : "-"}</p>
                   <p className="text-xs text-text-secondary">Total submissions: {selectedStudent._count?.submissions || 0}</p>
                   {Array.isArray(selectedStudent.batches) && selectedStudent.batches.length > 0 ? (
                     <div className="border-t border-border pt-2">

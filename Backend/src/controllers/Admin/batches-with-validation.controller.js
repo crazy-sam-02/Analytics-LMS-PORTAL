@@ -34,6 +34,14 @@ const parseCsv = (csvText) => {
   });
 };
 
+const getAdminDepartmentId = (req) => {
+  const departmentId = req.admin?.departmentId || null;
+  if (!departmentId) {
+    throw new ApiError(403, "Admin is not linked to a department", null, "ADMIN_DEPARTMENT_REQUIRED");
+  }
+  return departmentId;
+};
+
 /**
  * Get all batches
  */
@@ -41,9 +49,10 @@ const getBatches = asyncHandler(async (req, res) => {
   const m = await models.init();
   const db = m.dbClient;
   const collegeId = req.collegeId;
+  const departmentId = getAdminDepartmentId(req);
 
   const batches = await db.batch.findMany({
-    where: { collegeId },
+    where: { collegeId, departmentId },
     include: {
       department: true,
       _count: {
@@ -67,9 +76,10 @@ const getBatchDetail = asyncHandler(async (req, res) => {
   const db = m.dbClient;
   const collegeId = req.collegeId;
   const { batchId } = req.params;
+  const departmentId = getAdminDepartmentId(req);
 
   const batch = await db.batch.findFirst({
-    where: { id: batchId, collegeId },
+    where: { id: batchId, collegeId, departmentId },
     include: {
       department: true,
       students: {
@@ -113,23 +123,94 @@ const createBatchHandler = asyncHandler(async (req, res) => {
   const db = m.dbClient;
   const collegeId = req.collegeId;
   const adminId = req.admin.id;
+  const adminDepartmentId = getAdminDepartmentId(req);
+  const { name, year, departmentId, studentIds = [] } = req.body;
 
   try {
-    const batch = await createBatch(
-      {
-        name: req.body.name,
-        departmentId: req.body.departmentId,
-        capacity: req.body.capacity,
-        academicYear: req.body.academicYear,
-        section: req.body.section,
+    if (String(departmentId) !== String(adminDepartmentId)) {
+      throw new ApiError(403, "Admins can create batches only in their own department", null, "CROSS_DEPARTMENT_ACCESS_DENIED");
+    }
+
+    const duplicate = await db.batch.findFirst({
+      where: {
+        collegeId,
+        departmentId,
+        year,
+        name: {
+          equals: name,
+          mode: "insensitive",
+        },
       },
+    });
+
+    if (duplicate) {
+      throw new ApiError(409, "Duplicate batch name for the same department and academic year", null, "BATCH_DUPLICATE_NAME");
+    }
+
+    const department = await db.department.findFirst({
+      where: { id: departmentId, collegeId },
+    });
+
+    if (!department) {
+      throw new ApiError(422, "Invalid department for this college");
+    }
+
+    const batch = await db.batch.create({
+      data: {
+        name,
+        year,
+        departmentId,
+        collegeId,
+      },
+    });
+
+    const uniqueStudentIds = [...new Set((studentIds || []).map((id) => String(id)).filter(Boolean))];
+    if (uniqueStudentIds.length > 0) {
+      const students = await db.student.findMany({
+        where: {
+          id: { in: uniqueStudentIds },
+          collegeId,
+          departmentId,
+        },
+        select: { id: true, batchIds: true, batchId: true },
+      });
+
+      await db.$transaction(
+        students.map((student) => {
+          const merged = [...new Set([
+            ...(Array.isArray(student.batchIds) ? student.batchIds : []),
+            student.batchId,
+            batch.id,
+          ].filter(Boolean).map((id) => String(id)))];
+
+          return db.student.update({
+            where: { id: student.id },
+            data: {
+              batchIds: merged,
+              batchId: batch.id,
+              departmentId,
+            },
+          });
+        })
+      );
+    }
+
+    await createAuditLog({
+      action: "ADMIN_BATCH_CREATED",
+      targetType: "BATCH",
+      targetId: batch.id,
       collegeId,
-      adminId
-    );
+      adminId,
+      afterState: {
+        name: batch.name,
+        year: batch.year,
+        departmentId: batch.departmentId,
+      },
+    });
 
     res.status(201).json({
+      ...batch,
       success: true,
-      batch,
       message: "Batch created successfully",
     });
   } catch (error) {

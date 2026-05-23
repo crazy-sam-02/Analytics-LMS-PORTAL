@@ -22,10 +22,7 @@ export const fetchCurrentSuperAdmin = createAsyncThunk("superAdminAuth/me", asyn
 });
 
 export const logoutSuperAdmin = createAsyncThunk("superAdminAuth/logout", async () => {
-  const refreshToken = superAdminTokenStorage.getRefresh();
-  if (refreshToken) {
-    await superAdminApi.logout(refreshToken);
-  }
+  await superAdminApi.logout(superAdminTokenStorage.getRefresh());
   superAdminTokenStorage.clear();
   return null;
 });

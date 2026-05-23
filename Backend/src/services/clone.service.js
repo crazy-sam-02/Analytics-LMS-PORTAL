@@ -7,6 +7,15 @@ const {
   CloneMappingValidation,
 } = require("../models/validation");
 const { resolvePersistedTestConfiguration } = require("../services/test-config.service");
+const DEFAULT_STUDENT_YEARS = [1, 2, 3, 4];
+
+const normalizeStudentYears = (years) => {
+  const source = Array.isArray(years) ? years : DEFAULT_STUDENT_YEARS;
+  const normalized = [...new Set(source
+    .map((year) => Number(year))
+    .filter((year) => Number.isInteger(year) && year >= 1 && year <= 4))];
+  return normalized.length ? normalized.sort((a, b) => a - b) : DEFAULT_STUDENT_YEARS;
+};
 
 // Helper to generate a non-colliding title within a college.
 async function generateUniqueTitle(tx, baseTitle, collegeId) {
@@ -35,7 +44,7 @@ async function generateUniqueTitle(tx, baseTitle, collegeId) {
  * Clone a test into a destination college (used by super-admin).
  * Ensures deep copy of questions and batch assignments, records clone mapping.
  */
-async function cloneTestToCollege({ sourceTestId, destinationCollegeId, assignmentMethod = "batch_wise", departmentIds = [], batchIds = [], superAdminId }) {
+async function cloneTestToCollege({ sourceTestId, destinationCollegeId, assignmentMethod = "batch_wise", departmentIds = [], batchIds = [], years = null, superAdminId }) {
   const m = await models.init();
   const db = m.dbClient;
 
@@ -92,6 +101,7 @@ async function cloneTestToCollege({ sourceTestId, destinationCollegeId, assignme
       status: "DRAFT",
       isGlobal: source.isGlobal,
       assignmentMethod,
+      years: normalizeStudentYears(years || source.years),
       assignedTo: assignmentMethod === "department_wise" ? resolvedDepartmentIds : [],
       sourceTestId: source.id,
       collegeId: destinationCollegeId,
@@ -147,7 +157,7 @@ async function cloneTestToCollege({ sourceTestId, destinationCollegeId, assignme
 /**
  * Clone a test within the same college (admin-level clone across departments).
  */
-async function cloneTestWithinCollege({ sourceTestId, collegeId, assignmentMethod = "department_wise", departmentId = null, batchIds = [], adminId }) {
+async function cloneTestWithinCollege({ sourceTestId, collegeId, assignmentMethod = "department_wise", departmentId = null, batchIds = [], years = null, adminId }) {
   const m = await models.init();
   const db = m.dbClient;
 
@@ -188,6 +198,7 @@ async function cloneTestWithinCollege({ sourceTestId, collegeId, assignmentMetho
       status: "DRAFT",
       isGlobal: source.isGlobal,
       assignmentMethod,
+      years: normalizeStudentYears(years || source.years),
       sourceTestId: source.id,
       collegeId,
       departmentId: resolvedDepartmentId || null,

@@ -1,9 +1,11 @@
 const bcrypt = require("bcrypt");
+const crypto = require("crypto");
 const mongoose = require("mongoose");
 const models = require("../../models");
 const { createAuditLog } = require("../../services/audit.service");
 const { ApiError, asyncHandler } = require("../../utils/http");
 const { ADMIN_ACCESS_PROFILES, resolvePermissionsFromProfile } = require("../../constants/admin-access-profiles");
+const { getPagination } = require("../../utils/pagination");
 
 const resolveAdminById = async (Admin, adminId) => {
   const byId = await Admin.findUnique({ where: { id: adminId } });
@@ -26,17 +28,63 @@ const resolveAdminUpdateWhere = (adminId, existing) => {
   return { _id: adminId };
 };
 
+const generateTemporaryPassword = () => {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*";
+  const bytes = crypto.randomBytes(18);
+  return Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("");
+};
+
+const parseCsvRecords = (csvText) => {
+  const records = [];
+  let row = [];
+  let cell = "";
+  let inQuotes = false;
+  const text = String(csvText || "");
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+
+    if (char === "\"") {
+      if (inQuotes && next === "\"") {
+        cell += "\"";
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (char === "," && !inQuotes) {
+      row.push(cell.trim());
+      cell = "";
+      continue;
+    }
+
+    if ((char === "\n" || char === "\r") && !inQuotes) {
+      if (char === "\r" && next === "\n") index += 1;
+      row.push(cell.trim());
+      if (row.some(Boolean)) records.push(row);
+      row = [];
+      cell = "";
+      continue;
+    }
+
+    cell += char;
+  }
+
+  row.push(cell.trim());
+  if (row.some(Boolean)) records.push(row);
+  return records;
+};
+
 const parseCsv = (csvText) => {
-  const rows = String(csvText || "")
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
+  const rows = parseCsvRecords(csvText);
 
   if (rows.length === 0) return [];
 
-  const headers = rows[0].split(",").map((value) => value.trim().toLowerCase());
-  return rows.slice(1).map((line, rowIndex) => {
-    const values = line.split(",").map((value) => value.trim());
+  const headers = rows[0].map((value) => value.trim().toLowerCase());
+  return rows.slice(1).map((values, rowIndex) => {
     const record = { __row: rowIndex + 2 };
     headers.forEach((key, index) => {
       record[key] = values[index] || "";
@@ -58,8 +106,7 @@ const getRowValue = (row, aliases = []) => {
 };
 
 const getAdmins = asyncHandler(async (req, res) => {
-  const page = Number(req.query.page || 1);
-  const limit = Number(req.query.limit || 20);
+  const { page, limit, skip } = getPagination(req.query);
   const search = (req.query.search || "").trim();
   const collegeId = req.query.collegeId;
   const status = String(req.query.status || "").trim().toLowerCase();
@@ -91,7 +138,7 @@ const getAdmins = asyncHandler(async (req, res) => {
       return m.dbClient.admin.findMany({
         where,
         orderBy: { createdAt: "desc" },
-        skip: (page - 1) * limit,
+        skip,
         take: limit,
       });
     })(),
@@ -264,7 +311,8 @@ const resetAdminPassword = asyncHandler(async (req, res) => {
     throw new ApiError(404, "Admin not found");
   }
 
-  const passwordHash = await bcrypt.hash(req.body.password, 10);
+  const temporaryPassword = req.body.password || generateTemporaryPassword();
+  const passwordHash = await bcrypt.hash(temporaryPassword, 10);
   await Admin.update({
     where: resolveAdminUpdateWhere(adminId, existing),
     data: { passwordHash },
@@ -278,7 +326,10 @@ const resetAdminPassword = asyncHandler(async (req, res) => {
     superAdminId: req.superAdmin.id,
   });
 
-  res.status(200).json({ message: "Admin password reset" });
+  res.status(200).json({
+    message: "Admin password reset",
+    temporaryPassword: req.body.password ? undefined : temporaryPassword,
+  });
 });
 
 const deleteAdmin = asyncHandler(async (req, res) => {

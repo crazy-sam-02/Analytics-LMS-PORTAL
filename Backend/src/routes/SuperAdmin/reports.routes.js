@@ -1,9 +1,12 @@
 const express = require("express");
+const env = require("../../config/env");
 const validate = require("../../middleware/validate");
 const { authenticateSuperAdmin } = require("../../middleware/auth");
+const { createRateLimiter } = require("../../middleware/rate-limit");
 const { createSuperReportSchema, reportJobParamSchema } = require("../../schemas/SuperAdmin/super-admin-core.schema");
 const {
 	generateSuperReport,
+	getSuperReportAnalytics,
 	getSuperReportJobs,
 	downloadSuperReport,
 	regenerateSuperReportLink,
@@ -12,10 +15,20 @@ const {
 
 const router = express.Router();
 
-router.post("/generate", authenticateSuperAdmin, validate(createSuperReportSchema), generateSuperReport);
-router.get("/", authenticateSuperAdmin, getSuperReportJobs);
-router.get("/anomalies/escalations", authenticateSuperAdmin, getEscalatedAnomalies);
-router.post("/jobs/:reportJobId/regenerate-link", authenticateSuperAdmin, validate(reportJobParamSchema), regenerateSuperReportLink);
-router.get("/:reportJobId/download", authenticateSuperAdmin, validate(reportJobParamSchema), downloadSuperReport);
+const superReportLimiter = createRateLimiter({
+	scope: "super-report",
+	routeLabel: "/api/super-admin/reports/*",
+	windowMs: env.rateLimit.superReportWindowMs,
+	max: env.rateLimit.superReportMax,
+	failOpen: false,
+	message: "Super admin reports are rate limited. Please wait a moment and retry.",
+});
+
+router.post("/generate", authenticateSuperAdmin, superReportLimiter, validate(createSuperReportSchema), generateSuperReport);
+router.get("/", authenticateSuperAdmin, superReportLimiter, getSuperReportJobs);
+router.get("/analytics", authenticateSuperAdmin, superReportLimiter, getSuperReportAnalytics);
+router.get("/anomalies/escalations", authenticateSuperAdmin, superReportLimiter, getEscalatedAnomalies);
+router.post("/jobs/:reportJobId/regenerate-link", authenticateSuperAdmin, superReportLimiter, validate(reportJobParamSchema), regenerateSuperReportLink);
+router.get("/:reportJobId/download", authenticateSuperAdmin, superReportLimiter, validate(reportJobParamSchema), downloadSuperReport);
 
 module.exports = router;

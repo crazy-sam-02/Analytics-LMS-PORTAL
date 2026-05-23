@@ -1,11 +1,13 @@
 const models = require("../../models");
 const { createAuditLog } = require("../../services/audit.service");
+const { completeSubmission } = require("../../services/test.service");
 const { ApiError, asyncHandler } = require("../../utils/http");
 const {
   attachResolvedTestConfiguration,
   resolvePersistedTestConfiguration,
 } = require("../../services/test-config.service");
 const { cloneTestToCollege: cloneServiceToCollege } = require("../../services/clone.service");
+const { getPagination } = require("../../utils/pagination");
 
 const TEST_STATUS = {
   DRAFT: "DRAFT",
@@ -33,6 +35,15 @@ const ALLOWED_TRANSITIONS = {
   [TEST_STATUS.LIVE]: [TEST_STATUS.COMPLETED, TEST_STATUS.ARCHIVED],
   [TEST_STATUS.COMPLETED]: [TEST_STATUS.ARCHIVED],
   [TEST_STATUS.ARCHIVED]: [],
+};
+const DEFAULT_STUDENT_YEARS = [1, 2, 3, 4];
+
+const normalizeStudentYears = (years) => {
+  const source = Array.isArray(years) ? years : DEFAULT_STUDENT_YEARS;
+  const normalized = [...new Set(source
+    .map((year) => Number(year))
+    .filter((year) => Number.isInteger(year) && year >= 1 && year <= 4))];
+  return normalized.length ? normalized.sort((a, b) => a - b) : DEFAULT_STUDENT_YEARS;
 };
 
 const deriveLifecycleStatus = (test, now = new Date()) => {
@@ -137,8 +148,7 @@ const transitionAuditAction = (action) => {
 const getTestsGlobal = asyncHandler(async (req, res) => {
   const m = await models.init();
   const db = m.dbClient;
-  const page = Number(req.query.page || 1);
-  const limit = Number(req.query.limit || 20);
+  const { page, limit, skip } = getPagination(req.query);
   const collegeId = req.query.collegeId;
   const search = (req.query.search || "").trim();
   const status = (req.query.status || "").trim().toUpperCase();
@@ -184,7 +194,7 @@ const getTestsGlobal = asyncHandler(async (req, res) => {
         },
       },
       orderBy: { createdAt: "desc" },
-      skip: (page - 1) * limit,
+      skip,
       take: limit,
     }),
     db.test.count({ where }),
@@ -261,8 +271,11 @@ const createGlobalTest = asyncHandler(async (req, res) => {
   const payload = req.body;
   let collegeIds = Array.isArray(payload.collegeIds) ? payload.collegeIds : [];
   const assignmentMethod = payload.assignmentMethod || "department_wise";
+  const years = normalizeStudentYears(payload.years);
   const requestedBatchIds = Array.isArray(payload.batchIds) ? payload.batchIds : [];
-  const requestedDepartmentIds = Array.isArray(payload.departmentIds) ? payload.departmentIds : [];
+  const requestedDepartmentIds = assignmentMethod === "department_wise"
+    ? (Array.isArray(payload.departmentIds) ? payload.departmentIds : [])
+    : [];
   const resolvedTestConfiguration = resolvePersistedTestConfiguration({
     testType: payload.testType,
     proctoringPreset: payload.proctoringPreset,
@@ -447,6 +460,7 @@ const createGlobalTest = asyncHandler(async (req, res) => {
         status: TEST_STATUS.SCHEDULED,
         isGlobal: true,
         assignmentMethod,
+        years,
         assignedTo: assignedDepartmentIds,
         collegeId,
         batchId: resolvedBatchIds[0] || null,
@@ -512,10 +526,8 @@ const createGlobalTest = asyncHandler(async (req, res) => {
 });
 
 const cloneTestToCollege = asyncHandler(async (req, res) => {
-  const m = await models.init();
-  const db = m.dbClient;
   const { testId } = req.params;
-  const { destinationCollegeId, assignmentMethod = "batch_wise", departmentIds = [], batchIds = [] } = req.body;
+  const { destinationCollegeId, assignmentMethod = "batch_wise", departmentIds = [], batchIds = [], years } = req.body;
 
   // Validate destination college is provided
   if (!destinationCollegeId) {
@@ -544,6 +556,7 @@ const cloneTestToCollege = asyncHandler(async (req, res) => {
     assignmentMethod,
     departmentIds: Array.isArray(departmentIds) ? departmentIds : [],
     batchIds: Array.isArray(batchIds) ? batchIds : [],
+    years,
     superAdminId: req.superAdmin.id,
   });
 
@@ -636,6 +649,7 @@ const updateGlobalTest = asyncHandler(async (req, res) => {
   targetCollegeIds = [...new Set(targetCollegeIds.filter(Boolean))];
 
   const assignmentMethod = payload.assignmentMethod || "department_wise";
+  const years = normalizeStudentYears(payload.years);
   const selectedDepartmentIds = assignmentMethod === "department_wise"
     ? [...new Set((Array.isArray(payload.departmentIds) ? payload.departmentIds : []).filter(Boolean))]
     : [];
@@ -782,6 +796,7 @@ const updateGlobalTest = asyncHandler(async (req, res) => {
             attemptsAllowed: payload.attemptsAllowed,
             evaluationRule: payload.evaluationRule,
             assignmentMethod,
+            years,
             assignedTo: resolvedScope.assignedTo || [],
             startsAt,
             endsAt,
@@ -814,6 +829,7 @@ const updateGlobalTest = asyncHandler(async (req, res) => {
             isGlobal: true,
             sourceTestId: rootSourceId,
             assignmentMethod,
+            years,
             assignedTo: resolvedScope.assignedTo || [],
             collegeId,
             departmentId: assignmentMethod === "department_wise" ? resolvedScope.departmentId : null,
@@ -945,14 +961,30 @@ const transitionGlobalTestStatus = asyncHandler(async (req, res) => {
   }
 
   assertTransition(currentStatus, nextStatus);
+  const transitionedAt = new Date();
 
   const updated = await db.test.update({
     where: { id: testId },
     data: {
       status: nextStatus,
       isPublished: nextStatus !== TEST_STATUS.ARCHIVED,
+      endsAt: action === TRANSITION_ACTION.COMPLETE ? transitionedAt : existing.endsAt,
     },
   });
+  const completedSubmissions = action === TRANSITION_ACTION.COMPLETE
+    ? await db.submission.findMany({
+        where: { testId, status: "IN_PROGRESS" },
+        select: { id: true },
+      })
+    : [];
+
+  if (completedSubmissions.length > 0) {
+    await Promise.all(
+      completedSubmissions.map((submission) =>
+        completeSubmission({ submissionId: submission.id, autoSubmitted: true })
+      )
+    );
+  }
 
   await createAuditLog({
     action: transitionAuditAction(action),
@@ -963,10 +995,13 @@ const transitionGlobalTestStatus = asyncHandler(async (req, res) => {
     beforeState: {
       status: currentStatus,
       isPublished: existing.isPublished,
+      endsAt: existing.endsAt,
     },
     afterState: {
       status: updated.status,
       isPublished: updated.isPublished,
+      endsAt: updated.endsAt,
+      autoSubmittedAttempts: completedSubmissions.length,
       transitionAction: action,
     },
     testId: updated.id,

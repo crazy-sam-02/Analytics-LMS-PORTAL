@@ -3,6 +3,7 @@ import { setAccessToken } from "@/services/httpClient";
 import { studentApi } from "@/services/studentApi";
 
 const ACCESS_TOKEN_KEY = "student_access_token";
+const REFRESH_TOKEN_KEY = "student_refresh_token";
 const SESSION_KEY = "student_session_id";
 const LEGACY_SESSION_KEY = "session_id";
 const USER_KEY = "student_user";
@@ -28,6 +29,27 @@ const safeWriteStorage = (key, value) => {
   }
 };
 
+const safeReadSessionStorage = (key) => {
+  try {
+    return sessionStorage.getItem(key);
+  } catch {
+    return null;
+  }
+};
+
+const safeWriteSessionStorage = (key, value) => {
+  try {
+    if (value === null || value === undefined || value === "") {
+      sessionStorage.removeItem(key);
+      return;
+    }
+
+    sessionStorage.setItem(key, value);
+  } catch {
+    // Ignore storage failures.
+  }
+};
+
 const readPersistedUser = () => {
   const raw = safeReadStorage(USER_KEY);
   if (!raw) {
@@ -41,8 +63,13 @@ const readPersistedUser = () => {
   }
 };
 
-const persistStudentAuth = ({ accessToken = null, sessionId = null, user = null }) => {
-  safeWriteStorage(ACCESS_TOKEN_KEY, accessToken || null);
+const persistStudentAuth = ({ accessToken = null, refreshToken = undefined, sessionId = null, user = null }) => {
+  safeWriteStorage(ACCESS_TOKEN_KEY, null);
+  safeWriteSessionStorage(ACCESS_TOKEN_KEY, accessToken || null);
+  if (refreshToken !== undefined) {
+    safeWriteStorage(REFRESH_TOKEN_KEY, refreshToken || null);
+    safeWriteSessionStorage(REFRESH_TOKEN_KEY, refreshToken || null);
+  }
   safeWriteStorage(SESSION_KEY, sessionId || null);
   safeWriteStorage(LEGACY_SESSION_KEY, sessionId || null);
   safeWriteStorage(USER_KEY, user ? JSON.stringify(user) : null);
@@ -50,14 +77,12 @@ const persistStudentAuth = ({ accessToken = null, sessionId = null, user = null 
 
 const clearPersistedStudentAuth = () => {
   safeWriteStorage(ACCESS_TOKEN_KEY, null);
+  safeWriteSessionStorage(ACCESS_TOKEN_KEY, null);
+  safeWriteStorage(REFRESH_TOKEN_KEY, null);
+  safeWriteSessionStorage(REFRESH_TOKEN_KEY, null);
   safeWriteStorage(SESSION_KEY, null);
   safeWriteStorage(LEGACY_SESSION_KEY, null);
   safeWriteStorage(USER_KEY, null);
-};
-
-const persistSessionId = (sessionId) => {
-  safeWriteStorage(SESSION_KEY, sessionId || null);
-  safeWriteStorage(LEGACY_SESSION_KEY, sessionId || null);
 };
 
 const isDefinitiveRefreshFailure = (error) => {
@@ -68,8 +93,12 @@ const isDefinitiveRefreshFailure = (error) => {
   return status === 400 || status === 401 || status === 403 || /refresh token required|invalid refresh token/i.test(message) || code === "INVALID_REFRESH_TOKEN";
 };
 
-const persistedAccessToken = safeReadStorage(ACCESS_TOKEN_KEY);
+const readPersistedRefreshToken = () => safeReadStorage(REFRESH_TOKEN_KEY) || safeReadSessionStorage(REFRESH_TOKEN_KEY);
+
 const persistedSessionId = safeReadStorage(SESSION_KEY) || safeReadStorage(LEGACY_SESSION_KEY);
+const persistedAccessToken = safeReadSessionStorage(ACCESS_TOKEN_KEY) || null;
+safeWriteStorage(ACCESS_TOKEN_KEY, null);
+setAccessToken(persistedAccessToken);
 
 const initialState = {
   accessToken: persistedAccessToken,
@@ -88,6 +117,7 @@ export const loginStudent = createAsyncThunk("auth/login", async (payload, { rej
     setAccessToken(data.accessToken || null);
     persistStudentAuth({
       accessToken: data.accessToken || null,
+      refreshToken: payload?.keepLoggedIn === false ? null : data.refreshToken || undefined,
       sessionId: data.sessionId || null,
       user: data.user || null,
     });
@@ -132,10 +162,14 @@ export const loginStudent = createAsyncThunk("auth/login", async (payload, { rej
 
 export const refreshSession = createAsyncThunk("auth/refresh", async (_, { rejectWithValue }) => {
   try {
-    const data = await studentApi.refreshSession();
+    const persistedRefreshToken = readPersistedRefreshToken();
+    const data = await studentApi.refreshSession({
+      ...(persistedRefreshToken ? { refreshToken: persistedRefreshToken } : {}),
+    });
     setAccessToken(data.accessToken || null);
     persistStudentAuth({
       accessToken: data.accessToken || null,
+      refreshToken: data.refreshToken || undefined,
       sessionId: data.sessionId || null,
       user: data.user || null,
     });
@@ -177,7 +211,7 @@ export const fetchCurrentUser = createAsyncThunk("auth/me", async (_, { rejectWi
 
 export const logoutStudent = createAsyncThunk("auth/logout", async () => {
   try {
-    await studentApi.logout();
+    await studentApi.logout({});
   } finally {
     setAccessToken(null);
     clearPersistedStudentAuth();

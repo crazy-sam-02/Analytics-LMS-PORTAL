@@ -15,6 +15,7 @@ const {
   toggleStudentStatus,
 } = require("../../services/student.service");
 const { getMetricsSnapshot } = require("../../services/validation-monitoring.service");
+const { getPagination } = require("../../utils/pagination");
 
 const parseCsv = (csvText) => {
   const rows = String(csvText || "")
@@ -42,8 +43,7 @@ const getStudents = asyncHandler(async (req, res) => {
   const m = await models.init();
   const db = m.dbClient;
   const collegeId = req.collegeId;
-  const page = Number(req.query.page || 1);
-  const limit = Number(req.query.limit || 20);
+  const { page, limit, skip } = getPagination(req.query);
 
   const where = {
     collegeId,
@@ -72,6 +72,13 @@ const getStudents = asyncHandler(async (req, res) => {
     });
   }
 
+  if (req.query.year) {
+    const year = Number(req.query.year);
+    if (Number.isInteger(year) && year >= 1 && year <= 4) {
+      filters.push({ year });
+    }
+  }
+
   if (filters.length > 0) {
     where.AND = filters;
   }
@@ -90,7 +97,7 @@ const getStudents = asyncHandler(async (req, res) => {
         },
       },
       orderBy: { createdAt: "desc" },
-      skip: (page - 1) * limit,
+      skip,
       take: limit,
     }),
   ]);
@@ -134,6 +141,7 @@ const createStudentHandler = asyncHandler(async (req, res) => {
         fullName: req.body.fullName,
         email: req.body.email,
         enrollmentNumber: req.body.enrollNumber,
+        year: req.body.year,
         departmentId: req.body.departmentId,
         batchId: req.body.batchId,
       },
@@ -185,6 +193,7 @@ const bulkImportStudentsHandler = asyncHandler(async (req, res) => {
         fullName: row.fullname || row.name || "",
         email: row.email || "",
         enrollmentNumber: row.enrollnumber || row.enroll_number || "",
+        year: row.year || "",
         departmentId: row.departmentid || "",
         batchId: row.batchid || null,
       })),

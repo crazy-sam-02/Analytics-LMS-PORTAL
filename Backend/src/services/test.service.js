@@ -8,22 +8,93 @@ const SubmissionStatus = {
 
 const normalize = (value) => String(value || "").trim().toLowerCase();
 
-const isQuestionCorrect = (question, answer) => {
+const parseOptions = (value) => {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item));
+  }
+
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) {
+        return parsed.map((item) => String(item));
+      }
+    } catch {
+      // Fall through to comma-separated parsing.
+    }
+
+    return value
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  return [];
+};
+
+const compareOptionSets = (actual, expected) => {
+  const actualSet = new Set(parseOptions(actual).map((item) => normalize(item)));
+  const expectedSet = new Set(parseOptions(expected).map((item) => normalize(item)));
+
+  if (actualSet.size !== expectedSet.size) return false;
+  return [...actualSet].every((item) => expectedSet.has(item));
+};
+
+const getAnswerQuestionId = (answer = {}) => answer.questionId || answer.question_id || null;
+
+const getAnswerSelectedOption = (answer = {}) => answer.selectedOption ?? answer.selected_option ?? null;
+
+const getAnswerSelectedOptions = (answer = {}) => {
+  if (Array.isArray(answer.selectedOptions)) return answer.selectedOptions;
+  if (Array.isArray(answer.selected_options)) return answer.selected_options;
+  return [];
+};
+
+const getAnswerBoolean = (answer = {}) => {
+  if (typeof answer.answerBoolean === "boolean") return answer.answerBoolean;
+  if (typeof answer.selectedBoolean === "boolean") return answer.selectedBoolean;
+  if (typeof answer.answer_boolean === "boolean") return answer.answer_boolean;
+  if (typeof answer.selected_boolean === "boolean") return answer.selected_boolean;
+  return null;
+};
+
+const getAnswerText = (answer = {}) =>
+  answer.answerText ?? answer.selectedText ?? answer.answer_text ?? answer.selected_text ?? null;
+
+const findAnswerForQuestion = (answers = [], question = {}) => {
+  const questionIds = [question.id, question.sourceQuestionId, question.source_question_id]
+    .filter(Boolean)
+    .map((item) => String(item));
+
+  return (answers || []).find((answer) => questionIds.includes(String(getAnswerQuestionId(answer)))) || null;
+};
+
+const isAnswerProvided = (answer) => {
   if (!answer) return false;
+  if (normalize(getAnswerSelectedOption(answer))) return true;
+  if (getAnswerSelectedOptions(answer).length > 0) return true;
+  if (typeof getAnswerBoolean(answer) === "boolean") return true;
+  return Boolean(normalize(getAnswerText(answer)));
+};
 
-  if (question.type === "MCQ" || question.type === "SINGLE_SELECT") {
-    return normalize(answer.selectedOption) === normalize(question.correctOption);
+const isQuestionCorrect = (question, answer) => {
+  if (!isAnswerProvided(answer)) return false;
+
+  const type = String(question?.type || "").toUpperCase();
+
+  if (type === "MCQ" || type === "MCQ_SINGLE" || type === "SINGLE_SELECT") {
+    return normalize(getAnswerSelectedOption(answer)) === normalize(question.correctOption);
   }
 
-  if (question.type === "TRUE_FALSE") {
-    const resolvedBoolean = typeof answer.answerBoolean === "boolean"
-      ? answer.answerBoolean
-      : answer.selectedBoolean;
-    return resolvedBoolean === question.correctBoolean;
+  if (type === "MCQ_MULTI" || type === "MULTI_SELECT") {
+    return compareOptionSets(getAnswerSelectedOptions(answer), question.correctOptions);
   }
 
-  const resolvedText = answer.answerText ?? answer.selectedText;
-  return normalize(resolvedText) === normalize(question.correctText);
+  if (type === "TRUE_FALSE" || type === "BOOLEAN") {
+    return getAnswerBoolean(answer) === question.correctBoolean;
+  }
+
+  return normalize(getAnswerText(answer)) === normalize(question.correctText);
 };
 
 const calculateSubmissionScore = async (submissionId) => {
@@ -49,17 +120,18 @@ const calculateSubmissionScore = async (submissionId) => {
   const answers = Array.isArray(submission.answers) ? submission.answers : [];
   const totalQuestions = questions.length;
   const totalMarks = questions.reduce((acc, q) => acc + Number(q?.marks || 0), 0);
+  const providedAnswerCount = answers.filter(isAnswerProvided).length;
 
   let scoredMarks = 0;
   for (const question of questions) {
-    const answer = answers.find((item) => item.questionId === question.id);
+    const answer = findAnswerForQuestion(answers, question);
     if (isQuestionCorrect(question, answer)) {
       scoredMarks += Number(question?.marks || 0);
     }
   }
 
   const accuracy = totalMarks > 0 ? (scoredMarks / totalMarks) * 100 : 0;
-  const completion = totalQuestions > 0 ? (answers.length / totalQuestions) * 100 : 0;
+  const completion = totalQuestions > 0 ? (providedAnswerCount / totalQuestions) * 100 : 0;
 
   return {
     score: Number(scoredMarks.toFixed(2)),
@@ -137,4 +209,12 @@ const completeSubmission = async ({ submissionId, autoSubmitted = false }) => {
 module.exports = {
   calculateSubmissionScore,
   completeSubmission,
+  compareOptionSets,
+  findAnswerForQuestion,
+  getAnswerBoolean,
+  getAnswerSelectedOption,
+  getAnswerSelectedOptions,
+  getAnswerText,
+  isAnswerProvided,
+  isQuestionCorrect,
 };

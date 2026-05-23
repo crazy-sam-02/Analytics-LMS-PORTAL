@@ -76,6 +76,11 @@ export default function DepartmentsPage() {
   const activeColleges = useMemo(() => colleges.filter((college) => college?.isActive !== false), [colleges]);
 
   const loadDepartments = async (targetPage = page) => {
+    if (!filters.collegeId) {
+      setDepartmentsPayload({ data: [], pagination: null });
+      setPage(1);
+      return;
+    }
     try {
       setLoading(true);
       const params = new URLSearchParams();
@@ -95,9 +100,9 @@ export default function DepartmentsPage() {
   };
 
   useEffect(() => {
-    loadDepartments();
+    loadDepartments(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [filters.collegeId]);
 
   const createDepartment = async () => {
     if (!form.name.trim() || !form.collegeId) {
@@ -288,13 +293,17 @@ export default function DepartmentsPage() {
                 <option key={college.id} value={college.id}>{college.name}</option>
               ))}
             </select>
-            <Button variant="outline" onClick={() => loadDepartments(1)} disabled={loading}>
+            <Button variant="outline" onClick={() => loadDepartments(1)} disabled={loading || !filters.collegeId}>
               {loading ? "Loading..." : "Search"}
             </Button>
           </div>
 
           <div className="space-y-2">
-            {!loading && departments.length === 0 ? <p className="text-sm text-text-secondary">No departments found.</p> : null}
+            {!filters.collegeId ? (
+              <p className="text-sm text-text-secondary">Select a college to view departments.</p>
+            ) : !loading && departments.length === 0 ? (
+              <p className="text-sm text-text-secondary">No departments found.</p>
+            ) : null}
             {departments.map((department) => {
               const isRenaming = renamingId === department.id;
               return (

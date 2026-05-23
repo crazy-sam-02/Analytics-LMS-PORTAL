@@ -10,13 +10,12 @@ const initialState = {
   events: [],
   reports: [],
   analytics: null,
-  auditLogs: [],
   settings: null,
   loading: false,
   error: null,
 };
 
-export const fetchSuperColleges = createAsyncThunk("superAdminPanel/colleges", async () => superAdminApi.getColleges());
+export const fetchSuperColleges = createAsyncThunk("superAdminPanel/colleges", async (params = "?page=1&limit=100") => superAdminApi.getColleges(params));
 export const createSuperCollege = createAsyncThunk("superAdminPanel/createCollege", async (payload) => superAdminApi.createCollege(payload));
 export const fetchSuperAdmins = createAsyncThunk("superAdminPanel/admins", async (params = "") => superAdminApi.getAdmins(params));
 export const createSuperAdminUser = createAsyncThunk("superAdminPanel/createAdmin", async (payload) => superAdminApi.createAdmin(payload));
@@ -25,10 +24,9 @@ export const fetchSuperTests = createAsyncThunk("superAdminPanel/tests", async (
 export const fetchSuperBatches = createAsyncThunk("superAdminPanel/batches", async () => superAdminApi.getBatches());
 export const fetchSuperEvents = createAsyncThunk("superAdminPanel/events", async () => superAdminApi.getEvents());
 export const createSuperEvent = createAsyncThunk("superAdminPanel/createEvent", async (payload) => superAdminApi.createEvent(payload));
-export const fetchSuperReports = createAsyncThunk("superAdminPanel/reports", async () => superAdminApi.getReports());
+export const fetchSuperReports = createAsyncThunk("superAdminPanel/reports", async (params = "") => superAdminApi.getReports(params));
 export const generateSuperReport = createAsyncThunk("superAdminPanel/generateReport", async (payload) => superAdminApi.generateReport(payload));
 export const fetchSuperAnalytics = createAsyncThunk("superAdminPanel/analytics", async () => superAdminApi.getAnalytics());
-export const fetchSuperAuditLogs = createAsyncThunk("superAdminPanel/auditLogs", async () => superAdminApi.getAuditLogs());
 export const fetchSuperSettings = createAsyncThunk("superAdminPanel/settings", async () => superAdminApi.getSettings());
 export const updateSuperSettings = createAsyncThunk("superAdminPanel/updateSettings", async (payload) => superAdminApi.updateSettings(payload));
 
@@ -73,9 +71,6 @@ const superAdminPanelSlice = createSlice({
       })
       .addCase(fetchSuperAnalytics.fulfilled, (state, action) => {
         state.analytics = action.payload;
-      })
-      .addCase(fetchSuperAuditLogs.fulfilled, (state, action) => {
-        state.auditLogs = action.payload.data || [];
       })
       .addCase(fetchSuperSettings.fulfilled, (state, action) => {
         state.settings = action.payload;

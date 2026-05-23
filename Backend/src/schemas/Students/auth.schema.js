@@ -4,6 +4,7 @@ const loginSchema = z.object({
   body: z.object({
     identifier: z.string().min(3),
     password: z.string().min(7),
+    keepLoggedIn: z.boolean().optional().default(true),
   }),
   params: z.object({}).optional().default({}),
   query: z.object({}).optional().default({}),

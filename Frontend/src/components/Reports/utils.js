@@ -1,15 +1,20 @@
+export const clampPercent = (value) => {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) return 0;
+  return Math.max(0, Math.min(100, number));
+};
+
 export const CHART_COLORS = ["var(--chart-1)", "var(--chart-2)", "var(--chart-3)", "var(--chart-4)", "var(--chart-5)"];
 
 export const scoreColorClass = (score) => {
-  const value = Number(score || 0);
+  const value = clampPercent(score);
   if (value >= 75) return "text-green-500";
   if (value >= 50) return "text-yellow-500";
   return "text-red-500";
 };
 
 export const formatPercent = (value) => {
-  const number = Number(value || 0);
-  if (!Number.isFinite(number)) return "0.0%";
+  const number = clampPercent(value);
   return `${number.toFixed(1)}%`;
 };
 

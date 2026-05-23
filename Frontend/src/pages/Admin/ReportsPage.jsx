@@ -7,6 +7,7 @@ import PermissionDenied from "@/components/Admin/PermissionDenied";
 import { ADMIN_PERMISSIONS } from "@/features/Admin/adminPermissions";
 import { adminApi } from "@/services/api";
 import {
+  AbsentStudentsCard,
   AreaTrendChart,
   ChartCard,
   EmptyState,
@@ -20,7 +21,7 @@ import {
   StatusBadge,
   StudentIdentityCard,
   Th,
-  TopicRadarChart,
+  TopicPieChart,
   ViolationBadge,
 } from "@/components/Reports/components";
 import { formatDateLabel, formatPercent, toQueryString } from "@/components/Reports/utils";
@@ -37,7 +38,10 @@ const MODE_DEFAULT_SORT = {
   student: { key: "date", dir: "desc" },
 };
 
-const clampPercent = (value) => Math.max(0, Math.min(100, Number(value || 0)));
+const clampPercent = (value) => {
+  const number = Number(value || 0);
+  return Number.isFinite(number) ? Math.max(0, Math.min(100, number)) : 0;
+};
 const NUMERIC_SORT_KEYS = new Set(["rank", "avgScore", "testsTaken", "violations", "scorePercent", "percentile", "timeTaken", "violationsCount"]);
 
 const getSortValue = (row, key) => {
@@ -81,6 +85,18 @@ const getStatusVariant = (status) => {
 };
 
 const formatViolationType = (type) => String(type || "UNKNOWN").replace(/_/g, " ").toLowerCase();
+const TOPIC_LABEL_MAP = {
+  aptitute: "Aptitude",
+  aptitude: "Aptitude",
+  dbms: "DBMS",
+};
+const YEAR_OPTIONS = ["1", "2", "3", "4"];
+const formatTopicLabel = (label, index) => {
+  const raw = String(label || "").trim();
+  if (!raw) return `Topic ${index + 1}`;
+  const key = raw.toLowerCase();
+  return TOPIC_LABEL_MAP[key] || raw;
+};
 
 export default function ReportsPage() {
   const navigate = useNavigate();
@@ -95,6 +111,7 @@ export default function ReportsPage() {
   const studentId = searchParams.get("student_id") || "";
 
   const [studentSearch, setStudentSearch] = useState("");
+  const [studentYear, setStudentYear] = useState("");
   const [sortState, setSortState] = useState(MODE_DEFAULT_SORT[mode]);
   const [exportState, setExportState] = useState({
     status: "idle",
@@ -143,19 +160,27 @@ export default function ReportsPage() {
   });
 
   const studentsDirectoryQuery = useQuery({
-    queryKey: ["admin-report-students-directory-v2"],
-    queryFn: () => adminApi.getStudents("?page=1&limit=100"),
+    queryKey: ["admin-report-students-directory-v2", studentYear],
+    queryFn: () =>
+      adminApi.getStudents(
+        toQueryString({
+          page: 1,
+          limit: 100,
+          year: studentYear || undefined,
+        })
+      ),
     staleTime: 120000,
   });
   const studentSearchTerm = studentSearch.trim();
   const studentSearchQuery = useQuery({
-    queryKey: ["admin-report-student-search-v2", studentSearchTerm],
+    queryKey: ["admin-report-student-search-v2", studentSearchTerm, studentYear],
     queryFn: () =>
       adminApi.getStudents(
         toQueryString({
           page: 1,
           limit: 8,
           search: studentSearchTerm,
+          year: studentYear || undefined,
         })
       ),
     enabled: canViewReports && mode === "student" && studentSearchTerm.length >= 2,
@@ -188,6 +213,9 @@ export default function ReportsPage() {
   const studentsDirectory = studentsDirectoryQuery.data?.data || [];
   const studentSearchResults = studentSearchQuery.data?.data || [];
   const analytics = analyticsQuery.data || {};
+  const notAttended = analytics?.notAttended || {};
+  const notAttendedStudents = Array.isArray(notAttended.students) ? notAttended.students : [];
+  const showNotAttendedCard = mode !== "student" && testId !== "all";
   const selectedDirectoryStudent = useMemo(
     () => studentsDirectory.find((student) => String(student.id) === String(studentId)) || null,
     [studentsDirectory, studentId]
@@ -211,18 +239,18 @@ export default function ReportsPage() {
 
   const trendData = (analytics.scoreTrend || []).map((item, index) => ({
     month: item.month || `Test ${index + 1}`,
-    score: Number(item.score || 0),
+    score: clampPercent(item.score || 0),
   }));
 
   const topicData = (analytics.topicPerformance || []).map((item, index) => ({
-    subject: item.subject || item.topic || `Topic ${index + 1}`,
+    subject: formatTopicLabel(item.subject || item.topic, index),
     score: Number(item.score || item.avgScore || 0),
   }));
 
   const departmentComparative = (analytics.departmentComparative || []).map((item) => ({
     department: item.departmentName || item.department || "-",
-    avgScore: Number(item.avgScore || 0),
-    passRate: Number(item.passRate || 0),
+    avgScore: clampPercent(item.avgScore || 0),
+    passRate: clampPercent(item.passRate || 0),
     participationRate: Number(item.participationRate || 0),
     violations: Number(item.violations || 0),
     students: Number(item.students || 0),
@@ -230,8 +258,8 @@ export default function ReportsPage() {
 
   const batchComparative = (analytics.batchComparative || []).map((item) => ({
     batch: item.batchName || item.batch || "-",
-    avgScore: Number(item.avgScore || 0),
-    passRate: Number(item.passRate || 0),
+    avgScore: clampPercent(item.avgScore || 0),
+    passRate: clampPercent(item.passRate || 0),
     participationRate: Number(item.participationRate || 0),
     students: Number(item.students || 0),
   }));
@@ -253,7 +281,7 @@ export default function ReportsPage() {
     studentId: row.studentId,
     department: row.department || row.departmentName || "-",
     batch: row.batch || row.batchName || "-",
-    avgScore: Number(row.avgScore || 0),
+    avgScore: clampPercent(row.avgScore || 0),
     testsTaken: Number(row.testsTaken || 0),
     violations: Number(row.violations || 0),
     violationEvents: Array.isArray(row.violationEvents)
@@ -274,7 +302,7 @@ export default function ReportsPage() {
     id: item.id,
     testId: item.testId,
     testName: item.testName || item.testTitle || "-",
-    scorePercent: Number(item.scorePercent || 0),
+    scorePercent: clampPercent(item.scorePercent || 0),
     percentile: item.percentile != null ? Number(item.percentile) : null,
     timeTaken: Number(item.timeTaken || 0),
     date: item.date,
@@ -289,7 +317,7 @@ export default function ReportsPage() {
           id: item.id,
           testId: item.testId,
           testName: item.testName || "-",
-          scorePercent: Number(item.scorePercent ?? item.accuracy ?? 0),
+          scorePercent: clampPercent(item.scorePercent ?? item.accuracy ?? 0),
           percentile: item.percentile != null ? Number(item.percentile) : null,
           timeTaken: Number(item.timeTaken || 0),
           date: item.date,
@@ -559,6 +587,26 @@ export default function ReportsPage() {
                   <p className="text-xs text-text-secondary">Choose a student here to load all of their test reports and analytics.</p>
                 </div>
 
+                <div className="mb-3 max-w-xs">
+                  <label className="space-y-1 text-xs text-text-secondary">
+                    <span>Year</span>
+                    <select
+                      value={studentYear}
+                      onChange={(event) => {
+                        setStudentYear(event.target.value);
+                        updateParams({ student_id: "" });
+                        setStudentSearch("");
+                      }}
+                      className="h-10 w-full rounded-xl border border-border bg-card px-3 text-sm"
+                    >
+                      <option value="">All years</option>
+                      {YEAR_OPTIONS.map((year) => (
+                        <option key={year} value={year}>{year} YEAR</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+
                 <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
                   <select
                     value={studentId}
@@ -612,7 +660,7 @@ export default function ReportsPage() {
                             className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm hover:bg-muted"
                           >
                             <span className="font-medium text-text-primary">{student.fullName}</span>
-                            <span className="text-xs text-text-secondary">{student.studentId} · {student.department?.name || "-"}</span>
+                            <span className="text-xs text-text-secondary">{student.studentId} · {student.department?.name || "-"} · {student.year || "-"}</span>
                           </button>
                         ))
                       ) : (
@@ -651,18 +699,20 @@ export default function ReportsPage() {
       {!analyticsQuery.isLoading && !analyticsQuery.isError ? (
         <section className="space-y-4">
           {mode !== "student" ? (
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <KpiCard label="Avg Score" value={formatPercent(analytics?.metrics?.avgScore)} sub="Overall score performance" />
-              <KpiCard label="Pass Rate" value={formatPercent(analytics?.metrics?.passRate)} sub="Students above pass threshold" />
-              <KpiCard label="Participation Rate" value={formatPercent(analytics?.metrics?.participationRate)} sub="Submission completion" />
-              <KpiCard
-                label="Violations"
-                value={Number(analytics?.metrics?.violations || 0)}
-                sub="Proctoring flags"
-                flag={Number(analytics?.metrics?.violations || 0) > 10}
-                flagLabel="High violation volume"
-              />
-            </div>
+            <>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <KpiCard label="Avg Score" value={formatPercent(analytics?.metrics?.avgScore)} sub="Overall score performance" />
+                <KpiCard label="Pass Rate" value={formatPercent(analytics?.metrics?.passRate)} sub="Students above pass threshold" />
+                <KpiCard label="Participation Rate" value={formatPercent(analytics?.metrics?.participationRate)} sub="Submission completion" />
+                <KpiCard
+                  label="Violations"
+                  value={Number(analytics?.metrics?.violations || 0)}
+                  sub="Proctoring flags"
+                  flag={Number(analytics?.metrics?.violations || 0) > 10}
+                  flagLabel="High violation volume"
+                />
+              </div>
+            </>
           ) : (
             <StudentIdentityCard student={selectedStudent} stats={studentStats} />
           )}
@@ -673,25 +723,23 @@ export default function ReportsPage() {
                 <ChartCard title="Monthly Score Trend" height="h-[220px]">
                   <AreaTrendChart data={trendData} xKey="month" dataKey="score" name="Avg Score" color="var(--chart-1)" />
                 </ChartCard>
-                <ChartCard
-                  title="Topic-wise Scores"
-                  height={topicData.length < 3 ? "h-[180px]" : "h-[220px]"}
-                  footer={topicData.length < 3 ? "Fallback to horizontal bars because fewer than 3 topics are available." : ""}
-                >
-                  {topicData.length < 3 ? <HorizontalBarChart data={topicData} /> : <TopicRadarChart data={topicData} />}
+                <ChartCard title="Topic-wise Scores" height="h-[240px]">
+                  <TopicPieChart data={topicData} />
                 </ChartCard>
               </div>
 
               <ChartCard title="Department Comparison" height="h-[200px]">
-                <GroupedBarChart
-                  data={departmentComparative}
-                  xKey="department"
-                  series={[
-                    { key: "avgScore", label: "Avg Score" },
-                    { key: "passRate", label: "Pass Rate" },
-                    { key: "participationRate", label: "Participation" },
-                  ]}
-                />
+                <div className="h-full p-4 bg-white rounded-md overflow-auto">
+                  <GroupedBarChart
+                    data={departmentComparative}
+                    xKey="department"
+                    series={[
+                      { key: "avgScore", label: "Avg Score" },
+                      { key: "passRate", label: "Pass Rate" },
+                      { key: "participationRate", label: "Participation" },
+                    ]}
+                  />
+                </div>
               </ChartCard>
 
               <article className="overflow-x-auto rounded-2xl border border-border bg-card">
@@ -744,15 +792,17 @@ export default function ReportsPage() {
               </div>
 
               <ChartCard title="Batch Comparison" height="h-[200px]">
-                <GroupedBarChart
-                  data={batchComparative}
-                  xKey="batch"
-                  series={[
-                    { key: "avgScore", label: "Avg Score" },
-                    { key: "passRate", label: "Pass Rate" },
-                  ]}
-                  highlightCategory={batches.find((item) => item.id === batchId)?.name || ""}
-                />
+                <div className="h-full p-4 bg-white rounded-md overflow-auto">
+                  <GroupedBarChart
+                    data={batchComparative}
+                    xKey="batch"
+                    series={[
+                      { key: "avgScore", label: "Avg Score" },
+                      { key: "passRate", label: "Pass Rate" },
+                    ]}
+                    highlightCategory={batches.find((item) => item.id === batchId)?.name || ""}
+                  />
+                </div>
               </ChartCard>
 
               <article className="overflow-x-auto rounded-2xl border border-border bg-card">
@@ -832,12 +882,8 @@ export default function ReportsPage() {
                       />
                     </ChartCard>
 
-                    <ChartCard
-                      title="Topic Strengths"
-                      height={topicData.length < 3 ? "h-[180px]" : "h-[220px]"}
-                      footer={topicData.length < 3 ? "Fallback to horizontal bars because fewer than 3 topics are available." : ""}
-                    >
-                      {topicData.length < 3 ? <HorizontalBarChart data={topicData} /> : <TopicRadarChart data={topicData} />}
+                    <ChartCard title="Topic Strengths" height="h-[240px]">
+                      <TopicPieChart data={topicData} />
                     </ChartCard>
                   </div>
 
@@ -917,6 +963,14 @@ export default function ReportsPage() {
               title={`No data for ${testId === "all" ? "all tests" : "selected test"} in selected ${mode}.`}
               description="Try selecting All Tests or switching the context."
               action={{ label: "Reset filters", onClick: () => updateParams({ test: "all", batch: "", student_id: "" }) }}
+            />
+          ) : null}
+          {showNotAttendedCard ? (
+            <AbsentStudentsCard
+              title={notAttended.testName ? `Not Attended: ${notAttended.testName}` : "Not Attended Students"}
+              subtitle="Students who did not submit the selected test."
+              students={notAttendedStudents}
+              count={notAttended.count}
             />
           ) : null}
         </section>

@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const { asyncHandler } = require("../../utils/http");
+const { getSubmissionScorePercent } = require("../../utils/score");
 
 const getSuperAnalytics = asyncHandler(async (_req, res) => {
   const db = mongoose.connection.db;
@@ -15,7 +16,7 @@ const getSuperAnalytics = asyncHandler(async (_req, res) => {
   ] = await Promise.all([
     db.collection("college").find({ isActive: true }, { projection: { id: 1, name: 1, code: 1 } }).toArray(),
     db.collection("student").find({ isActive: true }, { projection: { id: 1, fullName: 1, collegeId: 1, departmentId: 1 } }).toArray(),
-    db.collection("test").find({}, { projection: { id: 1, title: 1, collegeId: 1, departmentId: 1 } }).toArray(),
+    db.collection("test").find({}, { projection: { id: 1, title: 1, collegeId: 1, departmentId: 1, totalMarks: 1 } }).toArray(),
     db.collection("submission").find({ status: { $in: ["SUBMITTED", "AUTO_SUBMITTED"] } }, { projection: { id: 1, userId: 1, testId: 1, score: 1, status: 1, createdAt: 1, collegeId: 1 } }).toArray(),
     db.collection("violation").find({}, { projection: { id: 1, type: 1, collegeId: 1, userId: 1 } }).toArray(),
     db.collection("department").find({}, { projection: { id: 1, name: 1, collegeId: 1 } }).toArray(),
@@ -24,6 +25,13 @@ const getSuperAnalytics = asyncHandler(async (_req, res) => {
   // Build lookups for O(1) access
   const studentMap = new Map();
   allStudentsRaw.forEach((s) => studentMap.set(s.id, s));
+
+  const testMap = new Map();
+  allTestsRaw.forEach((test) => testMap.set(test.id, test));
+  const getAnalyticsScorePercent = (submission) => getSubmissionScorePercent({
+    ...submission,
+    test: testMap.get(submission.testId),
+  });
 
   const studentSubmissionsMap = new Map();
   allSubmissionsRaw.forEach((s) => {
@@ -70,7 +78,7 @@ const getSuperAnalytics = asyncHandler(async (_req, res) => {
     if (metrics) {
       metrics.submissions.push(submission);
       metrics.totalSubmissions += 1;
-      const score = Number(submission.score) || 0;
+      const score = getAnalyticsScorePercent(submission);
       metrics.totalScore += score;
       if (score >= 40) {
         metrics.passingSubmissions += 1;
@@ -120,7 +128,7 @@ const getSuperAnalytics = asyncHandler(async (_req, res) => {
         const deptMetrics = collegeMetrics.departments.get(student.departmentId);
         if (deptMetrics) {
           deptMetrics.submissions.push(submission);
-          const score = Number(submission.score) || 0;
+          const score = getAnalyticsScorePercent(submission);
           deptMetrics.totalScore += score;
           if (score >= 40) {
             deptMetrics.passingSubmissions += 1;
@@ -142,7 +150,7 @@ const getSuperAnalytics = asyncHandler(async (_req, res) => {
       trendMap.set(monthKey, { scores: [], count: 0 });
     }
     const trend = trendMap.get(monthKey);
-    trend.scores.push(Number(submission.score) || 0);
+    trend.scores.push(getAnalyticsScorePercent(submission));
     trend.count += 1;
   });
 
@@ -216,7 +224,7 @@ const getSuperAnalytics = asyncHandler(async (_req, res) => {
       const studentSubmissions = studentSubmissionsMap.get(student.id) || [];
       const avgScore =
         studentSubmissions.length > 0
-          ? studentSubmissions.reduce((sum, s) => sum + (Number(s.score) || 0), 0) / studentSubmissions.length
+          ? studentSubmissions.reduce((sum, s) => sum + getAnalyticsScorePercent(s), 0) / studentSubmissions.length
           : 0;
       return {
         studentId: student.id,

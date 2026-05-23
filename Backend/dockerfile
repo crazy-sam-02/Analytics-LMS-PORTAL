@@ -15,6 +15,9 @@ WORKDIR /app
 # Copy from builder
 COPY --from=builder /app ./
 
+RUN apk add --no-cache chromium nss freetype harfbuzz ca-certificates ttf-freefont
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+
 # Run as non-root user for security
 RUN addgroup -S lmsgroup && adduser -S lmsuser -G lmsgroup
 USER lmsuser

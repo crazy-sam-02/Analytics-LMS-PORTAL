@@ -67,6 +67,7 @@ const createAdminTestPayloadSchema = z.object({
     startsAt: z.string().trim().min(1),
     endsAt: z.string().trim().min(1),
     assignmentMethod: z.enum(["department_wise", "batch_wise"]).default("department_wise"),
+    years: z.array(z.coerce.number().int().min(1).max(4)).min(1).max(4).default([1, 2, 3, 4]),
     departmentId: objectIdSchema.optional().nullable(),
     batchIds: z.array(objectIdSchema).default([]),
     testType: z.enum([TEST_TYPES.STRICT, TEST_TYPES.STANDARD, TEST_TYPES.OPEN]).default(DEFAULT_TEST_CONFIGURATION.testType),
@@ -212,6 +213,7 @@ const extendAttemptTimeSchema = z.object({
 const cloneAdminTestSchema = z.object({
   body: z.object({
     assignmentMethod: z.enum(["department_wise", "batch_wise"]).default("department_wise"),
+    years: z.array(z.coerce.number().int().min(1).max(4)).min(1).max(4).optional(),
     departmentId: objectIdSchema.optional().nullable(),
     batchIds: z.array(objectIdSchema).optional().default([]),
   }),
@@ -235,4 +237,5 @@ module.exports = {
   transitionTestStatusSchema,
   forceSubmitAttemptSchema,
   extendAttemptTimeSchema,
+  cloneAdminTestSchema,
 };

@@ -55,7 +55,7 @@ export default function AdminDashboardPage() {
   });
 
   useEffect(() => {
-    const socket = connectTestSocket();
+    const socket = connectTestSocket("admin");
     const refreshDashboard = () => {
       refetch();
     };

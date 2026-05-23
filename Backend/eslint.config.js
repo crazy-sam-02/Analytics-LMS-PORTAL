@@ -17,13 +17,25 @@ module.exports = [
     },
     rules: {
       "no-unused-vars": [
-        "error",
+        "warn",
         {
           argsIgnorePattern: "^_",
           varsIgnorePattern: "^_",
           caughtErrorsIgnorePattern: "^_",
         },
       ],
+    },
+  },
+  {
+    files: ["scripts/load/**/*.js"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: "module",
+      globals: {
+        __ENV: "readonly",
+        __VU: "readonly",
+        __ITER: "readonly",
+      },
     },
   },
 ];

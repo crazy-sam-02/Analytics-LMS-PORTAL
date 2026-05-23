@@ -87,6 +87,16 @@ const rateLimit = {
   generalApiMax: toPositiveInt(process.env.RATE_LIMIT_GENERAL_API_MAX, 240),
   reportGenerationWindowMs: toPositiveInt(process.env.RATE_LIMIT_REPORT_GENERATION_WINDOW_MS, 60 * 1000),
   reportGenerationMax: toPositiveInt(process.env.RATE_LIMIT_REPORT_GENERATION_MAX, 10),
+  adminReportReadWindowMs: toPositiveInt(process.env.RATE_LIMIT_ADMIN_REPORT_READ_WINDOW_MS, 30 * 1000),
+  adminReportReadMax: toPositiveInt(process.env.RATE_LIMIT_ADMIN_REPORT_READ_MAX, 20),
+  adminTestListWindowMs: toPositiveInt(process.env.RATE_LIMIT_ADMIN_TEST_LIST_WINDOW_MS, 30 * 1000),
+  adminTestListMax: toPositiveInt(process.env.RATE_LIMIT_ADMIN_TEST_LIST_MAX, 30),
+  adminBatchGuardWindowMs: toPositiveInt(process.env.RATE_LIMIT_ADMIN_BATCH_GUARD_WINDOW_MS, 60 * 1000),
+  adminBatchGuardMax: toPositiveInt(process.env.RATE_LIMIT_ADMIN_BATCH_GUARD_MAX, 12),
+  superReportWindowMs: toPositiveInt(process.env.RATE_LIMIT_SUPER_REPORT_WINDOW_MS, 60 * 1000),
+  superReportMax: toPositiveInt(process.env.RATE_LIMIT_SUPER_REPORT_MAX, 20),
+  leaderboardWindowMs: toPositiveInt(process.env.RATE_LIMIT_LEADERBOARD_WINDOW_MS, 30 * 1000),
+  leaderboardMax: toPositiveInt(process.env.RATE_LIMIT_LEADERBOARD_MAX, 20),
   searchWindowMs: toPositiveInt(process.env.RATE_LIMIT_SEARCH_WINDOW_MS, 30 * 1000),
   searchMax: toPositiveInt(process.env.RATE_LIMIT_SEARCH_MAX, 30),
   metricsTopNDefault: toPositiveInt(process.env.RATE_LIMIT_METRICS_TOP_N_DEFAULT, 10),
@@ -104,11 +114,11 @@ const responseCache = {
 };
 
 const redis = {
-  enabled: toBoolean(process.env.REDIS_ENABLED, nodeEnv !== "development"),
+  enabled: toBoolean(process.env.REDIS_ENABLED, nodeEnv !== "development" && nodeEnv !== "test"),
   connectTimeoutMs: toPositiveInt(process.env.REDIS_CONNECT_TIMEOUT_MS, 10_000),
   keepAliveMs: toPositiveInt(process.env.REDIS_KEEP_ALIVE_MS, 30_000),
   maxRetryDelayMs: toPositiveInt(process.env.REDIS_MAX_RETRY_DELAY_MS, 2_000),
-  queueEnabled: toBoolean(process.env.REDIS_QUEUE_ENABLED, nodeEnv !== "development"),
+  queueEnabled: toBoolean(process.env.REDIS_QUEUE_ENABLED, nodeEnv !== "development" && nodeEnv !== "test"),
 };
 
 module.exports = {
@@ -116,13 +126,14 @@ module.exports = {
   nodeEnv,
   mongoUri: process.env.MONGODB_URI,
   mongoDbName: process.env.MONGODB_DB_NAME || "lms_portal",
+  requestBodyLimit: process.env.REQUEST_BODY_LIMIT || "5mb",
   superAdminEmail: process.env.SUPERADMIN_EMAIL || "",
   superAdminPassword: process.env.SUPERADMIN_PASSWORD || "",
   superAdminName: process.env.SUPERADMIN_NAME || "Super Admin",
   jwtAccessSecret,
   jwtRefreshSecret,
   jwtAccessExpiresIn: process.env.JWT_ACCESS_EXPIRES_IN || "15m",
-  jwtRefreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || "7d",
+  jwtRefreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || "30d",
   frontendOrigin: frontendOrigins[0] || "http://localhost:5173",
   frontendOrigins,
   redisUrl: process.env.REDIS_URL || "",

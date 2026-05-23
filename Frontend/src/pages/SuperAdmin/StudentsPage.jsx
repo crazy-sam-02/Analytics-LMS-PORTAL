@@ -36,9 +36,10 @@ const loadXlsxBrowserLib = () =>
   });
 
 const IMPORT_SAMPLE = [
-  "fullName,email,enrollNumber,department,batch",
-  "Alice Doe,alice@example.com,20261001,Computer Science,CSE-2027-A",
+  "fullName,email,enrollNumber,department,year,batch",
+  "Alice Doe,alice@example.com,20261001,Computer Science,1,CSE-2027-A",
 ].join("\n");
+const YEAR_OPTIONS = ["1", "2", "3", "4"];
 
 const normalizeColumnKey = (value) => String(value || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 
@@ -64,7 +65,7 @@ export default function StudentsPage() {
   const dispatch = useDispatch();
   const students = useSelector((state) => state.superAdminPanel.students);
   const colleges = useSelector((state) => state.superAdminPanel.colleges);
-  const [filters, setFilters] = useState({ search: "", collegeId: "", departmentId: "", batchId: "" });
+  const [filters, setFilters] = useState({ search: "", collegeId: "", departmentId: "", batchId: "", year: "" });
   const [pendingDelete, setPendingDelete] = useState(null);
   const [editingStudent, setEditingStudent] = useState(null);
   const [banner, setBanner] = useState({ type: "", title: "", message: "" });
@@ -75,6 +76,7 @@ export default function StudentsPage() {
     fullName: "",
     email: "",
     enrollNumber: "",
+    year: "",
     collegeId: "",
     departmentId: "",
     batchId: "",
@@ -83,6 +85,7 @@ export default function StudentsPage() {
     fullName: "",
     email: "",
     enrollNumber: "",
+    year: "",
     collegeId: "",
     departmentId: "",
     batchId: "",
@@ -91,7 +94,6 @@ export default function StudentsPage() {
   const createCollegeId = studentForm.collegeId;
 
   useEffect(() => {
-    dispatch(fetchSuperStudents());
     dispatch(fetchSuperColleges());
   }, [dispatch]);
 
@@ -144,7 +146,7 @@ export default function StudentsPage() {
   const toCell = (value) => String(value ?? "").replace(/,/g, " ").trim();
 
   const rowsToCsv = (rows) => {
-    const header = ["fullName", "email", "studentId", "enrollNumber", "department", "batch"];
+    const header = ["fullName", "email", "studentId", "enrollNumber", "department", "year", "batch"];
     const lines = rows.map((row) => {
       const normalized = {
         fullName: getRowValue(row, ["fullName", "fullname", "name", "studentName"]),
@@ -152,6 +154,7 @@ export default function StudentsPage() {
         studentId: getRowValue(row, ["studentId", "student_id", "rollNo", "rollNumber"]),
         enrollNumber: getRowValue(row, ["enrollNumber", "enroll_number", "enrollmentNumber", "enrollment_no"]),
         department: getRowValue(row, ["department", "departmentName", "departmentId", "department_id"]),
+        year: getRowValue(row, ["year", "studentYear", "student_year", "academicYear"]),
         batch: getRowValue(row, ["batch", "batchName", "batchId", "batch_id"]),
       };
       return [
@@ -160,6 +163,7 @@ export default function StudentsPage() {
         toCell(normalized.studentId),
         toCell(normalized.enrollNumber),
         toCell(normalized.department),
+        toCell(normalized.year),
         toCell(normalized.batch),
       ].join(",");
     });
@@ -204,20 +208,25 @@ export default function StudentsPage() {
   };
 
   const runSearch = useCallback(() => {
+    if (!filters.collegeId.trim()) {
+      setBanner({ type: "warning", title: "Select a college", message: "Choose a college before loading students." });
+      return;
+    }
     const params = new URLSearchParams();
     if (filters.search.trim()) params.set("search", filters.search.trim());
     if (filters.collegeId.trim()) params.set("collegeId", filters.collegeId.trim());
     if (filters.departmentId.trim()) params.set("departmentId", filters.departmentId.trim());
     if (filters.batchId.trim()) params.set("batchId", filters.batchId.trim());
+    if (filters.year.trim()) params.set("year", filters.year.trim());
     const query = params.toString() ? `?${params.toString()}` : "";
     dispatch(fetchSuperStudents(query));
-  }, [dispatch, filters.batchId, filters.collegeId, filters.departmentId, filters.search]);
+  }, [dispatch, filters.batchId, filters.collegeId, filters.departmentId, filters.search, filters.year]);
 
   const createStudentMutation = useMutation({
     mutationFn: (payload) => superAdminApi.createStudent(payload),
     onSuccess: (payload) => {
       setCreatedCredentials(payload.credentials || null);
-      setStudentForm({ fullName: "", email: "", enrollNumber: "", collegeId: "", departmentId: "", batchId: "" });
+      setStudentForm({ fullName: "", email: "", enrollNumber: "", year: "", collegeId: "", departmentId: "", batchId: "" });
       setBanner({ type: "success", title: "Student created", message: "Student account created with generated credentials." });
       toast.success("Student account created");
       runSearch();
@@ -274,7 +283,8 @@ export default function StudentsPage() {
     setEditFormData({
       fullName: student.fullName || "",
       email: student.email || "",
-      enrollNumber: student.enrollNumber || "",
+      enrollNumber: student.enrollNumber || student.studentId || "",
+      year: student.year ? String(student.year) : "",
       collegeId: student.collegeId || "",
       departmentId: student.departmentId || "",
       batchId: student.batchId || "",
@@ -282,7 +292,7 @@ export default function StudentsPage() {
   };
 
   const handleEditSubmit = () => {
-    if (!editFormData.fullName.trim() || !editFormData.email.trim() || !editFormData.enrollNumber.trim()) {
+    if (!editFormData.fullName.trim() || !editFormData.email.trim() || !editFormData.enrollNumber.trim() || !editFormData.year) {
       toast.error("Please fill in all required fields");
       return;
     }
@@ -290,6 +300,7 @@ export default function StudentsPage() {
       fullName: editFormData.fullName,
       email: editFormData.email,
       enrollNumber: editFormData.enrollNumber,
+      ...(editFormData.year ? { year: Number(editFormData.year) } : {}),
       collegeId: editFormData.collegeId,
       departmentId: editFormData.departmentId,
       ...(editFormData.batchId ? { batchId: editFormData.batchId } : {}),
@@ -315,10 +326,17 @@ export default function StudentsPage() {
     }
   }, [importJobQuery.data, runSearch]);
 
+  useEffect(() => {
+    if (filters.collegeId) {
+      runSearch();
+    }
+  }, [filters.collegeId, runSearch]);
+
   const departments = useMemo(() => unwrapItems(departmentsQuery.data), [departmentsQuery.data]);
   const batches = useMemo(() => unwrapItems(batchesQuery.data), [batchesQuery.data]);
   const filterDepartments = useMemo(() => unwrapItems(filterDepartmentsQuery.data), [filterDepartmentsQuery.data]);
   const filterBatches = useMemo(() => unwrapItems(filterBatchesQuery.data), [filterBatchesQuery.data]);
+  const visibleStudents = useMemo(() => (filters.collegeId ? students : []), [filters.collegeId, students]);
   const filteredFilterBatches = useMemo(() => {
     if (!filters.departmentId) return filterBatches;
     return filterBatches.filter((batch) => String(batch.departmentId) === String(filters.departmentId));
@@ -387,6 +405,17 @@ export default function StudentsPage() {
             />
             <select
               className="h-10 rounded-md border border-border px-3 text-sm"
+              value={studentForm.year}
+              onChange={(event) => setStudentForm((prev) => ({ ...prev, year: event.target.value }))}
+            >
+              <option value="">Select Year</option>
+              <option value="1">1 YEAR</option>
+              <option value="2">2 YEAR</option>
+              <option value="3">3 YEAR</option>
+              <option value="4">4 YEAR</option>
+            </select>
+            <select
+              className="h-10 rounded-md border border-border px-3 text-sm"
               value={studentForm.collegeId}
               onChange={(event) => setStudentForm((prev) => ({ ...prev, collegeId: event.target.value, departmentId: "", batchId: "" }))}
             >
@@ -418,12 +447,13 @@ export default function StudentsPage() {
               ))}
             </select>
           </div>
-          <p className="text-xs text-text-secondary">Student ID is auto-generated. Password rule: first 3 letters of full name (first letter capitalized) + @ + last 3 digits of enroll number.</p>
+          <p className="text-xs text-text-secondary">Student ID uses the entered enroll number exactly. Password rule: first 3 letters of full name (first letter capitalized) + @ + last 3 digits of enroll number.</p>
           <Button
             onClick={() => createStudentMutation.mutate({
               fullName: studentForm.fullName,
               email: studentForm.email,
               enrollNumber: studentForm.enrollNumber,
+              ...(studentForm.year ? { year: Number(studentForm.year) } : {}),
               collegeId: studentForm.collegeId,
               departmentId: studentForm.departmentId,
               ...(studentForm.batchId ? { batchId: studentForm.batchId } : {}),
@@ -433,6 +463,7 @@ export default function StudentsPage() {
               !studentForm.fullName.trim() ||
               !studentForm.email.trim() ||
               !studentForm.enrollNumber.trim() ||
+              !studentForm.year ||
               !studentForm.collegeId ||
               !studentForm.departmentId
             }
@@ -472,7 +503,7 @@ export default function StudentsPage() {
           </div>
 
           {importFileName ? <p className="text-xs text-text-secondary">Loaded: {importFileName}</p> : null}
-          <p className="text-xs text-text-secondary">Required columns: fullName, email, enrollNumber, department. Optional: studentId, batch.</p>
+          <p className="text-xs text-text-secondary">Required columns: fullName, email, enrollNumber, department, year. Student ID will use enrollNumber exactly. Optional: batch.</p>
 
           <Textarea rows={8} value={csvData} onChange={(event) => setCsvData(event.target.value)} />
 
@@ -512,7 +543,7 @@ export default function StudentsPage() {
       <Card className="rounded-2xl border-border">
         <CardHeader><CardTitle>Global Students</CardTitle></CardHeader>
         <CardContent>
-          <div className="mb-4 grid gap-2 sm:grid-cols-5">
+          <div className="mb-4 grid gap-2 sm:grid-cols-6">
             <Input placeholder="Search" value={filters.search} onChange={(e) => setFilters((prev) => ({ ...prev, search: e.target.value }))} />
             <select
               className="h-10 rounded-md border border-border px-3 text-sm"
@@ -546,14 +577,26 @@ export default function StudentsPage() {
                 <option key={batch.id} value={batch.id}>{batch.name}</option>
               ))}
             </select>
-            <Button variant="outline" onClick={runSearch}>Search</Button>
+            <select
+              className="h-10 rounded-md border border-border px-3 text-sm"
+              value={filters.year}
+              onChange={(e) => setFilters((prev) => ({ ...prev, year: e.target.value }))}
+            >
+              <option value="">All years</option>
+              {YEAR_OPTIONS.map((year) => (
+                <option key={year} value={year}>{year} YEAR</option>
+              ))}
+            </select>
+            <Button variant="outline" onClick={runSearch} disabled={!filters.collegeId}>Search</Button>
           </div>
           <div className="space-y-2">
-            {students.map((student) => (
+            {!filters.collegeId ? <p className="text-sm text-text-secondary">Select a college to view students.</p> : null}
+            {filters.collegeId && visibleStudents.length === 0 ? <p className="text-sm text-text-secondary">No students found.</p> : null}
+            {visibleStudents.map((student) => (
               <div key={student.id} className="flex items-center justify-between rounded-xl border border-border px-3 py-2">
                 <div>
                   <p className="font-medium text-text-primary">{student.fullName}</p>
-                  <p className="text-xs text-text-secondary">{student.email} • {student.studentId} • {student.college?.name}</p>
+                  <p className="text-xs text-text-secondary">{student.email} • {student.studentId} • {student.college?.name} • Year {student.year || "-"}</p>
                 </div>
                 <div className="flex items-center justify-center gap-4">
                   <Button size="sm" variant="outline" onClick={() => openEditForm(student)}>
@@ -603,6 +646,17 @@ export default function StudentsPage() {
                   value={editFormData.enrollNumber}
                   onChange={(event) => setEditFormData((prev) => ({ ...prev, enrollNumber: event.target.value }))}
                 />
+                <select
+                  className="h-10 rounded-md border border-border px-3 text-sm"
+                  value={editFormData.year}
+                  onChange={(event) => setEditFormData((prev) => ({ ...prev, year: event.target.value }))}
+                >
+                  <option value="">Select Year</option>
+                  <option value="1">1 YEAR</option>
+                  <option value="2">2 YEAR</option>
+                  <option value="3">3 YEAR</option>
+                  <option value="4">4 YEAR</option>
+                </select>
                 <select
                   className="h-10 rounded-md border border-border px-3 text-sm"
                   value={editFormData.collegeId}

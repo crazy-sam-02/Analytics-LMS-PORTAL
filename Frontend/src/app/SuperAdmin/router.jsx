@@ -1,8 +1,7 @@
 import { useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { Navigate, Outlet, RouterProvider, createBrowserRouter } from "react-router-dom";
-import { superAdminTokenStorage } from "@/services/api";
-import { fetchCurrentSuperAdmin, markSuperAdminInitialized } from "@/features/SuperAdmin/superAdminAuthSlice";
+import { fetchCurrentSuperAdmin } from "@/features/SuperAdmin/superAdminAuthSlice";
 import SuperAdminPortalLayout from "@/components/SuperAdmin/SuperAdminPortalLayout";
 import SuperAdminLoginPage from "@/pages/SuperAdmin/LoginPage";
 import SuperAdminDashboardPage from "@/pages/SuperAdmin/DashboardPage";
@@ -15,7 +14,6 @@ import BatchesPage from "@/pages/SuperAdmin/BatchesPage";
 import EventsPage from "@/pages/SuperAdmin/EventsPage";
 import ReportsPage from "@/pages/SuperAdmin/ReportsPage";
 import AnalyticsPage from "@/pages/SuperAdmin/AnalyticsPage";
-import AuditLogsPage from "@/pages/SuperAdmin/AuditLogsPage";
 import SettingsPage from "@/pages/SuperAdmin/SettingsPage";
 import QuestionBankPage from "@/pages/SuperAdmin/QuestionBankPage";
 
@@ -24,11 +22,7 @@ function SuperAdminBootstrap() {
   const initialized = useSelector((state) => state.superAdminAuth.initialized);
 
   useEffect(() => {
-    if (superAdminTokenStorage.getAccess()) {
-      dispatch(fetchCurrentSuperAdmin());
-    } else {
-      dispatch(markSuperAdminInitialized());
-    }
+    dispatch(fetchCurrentSuperAdmin());
   }, [dispatch]);
 
   if (!initialized) {
@@ -74,7 +68,6 @@ const router = createBrowserRouter([
               { path: "/super-admin/events", element: <EventsPage /> },
               { path: "/super-admin/reports", element: <ReportsPage /> },
               { path: "/super-admin/analytics", element: <AnalyticsPage /> },
-              { path: "/super-admin/audit-logs", element: <AuditLogsPage /> },
               { path: "/super-admin/settings", element: <SettingsPage /> },
             ],
           },

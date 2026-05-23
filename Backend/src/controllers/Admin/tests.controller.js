@@ -36,6 +36,7 @@ const ASSIGNMENT_METHOD = {
   DEPARTMENT_WISE: "department_wise",
   BATCH_WISE: "batch_wise",
 };
+const DEFAULT_STUDENT_YEARS = [1, 2, 3, 4];
 
 const ALLOWED_TRANSITIONS = {
   [TEST_STATUS.DRAFT]: [TEST_STATUS.SCHEDULED, TEST_STATUS.LIVE, TEST_STATUS.ARCHIVED],
@@ -221,6 +222,14 @@ const deriveAssignmentMethod = (test) => {
   return ASSIGNMENT_METHOD.BATCH_WISE;
 };
 
+const normalizeStudentYears = (years) => {
+  const source = Array.isArray(years) ? years : DEFAULT_STUDENT_YEARS;
+  const normalized = [...new Set(source
+    .map((year) => Number(year))
+    .filter((year) => Number.isInteger(year) && year >= 1 && year <= 4))];
+  return normalized.length ? normalized.sort((a, b) => a - b) : DEFAULT_STUDENT_YEARS;
+};
+
 const resolveAssignmentBatchIds = async ({ db, assignmentMethod, batchIds, departmentId, collegeId }) => {
   if (assignmentMethod === ASSIGNMENT_METHOD.BATCH_WISE) {
     if (!Array.isArray(batchIds) || batchIds.length === 0) {
@@ -297,6 +306,7 @@ const createTest = asyncHandler(async (req, res) => {
     startsAt,
     endsAt,
     assignmentMethod,
+    years,
     batchIds,
     testType,
     proctoringPreset,
@@ -325,6 +335,7 @@ const createTest = asyncHandler(async (req, res) => {
   }
 
   const resolvedAssignmentMethod = assignmentMethod || ASSIGNMENT_METHOD.DEPARTMENT_WISE;
+  const resolvedYears = normalizeStudentYears(years);
   if (resolvedAssignmentMethod === ASSIGNMENT_METHOD.EVERYONE) {
     throw new ApiError(422, "Admins can only assign tests within their department", null, "INVALID_ASSIGNMENT_SCOPE");
   }
@@ -359,6 +370,7 @@ const createTest = asyncHandler(async (req, res) => {
         isPublished: isPublishNow(publishState) || isUpcoming(publishState),
         createdByAdminId: adminId,
         assignmentMethod: resolvedAssignmentMethod,
+        years: resolvedYears,
         departmentId: resolvedDepartmentId,
         collegeId,
         batchId: resolvedBatchIds[0] || null,
@@ -624,6 +636,7 @@ const duplicateTest = asyncHandler(async (req, res) => {
         startsAt,
         endsAt,
         assignmentMethod: source.assignmentMethod || deriveAssignmentMethod(source),
+        years: normalizeStudentYears(source.years),
         status: TEST_STATUS.DRAFT,
         isPublished: false,
         createdByAdminId: req.admin.id,
@@ -674,7 +687,7 @@ const cloneTest = asyncHandler(async (req, res) => {
   const { testId } = req.params;
   const collegeId = req.collegeId;
   const adminDepartmentId = req.admin?.departmentId;
-  const { assignmentMethod = "department_wise", departmentId = null, batchIds = [] } = req.body;
+  const { assignmentMethod = "department_wise", departmentId = null, batchIds = [], years } = req.body;
 
   if (!adminDepartmentId) {
     throw new ApiError(403, "Admin is not linked to a department", null, "ADMIN_DEPARTMENT_REQUIRED");
@@ -724,6 +737,7 @@ const cloneTest = asyncHandler(async (req, res) => {
     assignmentMethod,
     departmentId: adminDepartmentId,
     batchIds: Array.isArray(batchIds) ? batchIds : [],
+    years,
     adminId: req.admin.id,
   });
 
@@ -850,6 +864,7 @@ const updateTest = asyncHandler(async (req, res) => {
 
     const shouldUpdateAssignment =
       typeof req.body.assignmentMethod !== "undefined"
+      || typeof req.body.years !== "undefined"
       || typeof req.body.departmentId !== "undefined"
       || Array.isArray(req.body.batchIds);
     const resolvedTestConfiguration = resolvePersistedTestConfiguration({
@@ -863,6 +878,9 @@ const updateTest = asyncHandler(async (req, res) => {
     let resolvedBatchIds = existing.batchAssignments.map((item) => item.batchId);
     let resolvedDepartmentId = existing.departmentId;
     let resolvedAssignmentMethod = deriveAssignmentMethod(existing);
+    const resolvedYears = typeof req.body.years !== "undefined"
+      ? normalizeStudentYears(req.body.years)
+      : normalizeStudentYears(existing.years);
     if (shouldUpdateAssignment) {
       resolvedAssignmentMethod = req.body.assignmentMethod || resolvedAssignmentMethod;
       if (resolvedAssignmentMethod === ASSIGNMENT_METHOD.EVERYONE) {
@@ -899,6 +917,7 @@ const updateTest = asyncHandler(async (req, res) => {
         assignmentMethod: shouldUpdateAssignment
           ? resolvedAssignmentMethod
           : (existing.assignmentMethod || deriveAssignmentMethod(existing)),
+        years: resolvedYears,
         departmentId: shouldUpdateAssignment ? resolvedDepartmentId : existing.departmentId,
         batchId: shouldUpdateAssignment ? (resolvedBatchIds[0] || null) : existing.batchId,
         ...resolvedTestConfiguration.persistenceFields,
@@ -1068,16 +1087,31 @@ const transitionTestStatus = asyncHandler(async (req, res) => {
 
   const targetStatus = resolveTransitionTarget(currentStatus, action);
   assertTransition(currentStatus, targetStatus);
+  const transitionedAt = new Date();
 
   const updated = await db.test.update({
     where: { id: testId },
     data: {
       status: targetStatus,
       isPublished: action === TRANSITION_ACTION.COMPLETE || action === TRANSITION_ACTION.ARCHIVE ? false : true,
-      startsAt: action === TRANSITION_ACTION.GO_LIVE && existing.startsAt > new Date() ? new Date() : existing.startsAt,
-      endsAt: action === TRANSITION_ACTION.COMPLETE && existing.endsAt > new Date() ? new Date() : existing.endsAt,
+      startsAt: action === TRANSITION_ACTION.GO_LIVE && existing.startsAt > transitionedAt ? transitionedAt : existing.startsAt,
+      endsAt: action === TRANSITION_ACTION.COMPLETE ? transitionedAt : existing.endsAt,
     },
   });
+  const completedSubmissions = action === TRANSITION_ACTION.COMPLETE
+    ? await db.submission.findMany({
+        where: { testId, collegeId, status: "IN_PROGRESS" },
+        select: { id: true },
+      })
+    : [];
+
+  if (completedSubmissions.length > 0) {
+    await Promise.all(
+      completedSubmissions.map((submission) =>
+        completeSubmission({ submissionId: submission.id, autoSubmitted: true })
+      )
+    );
+  }
 
   await createAuditLog({
     action: transitionAuditAction(action),
@@ -1089,6 +1123,8 @@ const transitionTestStatus = asyncHandler(async (req, res) => {
     afterState: {
       status: targetStatus,
       action,
+      endsAt: updated.endsAt,
+      autoSubmittedAttempts: completedSubmissions.length,
     },
   });
 

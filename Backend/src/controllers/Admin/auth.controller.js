@@ -9,6 +9,16 @@ const {
   invalidateRefreshToken,
 } = require("../../services/refresh-token-cache.service");
 
+const ADMIN_REFRESH_COOKIE = "lms_admin_refresh_token";
+
+const getRefreshCookieOptions = () => ({
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
+  sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+  path: "/api/admin/auth",
+  maxAge: 1000 * 60 * 60 * 24 * 7,
+});
+
 const verifyRefreshPayloadOrThrow = (refreshToken) => {
   try {
     return verifyRefreshToken(refreshToken);
@@ -55,6 +65,7 @@ const adminLogin = asyncHandler(async (req, res) => {
     },
   });
   await cacheRefreshToken("admin", refreshToken, refreshRecord);
+  res.cookie(ADMIN_REFRESH_COOKIE, refreshToken, getRefreshCookieOptions());
 
   res.status(200).json({
     accessToken,
@@ -75,7 +86,11 @@ const adminLogin = asyncHandler(async (req, res) => {
 const adminRefresh = asyncHandler(async (req, res) => {
   const m = await models.init();
   const db = m.dbClient;
-  const { refreshToken } = req.body;
+  const refreshToken = req.cookies?.[ADMIN_REFRESH_COOKIE] || req.body?.refreshToken;
+
+  if (!refreshToken) {
+    throw new ApiError(400, "Refresh token required");
+  }
 
   let dbToken = await getCachedRefreshToken("admin", refreshToken);
   if (!dbToken) {
@@ -105,7 +120,7 @@ const adminRefresh = asyncHandler(async (req, res) => {
 const adminLogout = asyncHandler(async (req, res) => {
   const m = await models.init();
   const db = m.dbClient;
-  const { refreshToken } = req.body;
+  const refreshToken = req.cookies?.[ADMIN_REFRESH_COOKIE] || req.body?.refreshToken;
 
   if (refreshToken) {
     await db.adminRefreshToken.updateMany({
@@ -115,6 +130,7 @@ const adminLogout = asyncHandler(async (req, res) => {
     await invalidateRefreshToken("admin", refreshToken);
   }
 
+  res.clearCookie(ADMIN_REFRESH_COOKIE, getRefreshCookieOptions());
   res.status(200).json({ message: "Logged out" });
 });
 

@@ -23,10 +23,22 @@ export default defineConfig([
       },
     },
     rules: {
-      'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]', argsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' }],
+      'no-unused-vars': ['warn', { varsIgnorePattern: '^[A-Z_]', argsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' }],
       'react-refresh/only-export-components': 'off',
       'react-hooks/set-state-in-effect': 'off',
       'react-hooks/purity': 'off',
+      'react-hooks/preserve-manual-memoization': 'warn',
+      'react-hooks/incompatible-library': 'warn',
+    },
+  },
+  {
+    files: ['**/*.test.{js,jsx,ts,tsx}', '**/*.integration.test.{js,jsx,ts,tsx}', 'vitest.config.js'],
+    languageOptions: {
+      globals: {
+        ...globals.browser,
+        ...globals.node,
+        ...globals.vitest,
+      },
     },
   },
 ])

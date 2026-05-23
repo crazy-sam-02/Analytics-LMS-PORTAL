@@ -1,6 +1,7 @@
 const models = require("../../models");
 const { asyncHandler } = require("../../utils/http");
 const { buildStudentAssignmentScope } = require("../../services/student-test-assignment.service");
+const { getSubmissionScorePercent } = require("../../utils/score");
 
 const getSummary = asyncHandler(async (req, res) => {
   const m = await models.init();
@@ -26,7 +27,7 @@ const getSummary = asyncHandler(async (req, res) => {
     submissions.length > 0
       ? Number(
           (
-            submissions.reduce((acc, item) => acc + item.accuracy, 0) / submissions.length
+            submissions.reduce((acc, item) => acc + getSubmissionScorePercent(item), 0) / submissions.length
           ).toFixed(2)
         )
       : 0;

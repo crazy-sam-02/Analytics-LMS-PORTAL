@@ -9,7 +9,7 @@ let socketRedisPubClient = null;
 let socketRedisSubClient = null;
 
 const attachRedisAdapterIfAvailable = async () => {
-  if (!io || !env.redis?.enabled || !env.redisUrl) {
+  if (!io || env.nodeEnv === "test" || !env.redis?.enabled || !env.redisUrl) {
     return;
   }
 

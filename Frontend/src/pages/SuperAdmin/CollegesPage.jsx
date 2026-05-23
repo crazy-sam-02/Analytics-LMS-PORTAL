@@ -302,6 +302,11 @@ export default function CollegesPage() {
                       <p className="text-sm font-semibold text-text-primary">Record Details</p>
                       <dl className="mt-3 space-y-3 text-sm">
                         <div className="flex items-center justify-between gap-3">
+                          <dt className="text-text-secondary">ID</dt>
+                          <dd className="text-text-primary break-all">{selectedCollege?.id || selectedCollege?._id || "-"}</dd>
+                        </div>
+
+                        <div className="flex items-center justify-between gap-3">
                           <dt className="text-text-secondary">Created</dt>
                           <dd className="text-text-primary">{selectedCollege.createdAt ? new Date(selectedCollege.createdAt).toLocaleString() : "-"}</dd>
                         </div>

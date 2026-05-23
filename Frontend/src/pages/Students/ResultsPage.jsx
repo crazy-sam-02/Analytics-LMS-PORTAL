@@ -40,6 +40,24 @@ const resolveEndDate = (payload) => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
+const isCompletedStatus = (value) => ["COMPLETED", "COMPLETE"].includes(String(value || "").trim().toUpperCase());
+
+const isCompletedTest = (payload) =>
+  Boolean(
+    payload?.is_test_completed ||
+      payload?.isTestCompleted ||
+      payload?.test?.is_completed ||
+      payload?.test?.isCompleted ||
+      isCompletedStatus(
+        payload?.test?.status ||
+          payload?.test?.test_status ||
+          payload?.test?.testStatus ||
+          payload?.test_status ||
+          payload?.testStatus ||
+          payload?.status
+      )
+  );
+
 const resolveBreakdown = (payload) => {
   const rows = payload?.question_breakdown || payload?.questionBreakdown || payload?.breakdown || payload?.questions || [];
 
@@ -81,7 +99,7 @@ export default function ResultsPage() {
     }
   }, [attemptId, navigate, resultQuery.error]);
 
-  const result = resultQuery.data || {};
+  const result = useMemo(() => resultQuery.data || {}, [resultQuery.data]);
 
   const score = toNumber(result?.score ?? result?.summary?.score, 0);
   const percentile = toNumber(result?.percentile ?? result?.summary?.percentile, 0);
@@ -89,9 +107,12 @@ export default function ResultsPage() {
   const reviewMode = resolveReviewMode(result);
   const endDate = resolveEndDate(result);
   const breakdown = useMemo(() => resolveBreakdown(result), [result]);
+  const testCompleted = isCompletedTest(result);
+  const canReviewAnswers = Boolean(result?.can_review_answers || result?.canReviewAnswers);
   const hasTestEnded = !endDate || Date.now() >= endDate;
 
-  const showFullDetails = hasTestEnded && (reviewMode === "show_all" || reviewMode === "show_after_deadline");
+  const showFullDetails =
+    canReviewAnswers || testCompleted || (hasTestEnded && (reviewMode === "show_all" || reviewMode === "show_after_deadline"));
 
   const violationSubmitted = Boolean(
     result?.violation_submit ||
@@ -128,8 +149,8 @@ export default function ResultsPage() {
   }
 
   return (
-    <>
-    <Card className="rounded-2xl border border-primary/25 bg-linear-to-br from-primary-dark via-primary to-primary-dark p-6 text-primary-foreground shadow-lg shadow-primary/30">
+    <div className="space-y-5">
+      <Card className="rounded-2xl border border-primary/25 bg-linear-to-br from-primary-dark via-primary to-primary-dark p-6 text-primary-foreground shadow-lg shadow-primary/30">
         <div className="flex items-center gap-2 text-primary-foreground/90">
           <Rocket className="size-4" />
           <p className="text-xs font-semibold tracking-[0.12em] uppercase">Result Window</p>
@@ -137,7 +158,8 @@ export default function ResultsPage() {
         <h1 className="mt-3 text-3xl font-semibold tracking-tight">Track Test Result</h1>
         <p className="mt-2 text-sm text-primary-foreground/90">the question wise answer for the test you have attempted</p>
       </Card>
-    <section className="space-y-5 mt-20">
+
+      <section className="space-y-5">
       {violationSubmitted ? (
         <Alert className="border-warning/30 bg-warning/10 text-warning">
           <ShieldAlert className="h-4 w-4" />
@@ -167,7 +189,7 @@ export default function ResultsPage() {
         <Card className="p-6">
           <h2 className="text-lg font-semibold text-text-primary">Result Summary</h2>
           <p className="mt-2 text-sm text-text-secondary">
-            Answers are hidden until the test end time is completed.
+            Answers are hidden until the test is marked completed or the test end time is completed.
           </p>
           {endDate ? (
             <p className="mt-1 text-xs text-text-secondary">Available after: {new Date(endDate).toLocaleString()}</p>
@@ -239,8 +261,8 @@ export default function ResultsPage() {
 
        <div className="flex justify-center">
         <Button type="button" className="bg-primary-dark text-primary-foreground p-6" onClick={() => navigate("/tests/ongoing")}>Return to Home</Button>
-      </div> 
-    </section>
-    </>
+      </div>
+      </section>
+    </div>
   );
 }

@@ -81,9 +81,9 @@ export const studentApi = {
     }
   },
 
-  refreshSession: async () => {
+  refreshSession: async (payload = {}) => {
     try {
-      const response = await httpClient.post("/auth/refresh", {});
+      const response = await httpClient.post("/auth/refresh", payload);
       return withServerTime(response).data;
     } catch (error) {
       throw toApiError(error);
@@ -99,9 +99,9 @@ export const studentApi = {
     }
   },
 
-  logout: async () => {
+  logout: async (payload = {}) => {
     try {
-      await httpClient.post("/auth/logout", {});
+      await httpClient.post("/auth/logout", payload);
     } catch (error) {
       throw toApiError(error);
     }
@@ -508,7 +508,12 @@ export const studentApi = {
 
   getAttemptResult: async (attemptId) => {
     try {
-      const response = await httpClient.get(`/results/${attemptId}`);
+      const response = await httpClient.get(`/results/${attemptId}`, {
+        headers: {
+          "Cache-Control": "no-cache",
+          Pragma: "no-cache",
+        },
+      });
       return withServerTime(response).data;
     } catch (error) {
       const parsed = toApiError(error);
@@ -517,7 +522,12 @@ export const studentApi = {
       }
 
       try {
-        const fallbackResponse = await httpClient.get(`/submission/${attemptId}`);
+        const fallbackResponse = await httpClient.get(`/submission/${attemptId}`, {
+          headers: {
+            "Cache-Control": "no-cache",
+            Pragma: "no-cache",
+          },
+        });
         return withServerTime(fallbackResponse).data;
       } catch (fallbackError) {
         throw toApiError(fallbackError);

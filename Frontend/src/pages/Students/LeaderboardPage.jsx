@@ -29,6 +29,8 @@ const toNumber = (value, fallback = 0) => {
   return Number.isFinite(num) ? num : fallback;
 };
 
+const clampPercent = (value) => Math.max(0, Math.min(100, toNumber(value, 0)));
+
 const normalizeText = (value) => String(value || "").trim().toLowerCase();
 
 const buildIdentitySet = (values = []) => {
@@ -56,8 +58,8 @@ const normalizeRows = (payload) => {
     testId: row?.testId || row?.test_id || null,
     studentId: row?.studentId || row?.student_id || row?.userId || row?.user_id || null,
     fullName: row?.studentName || row?.student_name || row?.name || "Student",
-    score: toNumber(row?.score),
-    percentage: toNumber(row?.percentage ?? row?.accuracy ?? row?.percentile, Number.NaN),
+    score: clampPercent(row?.score),
+    percentage: clampPercent(row?.percentage ?? row?.accuracy ?? row?.score),
     department: row?.department || row?.departmentName || "-",
     testName: row?.testName || row?.test_name || "-",
     timeTakenSeconds: toNumber(row?.timeTakenSeconds || row?.time_taken || 0),

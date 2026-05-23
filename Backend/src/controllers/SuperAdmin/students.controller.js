@@ -1,7 +1,21 @@
 const models = require("../../models");
 const bcrypt = require("bcrypt");
+const { redisClient, getRedisQueueConnection } = require("../../config/redis");
 const { createAuditLog } = require("../../services/audit.service");
 const { ApiError, asyncHandler } = require("../../utils/http");
+const { getPagination } = require("../../utils/pagination");
+
+let Queue = null;
+let Worker = null;
+try {
+  ({ Queue, Worker } = require("bullmq"));
+} catch (_error) {
+  Queue = null;
+  Worker = null;
+}
+
+let superStudentImportQueue = null;
+const queueConnection = getRedisQueueConnection();
 
 const createStudentPassword = (fullName, enrollNumber) => {
   const nameLetters = String(fullName || "").replace(/[^a-zA-Z]/g, "");
@@ -16,44 +30,96 @@ const createStudentPassword = (fullName, enrollNumber) => {
   return `${namePart}@${enrollDigits.slice(-3)}`;
 };
 
-const generateUniqueStudentId = async (collegeId, seedValue = "") => {
-  const m = await models.init();
-  const db = m.dbClient;
-  const seedDigits = String(seedValue || "").replace(/\D/g, "");
-  const suffix = (seedDigits.slice(-4) || `${Date.now()}`.slice(-4)).padStart(4, "0");
+const resolveStudentId = (enrollNumber, fallbackStudentId = "") => String(enrollNumber || fallbackStudentId || "").trim();
+const getStudentNumber = (student = {}) => student.enrollNumber || student.enrollmentNumber || student.studentId;
 
-  let index = 0;
-  while (index < 500) {
-    const candidate = index === 0 ? `STD-${suffix}` : `STD-${suffix}-${String(index).padStart(2, "0")}`;
-    const exists = await db.student.findFirst({
-      where: {
-        collegeId,
-        studentId: candidate,
-      },
-      select: { id: true },
-    });
+const parseStudentYear = (value) => {
+  const year = Number(String(value ?? "").trim());
+  return Number.isInteger(year) && year >= 1 && year <= 4 ? year : null;
+};
 
-    if (!exists) {
-      return candidate;
-    }
+const normalizeBatchIds = (student, extraIds = []) => [...new Set([
+  ...(Array.isArray(student?.batchIds) ? student.batchIds : []),
+  student?.batchId,
+  ...extraIds,
+].filter(Boolean).map((id) => String(id)))];
 
-    index += 1;
+const assertBatchCanAttachToStudent = (batch, studentCollegeId, studentDepartmentId) => {
+  if (!batch || String(batch.collegeId || "") !== String(studentCollegeId || "")) {
+    throw new ApiError(404, "Batch not found in selected college");
   }
 
-  throw new ApiError(500, "Unable to generate unique student id");
+  if (batch.isGlobal) {
+    const scopedDepartmentIds = Array.isArray(batch.departmentIds) ? batch.departmentIds.map((id) => String(id)) : [];
+    if (scopedDepartmentIds.length > 0 && !scopedDepartmentIds.includes(String(studentDepartmentId || ""))) {
+      throw new ApiError(422, "Student department is not included in this global batch");
+    }
+    return;
+  }
+
+  if (String(batch.departmentId || "") !== String(studentDepartmentId || "")) {
+    throw new ApiError(422, "Batch not found for selected department");
+  }
+};
+
+const parseCsvRecords = (csvText) => {
+  const records = [];
+  let row = [];
+  let cell = "";
+  let inQuotes = false;
+  const text = String(csvText || "");
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+
+    if (char === "\"") {
+      if (inQuotes && next === "\"") {
+        cell += "\"";
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (char === "," && !inQuotes) {
+      row.push(cell.trim());
+      cell = "";
+      continue;
+    }
+
+    if ((char === "\n" || char === "\r") && !inQuotes) {
+      if (char === "\r" && next === "\n") {
+        index += 1;
+      }
+      row.push(cell.trim());
+      if (row.some(Boolean)) {
+        records.push(row);
+      }
+      row = [];
+      cell = "";
+      continue;
+    }
+
+    cell += char;
+  }
+
+  row.push(cell.trim());
+  if (row.some(Boolean)) {
+    records.push(row);
+  }
+
+  return records;
 };
 
 const parseCsv = (csvText) => {
-  const rows = String(csvText || "")
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
+  const rows = parseCsvRecords(csvText);
 
   if (rows.length === 0) return [];
 
-  const headers = rows[0].split(",").map((value) => value.trim().toLowerCase());
-  return rows.slice(1).map((line, rowIndex) => {
-    const values = line.split(",").map((value) => value.trim());
+  const headers = rows[0].map((value) => value.trim().toLowerCase());
+  return rows.slice(1).map((values, rowIndex) => {
     const record = { __row: rowIndex + 2 };
     headers.forEach((key, index) => {
       record[key] = values[index] || "";
@@ -98,12 +164,13 @@ const processBulkImportJob = async ({ jobId, collegeId, superAdminId, csvData })
       const email = getRowValue(row, ["email", "emailAddress"]);
       const requestedStudentId = getRowValue(row, ["studentId", "student_id", "rollNo", "rollNumber"]);
       const enrollNumber = getRowValue(row, ["enrollNumber", "enroll_number", "enrollmentNumber", "enrollment_no"]) || requestedStudentId;
+      const year = parseStudentYear(getRowValue(row, ["year", "studentYear", "student_year", "academicYear"]));
       const departmentLookup = getRowValue(row, ["departmentId", "department_id", "department", "departmentName"]);
       const batchLookup = getRowValue(row, ["batchId", "batch_id", "batch", "batchName"]);
 
-      if (!fullName || !email || !departmentLookup || !enrollNumber) {
+      if (!fullName || !email || !departmentLookup || !enrollNumber || !year) {
         result.failed += 1;
-        result.errors.push({ row: row.__row, reason: "Missing required columns" });
+        result.errors.push({ row: row.__row, reason: "Missing required columns: fullName, email, enrollNumber, department, year" });
         continue;
       }
 
@@ -114,14 +181,13 @@ const processBulkImportJob = async ({ jobId, collegeId, superAdminId, csvData })
         },
       });
 
-      const duplicateStudentId = requestedStudentId
-        ? await db.student.findFirst({
-            where: {
-              collegeId,
-              studentId: requestedStudentId,
-            },
-          })
-        : null;
+      const studentId = resolveStudentId(enrollNumber, requestedStudentId);
+      const duplicateStudentId = await db.student.findFirst({
+        where: {
+          collegeId,
+          studentId,
+        },
+      });
 
       if (duplicateEmail || duplicateStudentId) {
         result.duplicates += 1;
@@ -176,17 +242,18 @@ const processBulkImportJob = async ({ jobId, collegeId, superAdminId, csvData })
 
       const generatedPassword = createStudentPassword(fullName, enrollNumber);
       const passwordHash = await bcrypt.hash(generatedPassword, 10);
-      const studentId = requestedStudentId || await generateUniqueStudentId(collegeId, enrollNumber);
-
       await db.student.create({
         data: {
           fullName,
           email,
           studentId,
+          enrollNumber,
           passwordHash,
           collegeId,
           departmentId: department.id,
+          year,
           batchId: batch?.id || null,
+          batchIds: batch?.id ? [batch.id] : [],
         },
       });
 
@@ -231,27 +298,72 @@ const processBulkImportJob = async ({ jobId, collegeId, superAdminId, csvData })
   }
 };
 
+const enqueueSuperStudentImportJob = async (payload) => {
+  if (!superStudentImportQueue) {
+    setTimeout(() => {
+      processBulkImportJob(payload);
+    }, 0);
+    return;
+  }
+
+  try {
+    await superStudentImportQueue.add("import", payload, { attempts: 3, backoff: { type: "exponential", delay: 3000 }, removeOnComplete: true, removeOnFail: false });
+  } catch (_error) {
+    setTimeout(() => {
+      processBulkImportJob(payload);
+    }, 0);
+  }
+};
+
+if (Queue && redisClient && queueConnection) {
+  superStudentImportQueue = new Queue("super-student-import-jobs", {
+    connection: queueConnection,
+  });
+
+  new Worker(
+    "super-student-import-jobs",
+    async (job) => {
+      await processBulkImportJob(job.data);
+    },
+    {
+      connection: queueConnection,
+      concurrency: 2,
+    }
+  );
+}
+
 const getStudentsGlobal = asyncHandler(async (req, res) => {
   const m = await models.init();
   const db = m.dbClient;
-  const page = Number(req.query.page || 1);
-  const limit = Number(req.query.limit || 20);
+  const { page, limit, skip } = getPagination(req.query);
   const search = (req.query.search || "").trim();
-  const { collegeId, departmentId, batchId } = req.query;
+  const { collegeId, departmentId, batchId, studentId, year } = req.query;
+
+  const filters = [];
+  if (batchId) {
+    filters.push({ OR: [{ batchId }, { batchIds: { in: [batchId] } }] });
+  }
+  if (search) {
+    filters.push({
+      OR: [
+        { fullName: { contains: search, mode: "insensitive" } },
+        { email: { contains: search, mode: "insensitive" } },
+        { studentId: { contains: search, mode: "insensitive" } },
+        { enrollNumber: { contains: search, mode: "insensitive" } },
+        { enrollmentNumber: { contains: search, mode: "insensitive" } },
+      ],
+    });
+  }
+
+  if (year) {
+    filters.push({ year: Number(year) });
+  }
 
   const where = {
     ...(collegeId ? { collegeId } : {}),
     ...(departmentId ? { departmentId } : {}),
-    ...(batchId ? { batchId } : {}),
-    ...(search
-      ? {
-          OR: [
-            { fullName: { contains: search, mode: "insensitive" } },
-            { email: { contains: search, mode: "insensitive" } },
-            { studentId: { contains: search, mode: "insensitive" } },
-          ],
-        }
-      : {}),
+    ...(studentId ? { id: studentId } : {}),
+    ...(filters.length ? { AND: filters } : {}),
   };
 
   const [items, total] = await Promise.all([
@@ -262,15 +374,20 @@ const getStudentsGlobal = asyncHandler(async (req, res) => {
         department: true,
         batch: true,
       },
-      orderBy: { createdAt: "desc" },
-      skip: (page - 1) * limit,
+      orderBy: [{ year: "asc" }, { createdAt: "desc" }],
+      skip,
       take: limit,
     }),
     db.student.count({ where }),
   ]);
 
+  const data = items.map((student) => ({
+    ...student,
+    studentId: getStudentNumber(student),
+  }));
+
   res.status(200).json({
-    data: items,
+    data,
     pagination: {
       page,
       limit,
@@ -291,7 +408,7 @@ const toggleStudentStatus = asyncHandler(async (req, res) => {
   }
 
   if (req.body.isActive === false) {
-    const expectedConfirmation = `BLOCK ${existing.studentId || existing.id}`;
+    const expectedConfirmation = `BLOCK ${getStudentNumber(existing) || existing.id}`;
     if (req.body?.confirmationText !== expectedConfirmation) {
       throw new ApiError(400, `Typed acknowledgment mismatch. Expected: ${expectedConfirmation}`);
     }
@@ -319,7 +436,7 @@ const createStudentGlobal = asyncHandler(async (req, res) => {
   const m = await models.init();
   const db = m.dbClient;
   const superAdminId = req.superAdmin.id;
-  const { fullName, email, enrollNumber, collegeId, departmentId, department, batchId } = req.body;
+  const { fullName, email, enrollNumber, year, collegeId, departmentId, department, batchId } = req.body;
 
   const college = await db.college.findUnique({ where: { id: collegeId } });
   if (!college || !college.isActive) {
@@ -358,30 +475,35 @@ const createStudentGlobal = asyncHandler(async (req, res) => {
       where: {
         id: batchId,
         collegeId,
-        departmentId: departmentRecord.id,
       },
     });
 
-    if (!batch) {
-      throw new ApiError(404, "Batch not found for selected department");
-    }
+    assertBatchCanAttachToStudent(batch, collegeId, departmentRecord.id);
 
     resolvedBatchId = batch.id;
   }
 
-  const generatedStudentId = await generateUniqueStudentId(collegeId, enrollNumber);
+  const studentId = resolveStudentId(enrollNumber);
   const plainPassword = createStudentPassword(fullName, enrollNumber);
   const passwordHash = await bcrypt.hash(plainPassword, 10);
+
+  const duplicateStudentId = await db.student.findFirst({ where: { collegeId, studentId } });
+  if (duplicateStudentId) {
+    throw new ApiError(409, "Student with this enroll number already exists");
+  }
 
   const student = await db.student.create({
     data: {
       fullName,
       email,
-      studentId: generatedStudentId,
+      studentId,
+      enrollNumber,
       passwordHash,
       collegeId,
       departmentId: departmentRecord.id,
       batchId: resolvedBatchId,
+      batchIds: resolvedBatchId ? [resolvedBatchId] : [],
+      year,
     },
     include: {
       college: true,
@@ -437,14 +559,12 @@ const bulkImportStudentsGlobal = asyncHandler(async (req, res) => {
     },
   });
 
-  setTimeout(() => {
-    processBulkImportJob({
-      jobId: job.id,
-      collegeId,
-      superAdminId,
-      csvData,
-    });
-  }, 0);
+  await enqueueSuperStudentImportJob({
+    jobId: job.id,
+    collegeId,
+    superAdminId,
+    csvData,
+  });
 
   res.status(202).json({
     jobId: job.id,
@@ -481,7 +601,7 @@ const updateStudentGlobal = asyncHandler(async (req, res) => {
   const m = await models.init();
   const db = m.dbClient;
   const { studentId } = req.params;
-  const { fullName, email, enrollNumber, collegeId, departmentId, batchId, batchIds } = req.body;
+  const { fullName, email, enrollNumber, year, collegeId, departmentId, batchId, batchIds } = req.body;
 
   const existing = await db.student.findUnique({ where: { id: studentId } });
   if (!existing) {
@@ -497,21 +617,48 @@ const updateStudentGlobal = asyncHandler(async (req, res) => {
     }
   }
 
+  const nextCollegeId = collegeId || existing.collegeId;
+  const nextDepartmentId = departmentId || existing.departmentId;
+  const nextStudentId = enrollNumber ? String(enrollNumber).trim() : null;
+  if (nextStudentId && nextStudentId !== existing.studentId) {
+    const duplicateStudentId = await db.student.findFirst({
+      where: { collegeId: nextCollegeId, studentId: nextStudentId },
+    });
+    if (duplicateStudentId) {
+      throw new ApiError(409, "Student with this enroll number already exists");
+    }
+  }
+
   const updateData = {
     ...(fullName && { fullName }),
     ...(email && { email }),
-    ...(enrollNumber && { enrollNumber }),
-    ...(collegeId && { collegeId }),
-    ...(departmentId && { departmentId }),
+    ...(enrollNumber && { enrollNumber, studentId: String(enrollNumber).trim() }),
+    ...(year !== undefined ? { year } : {}),
+    ...(collegeId && { collegeId: nextCollegeId }),
+    ...(departmentId && { departmentId: nextDepartmentId }),
   };
 
   // Handle batch assignment (add to array if single batchId provided, or replace if batchIds array provided)
   if (batchId !== undefined) {
-    const currentBatchIds = Array.isArray(existing.batchIds) ? existing.batchIds : [];
-    const newBatchIds = [...new Set([...currentBatchIds, batchId])]; // Add to array, avoid duplicates
+    const batch = await db.batch.findFirst({ where: { id: batchId, collegeId: nextCollegeId } });
+    assertBatchCanAttachToStudent(batch, nextCollegeId, nextDepartmentId);
+    const newBatchIds = normalizeBatchIds(existing, [batchId]);
     updateData.batchIds = newBatchIds;
+    updateData.batchId = batchId;
+    if (!batch.isGlobal) {
+      updateData.departmentId = batch.departmentId;
+    }
   } else if (batchIds !== undefined) {
-    updateData.batchIds = Array.isArray(batchIds) ? batchIds : [];
+    const nextBatchIds = [...new Set((Array.isArray(batchIds) ? batchIds : []).filter(Boolean).map((id) => String(id)))];
+    if (nextBatchIds.length > 0) {
+      const batches = await db.batch.findMany({ where: { id: { in: nextBatchIds }, collegeId: nextCollegeId } });
+      if (batches.length !== nextBatchIds.length) {
+        throw new ApiError(422, "One or more batches are not in the selected college");
+      }
+      batches.forEach((batch) => assertBatchCanAttachToStudent(batch, nextCollegeId, nextDepartmentId));
+    }
+    updateData.batchIds = nextBatchIds;
+    updateData.batchId = nextBatchIds[0] || null;
   }
 
   const student = await db.student.update({
@@ -542,7 +689,7 @@ const deleteStudentGlobal = asyncHandler(async (req, res) => {
     throw new ApiError(404, "Student not found");
   }
 
-  const expectedConfirmation = `DELETE ${existing.studentId || existing.id}`;
+  const expectedConfirmation = `DELETE ${getStudentNumber(existing) || existing.id}`;
   if (req.body?.confirmationText !== expectedConfirmation) {
     throw new ApiError(400, `Typed acknowledgment mismatch. Expected: ${expectedConfirmation}`);
   }

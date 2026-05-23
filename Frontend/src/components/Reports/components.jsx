@@ -21,7 +21,7 @@ import {
   Legend,
   ReferenceLine,
 } from "recharts";
-import { CHART_COLORS, scoreColorClass } from "@/components/Reports/utils";
+import { CHART_COLORS, clampPercent, scoreColorClass } from "@/components/Reports/utils";
 
 const AXIS_TICK = { fontSize: 11, fill: "var(--text-secondary)" };
 
@@ -34,7 +34,7 @@ export function ChartTooltip({ active, payload, label }) {
         <div key={`${point.name}-${index}`} className="flex items-center gap-2 text-text-secondary">
           <span className="inline-block h-2 w-2 rounded-sm" style={{ background: point.color }} />
           <span>{point.name}:</span>
-          <span className="font-semibold text-text-primary">{typeof point.value === "number" ? point.value.toFixed(2) : point.value}</span>
+          <span className="font-semibold text-text-primary">{typeof point.value === "number" ? clampPercent(point.value).toFixed(2) : point.value}</span>
         </div>
       ))}
     </div>
@@ -69,6 +69,48 @@ export function KpiCard({ label, value, sub, flag, flagLabel }) {
   );
 }
 
+export function AbsentStudentsCard({ title, subtitle, students = [], count }) {
+  const rows = Array.isArray(students) ? students : [];
+  const total = Number.isFinite(Number(count)) ? Number(count) : rows.length;
+
+  return (
+    <article className="rounded-2xl border border-border bg-card p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-text-primary">{title}</h3>
+          {subtitle ? <p className="text-xs text-text-secondary">{subtitle}</p> : null}
+        </div>
+        <div className="rounded-xl border border-border bg-background px-3 py-2 text-center">
+          <p className="text-[11px] font-semibold uppercase tracking-widest text-text-secondary">Not Attended</p>
+          <p className="text-lg font-bold text-text-primary">{total}</p>
+        </div>
+      </div>
+
+      {rows.length ? (
+        <div className="mt-4 max-h-60 space-y-2 overflow-y-auto pr-1">
+          {rows.map((student, index) => (
+            <div
+              key={student.studentId || student.id || `${student.name || "student"}-${index}`}
+              className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-background px-3 py-2 text-sm"
+            >
+              <div className="min-w-0">
+                <p className="truncate font-medium text-text-primary">{student.name || "-"}</p>
+                <p className="text-xs text-text-secondary">{student.rollNo || student.studentId || "-"}</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {student.department ? <StatusBadge label={student.department} variant="info" /> : null}
+                {student.batch ? <StatusBadge label={student.batch} variant="default" /> : null}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-4 text-sm text-text-secondary">All students attended this test in the current scope.</p>
+      )}
+    </article>
+  );
+}
+
 export function EmptyState({ title, description, action }) {
   return (
     <div className="flex h-full min-h-45 flex-col items-center justify-center gap-3 py-8 text-center">
@@ -89,7 +131,7 @@ export function EmptyState({ title, description, action }) {
 }
 
 export function ScoreBadge({ score }) {
-  return <span className={`font-semibold tabular-nums ${scoreColorClass(score)}`}>{score != null ? `${Number(score).toFixed(2)}%` : "-"}</span>;
+  return <span className={`font-semibold tabular-nums ${scoreColorClass(score)}`}>{score != null ? `${clampPercent(score).toFixed(2)}%` : "-"}</span>;
 }
 
 export function StatusBadge({ label, variant = "default" }) {
@@ -131,7 +173,7 @@ export function AreaTrendChart({ data, xKey = "month", dataKey = "score", name =
   if (data.length === 1) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2">
-        <p className="text-2xl font-bold tabular-nums text-text-primary">{Number(data[0][dataKey] || 0).toFixed(1)}%</p>
+        <p className="text-2xl font-bold tabular-nums text-text-primary">{clampPercent(data[0][dataKey]).toFixed(1)}%</p>
         <p className="text-xs text-text-secondary">Trend needs 2+ tests</p>
       </div>
     );
@@ -152,11 +194,11 @@ export function AreaTrendChart({ data, xKey = "month", dataKey = "score", name =
         <Tooltip content={<ChartTooltip />} />
         {refValue != null ? (
           <ReferenceLine
-            y={Number(refValue)}
+            y={clampPercent(refValue)}
             stroke="var(--text-secondary)"
             strokeDasharray="4 3"
             strokeOpacity={0.5}
-            label={{ value: refLabel || `Avg ${Number(refValue).toFixed(1)}%`, fontSize: 10, fill: "var(--text-secondary)", position: "right" }}
+            label={{ value: refLabel || `Avg ${clampPercent(refValue).toFixed(1)}%`, fontSize: 10, fill: "var(--text-secondary)", position: "right" }}
           />
         ) : null}
         <Area
@@ -199,29 +241,60 @@ export function LineTrendChart({ data, xKey = "month", dataKey = "score", name =
   );
 }
 
-export function GroupedBarChart({ data, series, xKey, highlightCategory }) {
+export function GroupedBarChart({ data, series = [], xKey = "department", highlightCategory }) {
   if (!data?.length) return <EmptyState title="No comparison data" />;
+
+  const rows = Array.isArray(data) ? data : [];
+  const s = Array.isArray(series) && series.length ? series : [{ key: "avgScore", label: "Avg Score" }, { key: "passRate", label: "Pass Rate" }];
+
+  const colorClasses = ["bg-blue-600", "bg-green-500", "bg-indigo-500", "bg-yellow-400", "bg-red-500"];
+
+  const toPct = (v) => {
+    if (v == null || Number.isNaN(Number(v))) return 0;
+    const n = Number(v);
+    return clampPercent(n <= 1 ? n * 100 : n);
+  };
+
+  const all = rows.flatMap((r) => s.map((ser) => toPct(r[ser.key])));
+  const max = Math.max(1, ...all);
+
   return (
-    <ResponsiveContainer width="100%" height="100%" minWidth={0}>
-      <BarChart data={data} margin={{ top: 4, right: 8, left: -24, bottom: 0 }} barGap={3}>
-        <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-        <XAxis dataKey={xKey} axisLine={false} tickLine={false} tick={AXIS_TICK} />
-        <YAxis domain={[0, 100]} axisLine={false} tickLine={false} tick={AXIS_TICK} />
-        <Tooltip content={<ChartTooltip />} />
-        <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} iconType="circle" iconSize={8} />
-        {series.map((item, seriesIndex) => (
-          <Bar key={item.key} dataKey={item.key} name={item.label} fill={CHART_COLORS[seriesIndex % CHART_COLORS.length]} radius={[3, 3, 0, 0]} isAnimationActive={false}>
-            {data.map((row, rowIndex) => (
-              <Cell
-                key={`${item.key}-${rowIndex}`}
-                stroke={highlightCategory && String(row[xKey]) === String(highlightCategory) ? "var(--foreground)" : "transparent"}
-                strokeWidth={highlightCategory && String(row[xKey]) === String(highlightCategory) ? 2 : 0}
-              />
-            ))}
-          </Bar>
+    <div className="h-full w-full">
+      <div className="mb-3 flex items-center gap-4">
+        {s.map((ser, idx) => (
+          <div key={ser.key} className="flex items-center gap-2 text-xs text-text-secondary">
+            <span className={`inline-block h-2 w-2 rounded-sm ${colorClasses[idx % colorClasses.length]}`} />
+            <span>{ser.label}</span>
+          </div>
         ))}
-      </BarChart>
-    </ResponsiveContainer>
+      </div>
+
+      <div className="h-full">
+        <div className="space-y-3">
+          {rows.map((row) => (
+            <div key={row[xKey] || row.departmentId} className="flex items-start gap-3">
+              <div className="w-36 text-sm font-medium text-text-primary truncate">{row[xKey]}</div>
+              <div className="flex-1 space-y-1">
+                {s.map((ser, idx) => {
+                  const value = toPct(row[ser.key]);
+                  const pct = max > 0 ? Math.round((value / max) * 100) : 0;
+                  const color = colorClasses[idx % colorClasses.length];
+                  return (
+                    <div key={ser.key} className="flex items-center gap-3">
+                      <div className="w-28 text-xs text-text-secondary">{ser.label}</div>
+                      <div className="flex-1 rounded bg-border h-3 overflow-hidden">
+                        <div className={`${color} h-3`} style={{ width: `${pct}%` }} />
+                      </div>
+                      <div className="w-12 text-right text-xs text-text-secondary">{value ? `${Math.round(value)}%` : "-"}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -237,7 +310,7 @@ export function HorizontalBarChart({ data, dataKey = "score", labelKey = "subjec
           <Tooltip content={<ChartTooltip />} />
           <Bar dataKey={dataKey} name="Score" radius={[0, 3, 3, 0]} isAnimationActive={false}>
             {data.map((entry, index) => {
-              const score = Number(entry[dataKey] || 0);
+              const score = clampPercent(entry[dataKey]);
               const fill = score >= 75 ? "var(--chart-2)" : score >= 50 ? "var(--chart-4)" : "var(--chart-5)";
               return <Cell key={`${entry[labelKey]}-${index}`} fill={fill} />;
             })}
@@ -259,6 +332,62 @@ export function TopicRadarChart({ data, labelKey = "subject", dataKey = "score",
         <Radar name="Score" dataKey={dataKey} stroke={color} fill={color} fillOpacity={0.2} strokeWidth={2} isAnimationActive={false} />
         <Tooltip content={<ChartTooltip />} />
       </RadarChart>
+    </ResponsiveContainer>
+  );
+}
+
+export function TopicPieChart({ data, labelKey = "subject", dataKey = "score" }) {
+  const rows = Array.isArray(data)
+    ? data
+        .map((item, index) => ({
+          ...item,
+          [labelKey]: item?.[labelKey] || item?.topic || item?.subject || `Topic ${index + 1}`,
+          [dataKey]: clampPercent(item?.[dataKey]),
+        }))
+        .filter((item) => Number(item[dataKey]) > 0)
+    : [];
+
+  if (!rows.length) return <EmptyState title="No topic data" />;
+
+  const average = rows.reduce((sum, item) => sum + clampPercent(item[dataKey]), 0) / rows.length;
+
+  return (
+    <ResponsiveContainer width="100%" height="100%" minWidth={0}>
+      <PieChart>
+        <Pie
+          data={rows}
+          dataKey={dataKey}
+          nameKey={labelKey}
+          cx="50%"
+          cy="50%"
+          innerRadius="42%"
+          outerRadius="74%"
+          paddingAngle={1}
+          minAngle={4}
+          isAnimationActive={false}
+        >
+          {rows.map((item, index) => (
+            <Cell key={`${item[labelKey]}-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
+          ))}
+        </Pie>
+        <text x="50%" y="50%" textAnchor="middle" dominantBaseline="middle" className="fill-text-primary" style={{ fontSize: 18, fontWeight: 700 }}>
+          {average.toFixed(1)}%
+        </text>
+        <text x="50%" y="50%" dy="18" textAnchor="middle" dominantBaseline="middle" style={{ fontSize: 10, fill: "var(--text-secondary)" }}>
+          avg
+        </text>
+        <Tooltip
+          content={({ active, payload }) =>
+            active && payload?.[0] ? (
+              <div className="rounded-xl border border-border bg-card px-3 py-2 text-xs shadow-lg">
+                <strong className="text-text-primary">{payload[0].payload?.[labelKey]}</strong>
+                <span className="ml-2 text-text-secondary">{clampPercent(payload[0].payload?.[dataKey]).toFixed(1)}%</span>
+              </div>
+            ) : null
+          }
+        />
+        <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />
+      </PieChart>
     </ResponsiveContainer>
   );
 }

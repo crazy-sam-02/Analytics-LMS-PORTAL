@@ -82,8 +82,16 @@ export default function OngoingTestsPage() {
   const [continueTarget, setContinueTarget] = useState(null);
   const backgroundSubmittedRef = useRef(new Set());
 
-  const { data, isLoading, isFetched } = useQuery(activeAttemptsQueryOptions());
-  const reportsQuery = useQuery(reportsQueryOptions({ view: "overall" }));
+  const { data, isLoading, isFetched } = useQuery({
+    ...activeAttemptsQueryOptions(),
+    refetchInterval: 15 * 1000,
+  });
+  const reportsQuery = useQuery({
+    ...reportsQueryOptions({ view: "overall" }),
+    staleTime: 0,
+    refetchOnMount: "always",
+    refetchInterval: 15 * 1000,
+  });
   const now = useServerNowRaf(data?.serverTime);
 
   const submitMutation = useMutation({
@@ -144,6 +152,8 @@ export default function OngoingTestsPage() {
         accuracy: Number(row?.accuracy || 0),
         submittedAt: row?.submittedAt || row?.submitted_at || null,
         endDate: row?.endDate || row?.end_date || null,
+        testStatus: row?.testStatus || row?.test_status || row?.test?.status || row?.test?.test_status || row?.status || null,
+        isTestCompleted: Boolean(row?.isTestCompleted || row?.is_test_completed || row?.test?.isCompleted || row?.test?.is_completed),
       };
     });
   }, [reportsQuery.data]);
@@ -263,8 +273,10 @@ export default function OngoingTestsPage() {
           {completedTests.map((test, index) => (
             (() => {
               const endTime = test.endDate ? new Date(test.endDate).getTime() : Number.NaN;
+              const testCompleted =
+                test.isTestCompleted || ["COMPLETED", "COMPLETE"].includes(String(test.testStatus || "").trim().toUpperCase());
               const isClosed = Number.isFinite(endTime) ? now >= endTime : true;
-              const canViewResults = Boolean(test.submissionId) && isClosed;
+              const canViewResults = Boolean(test.submissionId) && (isClosed || testCompleted);
 
               return (
             <Card key={test.submissionId || test.testId || `result-${index}`} className="rounded-xl border border-border bg-card p-5">
@@ -275,8 +287,8 @@ export default function OngoingTestsPage() {
                     <span className="rounded-md bg-muted px-2 py-1">Subject: {test.subject}</span>
                     <span className="rounded-md bg-muted px-2 py-1">Marks: {test.score}</span>
                     <span className="rounded-md bg-muted px-2 py-1">Accuracy: {Number.isFinite(test.accuracy) ? `${test.accuracy}%` : "-"}</span>
-                    <span className={`rounded-md px-2 py-1 ${isClosed ? "bg-success/15 text-success" : "bg-warning/15 text-warning"}`}>
-                      {isClosed ? "Test Closed" : "Test Not Closed"}
+                    <span className={`rounded-md px-2 py-1 ${isClosed || testCompleted ? "bg-success/15 text-success" : "bg-warning/15 text-warning"}`}>
+                      {testCompleted ? "Test Completed" : isClosed ? "Test Closed" : "Test Not Closed"}
                     </span>
                     {test.endDate ? (
                       <span className="rounded-md bg-muted px-2 py-1">Ends: {new Date(test.endDate).toLocaleString()}</span>
@@ -290,7 +302,7 @@ export default function OngoingTestsPage() {
                   onClick={() => navigate(`/results/${test.submissionId}`)}
                   disabled={!canViewResults}
                 >
-                  {isClosed ? "View Answers" : "Available After Test Ends"}
+                  {canViewResults ? "View Answers" : "Available After Test Ends"}
                 </Button>
               </div>
             </Card>

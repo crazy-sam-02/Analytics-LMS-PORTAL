@@ -26,6 +26,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Button } from "@/components/ui/button";
 
 const STUDENT_ACCESS_TOKEN_KEY = "student_access_token";
+const STUDENT_REFRESH_TOKEN_KEY = "student_refresh_token";
 const STUDENT_SESSION_ID_KEY = "student_session_id";
 const LEGACY_SESSION_KEY = "session_id";
 const STUDENT_USER_KEY = "student_user";
@@ -43,8 +44,26 @@ const safeWriteStorage = (key, value) => {
   }
 };
 
+const safeWriteSessionStorage = (key, value) => {
+  try {
+    if (value === null || value === undefined || value === "") {
+      sessionStorage.removeItem(key);
+      return;
+    }
+
+    sessionStorage.setItem(key, value);
+  } catch {
+    // Ignore storage failures.
+  }
+};
+
 const persistStudentAuth = (payload = {}) => {
-  safeWriteStorage(STUDENT_ACCESS_TOKEN_KEY, payload.accessToken || null);
+  safeWriteStorage(STUDENT_ACCESS_TOKEN_KEY, null);
+  safeWriteSessionStorage(STUDENT_ACCESS_TOKEN_KEY, payload.accessToken || null);
+  if (payload.refreshToken !== undefined) {
+    safeWriteStorage(STUDENT_REFRESH_TOKEN_KEY, payload.refreshToken || null);
+    safeWriteSessionStorage(STUDENT_REFRESH_TOKEN_KEY, payload.refreshToken || null);
+  }
   safeWriteStorage(STUDENT_SESSION_ID_KEY, payload.sessionId || null);
   safeWriteStorage(LEGACY_SESSION_KEY, payload.sessionId || null);
   safeWriteStorage(STUDENT_USER_KEY, payload.user ? JSON.stringify(payload.user) : null);
@@ -52,6 +71,9 @@ const persistStudentAuth = (payload = {}) => {
 
 const clearStudentAuth = () => {
   safeWriteStorage(STUDENT_ACCESS_TOKEN_KEY, null);
+  safeWriteSessionStorage(STUDENT_ACCESS_TOKEN_KEY, null);
+  safeWriteStorage(STUDENT_REFRESH_TOKEN_KEY, null);
+  safeWriteSessionStorage(STUDENT_REFRESH_TOKEN_KEY, null);
   safeWriteStorage(STUDENT_SESSION_ID_KEY, null);
   safeWriteStorage(LEGACY_SESSION_KEY, null);
   safeWriteStorage(STUDENT_USER_KEY, null);
@@ -79,18 +101,13 @@ function AuthBootstrap() {
   const { initialized, accountInactive, sessionConflict, sessionId, user, accessToken } = useSelector((state) => state.auth);
 
   useEffect(() => {
-    if (accessToken || user) {
+    if (accessToken) {
       dispatch(markInitialized());
       return;
     }
 
-    if (sessionId) {
-      dispatch(refreshSession());
-      return;
-    }
-
-    dispatch(markInitialized());
-  }, [accessToken, dispatch, sessionId, user]);
+    dispatch(refreshSession());
+  }, [accessToken, dispatch]);
 
   useEffect(() => {
     registerAuthInterceptorHandlers({
@@ -206,12 +223,12 @@ const router = createBrowserRouter([
               { path: "/events", element: <PageRoute><EventsPage /></PageRoute> },
               { path: "/profile", element: <PageRoute><ProfilePage /></PageRoute> },
               { path: "/settings", element: <PageRoute><SettingsPage /></PageRoute> },
+                { path: "/results/:attemptId", element: <ResultsPage /> },
             ],
           },
           { path: "/tests/:testId/take", element: <TestEnvironmentRoute /> },
           { path: "/test/:attemptId", element: <TestEnvironmentRoute /> },
           { path: "/submission/:submissionId", element: <SubmissionPage /> },
-          { path: "/results/:attemptId", element: <ResultsPage /> },
         ],
       },
       { path: "*", element: <Navigate to="/login" replace /> },

@@ -1,7 +1,7 @@
 const Redis = require("ioredis");
 const env = require("./env");
 
-const redisEnabled = Boolean(env.redis?.enabled) && Boolean(env.redisUrl);
+const redisEnabled = env.nodeEnv !== "test" && Boolean(env.redis?.enabled) && Boolean(env.redisUrl);
 
 const createRetryStrategy = (maxDelayMs = 2000) => (attempt) => {
   const nextDelay = Math.min(attempt * 100, maxDelayMs);

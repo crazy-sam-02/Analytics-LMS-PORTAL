@@ -1,6 +1,7 @@
 const models = require("../../models");
 const { asyncHandler, ApiError } = require("../../utils/http");
 const { withRedisLock } = require("../../services/redis-lock.service");
+const { getPagination } = require("../../utils/pagination");
 const {
   buildEventFeedKey,
   getCachedEventFeed,
@@ -13,9 +14,7 @@ const {
 const getEvents = asyncHandler(async (req, res) => {
   const m = await models.init();
   const db = m.dbClient;
-  const page = Number(req.query.page || 1);
-  const limit = Number(req.query.limit || 10);
-  const skip = (page - 1) * limit;
+  const { page, limit, skip } = getPagination(req.query, { defaultLimit: 10, maxLimit: 50 });
   const eventType = String(req.query.eventType || "").trim();
   const cacheKey = buildEventFeedKey("student", {
     userId: req.user.id,

@@ -1,9 +1,12 @@
 const models = require("../../models");
 const { redisClient, isRedisAvailable } = require("../../config/redis");
 const { asyncHandler } = require("../../utils/http");
+const { getPagination } = require("../../utils/pagination");
+const { getSubmissionScorePercent } = require("../../utils/score");
 
 const normalizeIdList = (values = []) =>
   [...new Set(values.filter(Boolean).map((value) => String(value)))];
+const getStudentNumber = (student = {}) => student.enrollNumber || student.enrollmentNumber || student.studentId || "-";
 
 const getLeaderboard = asyncHandler(async (req, res) => {
   const m = await models.init();
@@ -14,8 +17,7 @@ const getLeaderboard = asyncHandler(async (req, res) => {
   const departmentId = req.query.departmentId || req.user.departmentId;
   const userBatchIds = normalizeIdList(req.user.batchIds || []);
   const batchId = req.query.batchId || (userBatchIds.length > 0 ? userBatchIds[0] : req.user.batchId);
-  const page = Math.max(1, Number(req.query.page || 1));
-  const limit = Math.min(1000, Math.max(1, Number(req.query.limit || 200)));
+  const { page, limit, skip } = getPagination(req.query, { defaultLimit: 50, maxLimit: 100 });
 
   if (view === "per_test" && !testId) {
     return res.status(200).json({
@@ -167,6 +169,8 @@ const getLeaderboard = asyncHandler(async (req, res) => {
             id: true,
             fullName: true,
             studentId: true,
+            enrollNumber: true,
+            enrollmentNumber: true,
           },
         },
         test: {
@@ -174,16 +178,26 @@ const getLeaderboard = asyncHandler(async (req, res) => {
             id: true,
             title: true,
             subject: true,
+            totalMarks: true,
           },
         },
       },
-      orderBy: [{ score: "desc" }, { timeSpentSeconds: "asc" }],
-      skip: (page - 1) * limit,
+      orderBy: [{ submittedAt: "desc" }],
+      skip,
       take: limit,
     }),
   ]);
 
-  const rows = submissions.filter((entry) => entry?.user && entry?.test);
+  const rows = submissions
+    .filter((entry) => entry?.user && entry?.test)
+    .map((entry) => ({
+      ...entry,
+      scorePercent: getSubmissionScorePercent(entry),
+    }))
+    .sort((a, b) => {
+      if (b.scorePercent !== a.scorePercent) return b.scorePercent - a.scorePercent;
+      return Number(a.timeSpentSeconds || 0) - Number(b.timeSpentSeconds || 0);
+    });
 
   const payload = {
     data: rows.map((entry, index) => ({
@@ -191,13 +205,15 @@ const getLeaderboard = asyncHandler(async (req, res) => {
       id: entry.id,
       userId: entry.user.id,
       studentName: entry.user.fullName,
-      studentId: entry.user.studentId,
+      studentId: getStudentNumber(entry.user),
       testId: entry.test.id,
       testName: entry.test.title,
       subject: entry.test.subject,
-      score: entry.score,
-      percentage: entry.accuracy,
-      accuracy: entry.accuracy,
+      score: entry.scorePercent,
+      rawScore: Number(entry.score || 0),
+      totalMarks: Number(entry.test?.totalMarks || 0),
+      percentage: entry.scorePercent,
+      accuracy: entry.scorePercent,
       timeTakenSeconds: entry.timeSpentSeconds,
     })),
     pagination: {

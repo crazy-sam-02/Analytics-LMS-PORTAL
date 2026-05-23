@@ -95,6 +95,10 @@ const startServer = async () => {
       selectedPort = candidate;
       break;
     }
+
+    if (env.nodeEnv === "production") {
+      throw new Error(`Configured port ${basePort} is unavailable`);
+    }
   }
 
   // Start heartbeat write buffer flush loop.
@@ -126,5 +130,7 @@ const startServer = async () => {
   });
 };
 
-startServer();
-
+startServer().catch((error) => {
+  console.error("Failed to start server:", error);
+  process.exit(1);
+});

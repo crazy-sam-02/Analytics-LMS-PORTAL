@@ -21,6 +21,10 @@ const getRequestActor = (req) => {
     return `super-admin:${req.superAdmin.id}`;
   }
 
+  if (req.user?.id) {
+    return `student:${req.user.id}`;
+  }
+
   if (req.student?.id) {
     return `student:${req.student.id}`;
   }

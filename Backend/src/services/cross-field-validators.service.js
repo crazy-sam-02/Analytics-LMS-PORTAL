@@ -6,6 +6,7 @@
  */
 
 const { ApiError } = require("../utils/http");
+const models = require("../models");
 
 /**
  * Validate that question marks sum to test total marks
@@ -15,8 +16,6 @@ const { ApiError } = require("../utils/http");
  * @throws {ApiError} if marks don't match
  */
 async function validateQuestionMarksSum(questions, totalMarks) {
-  const m = await models.init();
-  const db = m.dbClient;
   if (!Array.isArray(questions) || questions.length === 0) {
     throw new ApiError(422, "Questions must be a non-empty array", {}, "INVALID_QUESTIONS");
   }
@@ -50,8 +49,6 @@ async function validateQuestionMarksSum(questions, totalMarks) {
  * Any → ARCHIVED
  */
 async function validateTestStatusTransition(currentStatus, newStatus) {
-  const m = await models.init();
-  const db = m.dbClient;
   const allowedTransitions = {
     DRAFT: ["SCHEDULED", "PUBLISHED", "ARCHIVED"],
     SCHEDULED: ["ACTIVE", "ARCHIVED", "DRAFT"],
@@ -90,8 +87,6 @@ async function validateTestStatusTransition(currentStatus, newStatus) {
  * Any → ARCHIVED
  */
 async function validateSubmissionStatusTransition(currentStatus, newStatus) {
-  const m = await models.init();
-  const db = m.dbClient;
   const allowedTransitions = {
     IN_PROGRESS: ["SUBMITTED", "GRADED", "ARCHIVED"],
     SUBMITTED: ["GRADED", "ARCHIVED"],
@@ -123,8 +118,6 @@ async function validateSubmissionStatusTransition(currentStatus, newStatus) {
  * Validate that test time window is valid
  */
 async function validateTestTimeWindow(startsAt, endsAt, durationMins) {
-  const m = await models.init();
-  const db = m.dbClient;
   const start = new Date(startsAt);
   const end = new Date(endsAt);
   const now = new Date();
@@ -165,8 +158,6 @@ async function validateTestTimeWindow(startsAt, endsAt, durationMins) {
  * Validate no duplicate questions in test
  */
 async function validateNoDuplicateQuestions(questions) {
-  const m = await models.init();
-  const db = m.dbClient;
   if (!Array.isArray(questions)) {
     return true;
   }
@@ -259,8 +250,6 @@ async function validateUniqueEmail(email, collegeId, excludeId = null) {
  * If batch_wise: batchIds required
  */
 async function validateAssignmentMethod(assignmentMethod, departmentId, batchIds) {
-  const m = await models.init();
-  const db = m.dbClient;
   if (assignmentMethod === "everyone") {
     return true;
   }

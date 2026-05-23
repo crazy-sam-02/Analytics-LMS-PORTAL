@@ -1,7 +1,9 @@
 const express = require("express");
 const db = require("../../config/db");
+const env = require("../../config/env");
 const validate = require("../../middleware/validate");
 const { authenticateAdmin } = require("../../middleware/auth");
+const { createRateLimiter } = require("../../middleware/rate-limit");
 const { requireSameDepartment, departmentMatch } = require("../../middleware/department-guard");
 const { requireAnyPermission, requirePermission } = require("../../middleware/permissions");
 const {
@@ -32,9 +34,18 @@ const { assignTestToBatch, assignTestToDepartment } = require("../../controllers
 
 const router = express.Router();
 
+const adminTestListLimiter = createRateLimiter({
+	scope: "admin-test-list",
+	routeLabel: "/api/admin/tests",
+	windowMs: env.rateLimit.adminTestListWindowMs,
+	max: env.rateLimit.adminTestListMax,
+	message: "Test listing is rate limited. Please wait a moment and retry.",
+});
+
 router.get(
 	"/",
 	authenticateAdmin,
+	adminTestListLimiter,
 	requireAnyPermission("edit_test", "manage_questions", "view_tests"),
 	requireSameDepartment("departmentId"),
 	getTests

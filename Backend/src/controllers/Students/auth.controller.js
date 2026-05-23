@@ -9,12 +9,14 @@ const {
 } = require("../../services/refresh-token-cache.service");
 
 const STUDENT_REFRESH_COOKIE = "student_refresh_token";
+const getEnrollmentDisplay = (user = {}) => user.enrollNumber || user.enrollmentNumber || user.studentId;
 
 const buildStudentProfilePayload = (user = {}) => ({
   id: user.id,
-  studentId: user.studentId,
+  studentId: getEnrollmentDisplay(user),
   fullName: user.fullName,
   email: user.email,
+  year: user.year ?? null,
   avatarUrl: user.avatarUrl || null,
   batch: user.batch || (Array.isArray(user.batches) ? user.batches[0] : null),
   batches: Array.isArray(user.batches) ? user.batches : [],
@@ -32,16 +34,16 @@ const verifyRefreshPayloadOrThrow = (refreshToken) => {
   }
 };
 
-const getRefreshCookieOptions = () => ({
+const getRefreshCookieOptions = ({ keepLoggedIn = true } = {}) => ({
   httpOnly: true,
   secure: process.env.NODE_ENV === "production",
   sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
   path: "/api/auth",
-  maxAge: 1000 * 60 * 60 * 24 * 7,
+  ...(keepLoggedIn ? { maxAge: 1000 * 60 * 60 * 24 * 30 } : {}),
 });
 
 const login = asyncHandler(async (req, res) => {
-  const { identifier, password } = req.body;
+  const { identifier, password, keepLoggedIn = true } = req.body;
 
   const m = await models.init();
   const Student = m.Student;
@@ -67,8 +69,8 @@ const login = asyncHandler(async (req, res) => {
       }
     }
   } else {
-    // Search by studentId
-    user = await Student.findOne({ studentId: identifier }).lean();
+    // Search by the entered enrollment number, with studentId fallback for older records.
+    user = await Student.findOne({ $or: [{ studentId: identifier }, { enrollNumber: identifier }, { enrollmentNumber: identifier }] }).lean();
   }
 
   if (!user) {
@@ -93,10 +95,11 @@ const login = asyncHandler(async (req, res) => {
   const refreshRecord = await StudentRefreshToken.create({ token: refreshToken, userId: user.id, type: "STUDENT", expiresAt: new Date(refreshPayload.exp * 1000) });
   await cacheRefreshToken("student", refreshToken, refreshRecord);
 
-  res.cookie(STUDENT_REFRESH_COOKIE, refreshToken, getRefreshCookieOptions());
+  res.cookie(STUDENT_REFRESH_COOKIE, refreshToken, getRefreshCookieOptions({ keepLoggedIn }));
 
   res.status(200).json({
     accessToken,
+    refreshToken: keepLoggedIn ? refreshToken : undefined,
     sessionId: refreshRecord.id,
     user: buildStudentProfilePayload(user),
   });
@@ -144,6 +147,7 @@ const refresh = asyncHandler(async (req, res) => {
   const newAccessToken = createAccessToken(userRecord);
   res.status(200).json({
     accessToken: newAccessToken,
+    refreshToken,
     sessionId: dbToken.id,
     user: buildStudentProfilePayload(userRecord),
   });

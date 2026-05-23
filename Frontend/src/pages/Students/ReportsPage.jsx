@@ -29,13 +29,43 @@ const toNum = (value, fallback = 0) => {
   return Number.isFinite(num) ? num : fallback;
 };
 
+const clampPercent = (value) => Math.max(0, Math.min(100, toNum(value, 0)));
+
+const formatMarksPair = (obtained, total) => {
+  const obtainedNum = Number(obtained);
+  const totalNum = Number(total);
+  if (!Number.isFinite(obtainedNum) || !Number.isFinite(totalNum) || totalNum <= 0) {
+    return "--";
+  }
+  return `${obtainedNum}/${totalNum}`;
+};
+
+const formatDuration = (secondsInput) => {
+  const totalSeconds = Math.max(0, Math.round(toNum(secondsInput, 0)));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${seconds}s`;
+  }
+
+  return `${minutes}m ${seconds}s`;
+};
+
 const parseFiltersFromSearch = (searchParams) => {
   return {
     test_id: searchParams.get("test_id") || "",
   };
 };
 
-const shouldRevealCorrectAnswers = (reviewMode, deadline) => {
+const isCompletedStatus = (value) => ["COMPLETED", "COMPLETE"].includes(String(value || "").trim().toUpperCase());
+
+const shouldRevealCorrectAnswers = (reviewMode, deadline, testStatus, completedFlag, canReviewFlag) => {
+  if (canReviewFlag || completedFlag || isCompletedStatus(testStatus)) {
+    return true;
+  }
+
   const normalized = String(reviewMode || "show_all").toLowerCase();
   if (normalized === "show_all") {
     return true;
@@ -129,8 +159,8 @@ export default function ReportsPage() {
 
   const summary = overall?.summary || {
     tests_taken: overall?.tests_taken ?? overall?.totalTests,
-    avg_score: overall?.avg_score ?? overall?.accuracy,
-    best_score: overall?.best_score,
+    avg_score: clampPercent(overall?.avg_score ?? overall?.accuracy),
+    best_score: clampPercent(overall?.best_score),
     missed_tests: overall?.missed_tests,
   };
 
@@ -146,7 +176,7 @@ export default function ReportsPage() {
   const byTestSummary = {
     totalMarks: byTest?.total_marks ?? byTest?.totalMarks,
     obtainedMarks: byTest?.obtained_marks ?? byTest?.obtainedMarks,
-    percentage: byTest?.percentage,
+    percentage: byTest?.percentage != null ? clampPercent(byTest.percentage) : byTest?.percentage,
     percentile: byTest?.percentile,
     totalTime: byTest?.time_analytics?.total_time ?? byTest?.timeAnalytics?.totalTime,
     avgTimePerQuestion:
@@ -155,7 +185,25 @@ export default function ReportsPage() {
 
   const reviewMode = byTest?.review_mode || raw?.review_mode || "show_all";
   const deadline = byTest?.test?.end_date || byTest?.test?.endDate || raw?.test?.end_date || raw?.test?.endDate;
-  const canShowCorrectAnswers = shouldRevealCorrectAnswers(reviewMode, deadline);
+  const testStatus =
+    byTest?.test?.status ||
+    byTest?.test?.test_status ||
+    byTest?.testStatus ||
+    byTest?.test_status ||
+    raw?.test?.status ||
+    raw?.test?.test_status ||
+    raw?.testStatus ||
+    raw?.test_status;
+  const testCompleted = Boolean(
+    byTest?.is_test_completed ||
+      byTest?.isTestCompleted ||
+      byTest?.test?.is_completed ||
+      byTest?.test?.isCompleted ||
+      raw?.is_test_completed ||
+      raw?.isTestCompleted
+  );
+  const canReviewFlag = Boolean(byTest?.can_review_answers || byTest?.canReviewAnswers || raw?.can_review_answers || raw?.canReviewAnswers);
+  const canShowCorrectAnswers = shouldRevealCorrectAnswers(reviewMode, deadline, testStatus, testCompleted, canReviewFlag);
   const questionRows = byTest?.questions || byTest?.question_breakdown || [];
 
   const showBarFallback = Array.isArray(topicData) && topicData.length > 0 && topicData.length < 3;
@@ -210,8 +258,18 @@ export default function ReportsPage() {
 
   const reportCards = [
     { label: "Tests Taken", value: summary?.tests_taken ?? "--" },
-    { label: "Avg Score", value: summary?.avg_score != null ? `${toNum(summary.avg_score)}%` : "--" },
-    { label: "Best Score", value: summary?.best_score != null ? `${toNum(summary.best_score)} Marks` : "--" },
+    { label: "Avg Score", value: summary?.avg_score != null ? `${clampPercent(summary.avg_score)}%` : "--" },
+    {
+      label: "Best Result",
+      value:
+        summary?.best_score_percent != null || summary?.best_score != null
+          ? `${clampPercent(summary?.best_score_percent ?? summary?.best_score)}%${
+              Number(summary?.best_score_total_marks || 0) > 0
+                ? ` (${formatMarksPair(summary?.best_score_obtained_marks, summary?.best_score_total_marks)})`
+                : ""
+            }`
+          : "--",
+    },
     { label: "Missed Tests", value: summary?.missed_tests ?? "--" },
   ];
 
@@ -309,19 +367,23 @@ export default function ReportsPage() {
 
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <Card className="p-5"><p className="text-xs font-semibold tracking-wide text-text-secondary uppercase">Total Marks</p><p className="mt-2 text-2xl font-bold text-text-primary">{byTestSummary.totalMarks ?? "--"}</p></Card>
-            <Card className="p-5"><p className="text-xs font-semibold tracking-wide text-text-secondary uppercase">Obtained Marks</p><p className="mt-2 text-2xl font-bold text-text-primary">{byTestSummary.obtainedMarks ?? "--"}</p></Card>
-            <Card className="p-5"><p className="text-xs font-semibold tracking-wide text-text-secondary uppercase">Percentage</p><p className="mt-2 text-2xl font-bold text-text-primary">{byTestSummary.percentage != null ? `${toNum(byTestSummary.percentage)}%` : "--"}</p></Card>
+            <Card className="p-5"><p className="text-xs font-semibold tracking-wide text-text-secondary uppercase">Obtained Marks</p><p className="mt-2 text-2xl font-bold text-text-primary">{formatMarksPair(byTestSummary.obtainedMarks, byTestSummary.totalMarks)}</p></Card>
+            <Card className="p-5"><p className="text-xs font-semibold tracking-wide text-text-secondary uppercase">Percentage</p><p className="mt-2 text-2xl font-bold text-text-primary">{byTestSummary.percentage != null ? `${clampPercent(byTestSummary.percentage)}%` : "--"}</p></Card>
             <Card className="p-5"><p className="text-xs font-semibold tracking-wide text-text-secondary uppercase">Percentile</p><p className="mt-2 text-2xl font-bold text-text-primary">{byTestSummary.percentile != null ? `${toNum(byTestSummary.percentile)}%` : "--"}</p></Card>
           </div>
 
           <div className="grid gap-4 md:grid-cols-2">
             <Card className="p-5">
               <p className="text-xs font-semibold tracking-wide text-text-secondary uppercase">Total Time</p>
-              <p className="mt-2 text-xl font-semibold text-text-primary">{byTestSummary.totalTime ?? "--"}</p>
+              <p className="mt-2 text-xl font-semibold text-text-primary">
+                {byTestSummary.totalTime != null ? formatDuration(byTestSummary.totalTime) : "--"}
+              </p>
             </Card>
             <Card className="p-5">
               <p className="text-xs font-semibold tracking-wide text-text-secondary uppercase">Avg Time / Question</p>
-              <p className="mt-2 text-xl font-semibold text-text-primary">{byTestSummary.avgTimePerQuestion ?? "--"}</p>
+              <p className="mt-2 text-xl font-semibold text-text-primary">
+                {byTestSummary.avgTimePerQuestion != null ? formatDuration(byTestSummary.avgTimePerQuestion) : "--"}
+              </p>
             </Card>
           </div>
 
@@ -355,7 +417,13 @@ export default function ReportsPage() {
                       <TableCell>{row?.type || "-"}</TableCell>
                       <TableCell>{String(row?.student_answer ?? row?.studentAnswer ?? "Not answered")}</TableCell>
                       <TableCell>{canShowCorrectAnswers ? String(row?.correct_answer ?? row?.correctAnswer ?? "-") : "Hidden"}</TableCell>
-                      <TableCell>{row?.marks ?? row?.obtained_marks ?? "-"}</TableCell>
+                      <TableCell>
+                        {row?.marks == null && row?.obtained_marks == null
+                          ? "-"
+                          : Number(row?.total_marks || 0) > 0
+                            ? `${row?.marks ?? row?.obtained_marks ?? 0}/${row?.total_marks}`
+                            : String(row?.marks ?? row?.obtained_marks ?? "-")}
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

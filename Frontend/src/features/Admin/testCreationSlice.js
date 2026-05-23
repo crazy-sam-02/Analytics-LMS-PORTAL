@@ -43,6 +43,7 @@ const createDefaultForm = () => ({
   evaluationRule: "BEST_ATTEMPT",
   skipOverlapCheck: false,
   assignmentMethod: "department_wise",
+  years: [1, 2, 3, 4],
   departmentId: "",
   departmentIds: [],
   batchIds: [],
@@ -182,6 +183,9 @@ const buildFormFromTest = (test) => {
     attemptsAllowed: Math.max(1, Math.min(10, Number(test?.attemptsAllowed || 1))),
     evaluationRule: String(test?.evaluationRule || "BEST_ATTEMPT"),
     assignmentMethod: resolvedAssignmentMethod,
+    years: Array.isArray(test?.years) && test.years.length > 0
+      ? test.years.map((year) => Number(year)).filter((year) => year >= 1 && year <= 4)
+      : [1, 2, 3, 4],
     departmentId: String(test?.departmentId || ""),
     departmentIds,
     batchIds,
@@ -255,6 +259,10 @@ export const validateCurrentStep = (state) => {
   }
 
   if (step === 2) {
+    if (!Array.isArray(form.years) || form.years.length === 0) {
+      errors.years = "Select at least one student year";
+    }
+
     if (context === "super_admin" && !form.allColleges && (!Array.isArray(form.collegeIds) || form.collegeIds.length === 0)) {
       errors.collegeIds = "Select at least one college";
     }
@@ -270,9 +278,7 @@ export const validateCurrentStep = (state) => {
     }
 
     if (form.assignmentMethod === "batch_wise") {
-      if (context === "super_admin" && (!Array.isArray(form.departmentIds) || form.departmentIds.length === 0)) {
-        errors.departmentIds = "Select at least one department before choosing batches";
-      } else if (context !== "super_admin" && !String(form.departmentId || "").trim()) {
+      if (context !== "super_admin" && !String(form.departmentId || "").trim()) {
         errors.departmentId = "Select a department before choosing batches";
       }
       if (!form.batchIds.length) {
@@ -406,6 +412,7 @@ export const submitTestCreation = createAsyncThunk(
       attemptsAllowed: Math.max(1, Math.min(10, Number(form.attemptsAllowed) || 1)),
       skipOverlapCheck: form.publishState === "DRAFT" ? true : Boolean(form.skipOverlapCheck),
       assignmentMethod: form.assignmentMethod,
+      years: Array.isArray(form.years) ? [...new Set(form.years.map(Number).filter((year) => year >= 1 && year <= 4))] : [],
       departmentId: form.departmentId?.trim() ? form.departmentId.trim() : null,
       batchIds: Array.isArray(form.batchIds) ? form.batchIds.filter(Boolean) : [],
       startsAt: startsAt.toISOString(),
@@ -437,6 +444,7 @@ export const submitTestCreation = createAsyncThunk(
           collegeIds,
           allColleges: Boolean(form.allColleges),
           assignmentMethod: form.assignmentMethod || "department_wise",
+          years: payload.years,
           batchIds: form.assignmentMethod === "batch_wise"
             ? (Array.isArray(form.batchIds) ? form.batchIds.filter(Boolean) : [])
             : [],
