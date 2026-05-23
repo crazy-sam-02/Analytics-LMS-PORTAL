@@ -106,6 +106,7 @@ describe("Validation Services Integration Tests", () => {
           findFirst: jest
             .fn()
             .mockResolvedValueOnce(null)
+            .mockResolvedValueOnce(null)
             .mockResolvedValueOnce({ id: "existing-student", email: "jane@test.edu", collegeId }),
           create: jest.fn(async ({ data }) => ({ id: "created-student", ...data })),
         },
@@ -121,6 +122,7 @@ describe("Validation Services Integration Tests", () => {
             fullName: "Jane Doe",
             email: "jane@test.edu",
             enrollmentNumber: "2024002",
+            year: 1,
             departmentId: "507f1f77bcf86cd799439012",
           },
           collegeId,
@@ -132,6 +134,7 @@ describe("Validation Services Integration Tests", () => {
             fullName: "Jane Smith",
             email: "jane@test.edu", // Duplicate
             enrollmentNumber: "2024003",
+            year: 1,
             departmentId: "507f1f77bcf86cd799439012",
           },
           collegeId,
