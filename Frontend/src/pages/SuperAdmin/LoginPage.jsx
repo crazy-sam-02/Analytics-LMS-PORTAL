@@ -39,7 +39,7 @@ export default function SuperAdminLoginPage() {
       <div className="pointer-events-none absolute inset-x-8 top-8 h-32 rounded-full bg-blue-500/10 blur-3xl" />
 
       <Card className="relative grid w-full max-w-7xl overflow-hidden rounded-[24px] border-white/80 bg-white shadow-[0_32px_90px_-36px_rgba(15,35,71,0.55)] lg:min-h-[760px] lg:grid-cols-[1.12fr_0.88fr]">
-        <div className="relative min-h-[520px] overflow-hidden bg-[#0837df] p-8 text-white sm:p-10 lg:min-h-full lg:p-14">
+        <div className="relative hidden min-h-[520px] overflow-hidden bg-[#0837df] p-8 text-white lg:block lg:min-h-full lg:p-14">
           <div className="absolute inset-0 bg-[linear-gradient(135deg,#0c4cff_0%,#082bb7_44%,#06166f_100%)]" />
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_22%_18%,rgba(56,189,248,0.34),transparent_30%),radial-gradient(circle_at_80%_70%,rgba(124,58,237,0.30),transparent_34%),radial-gradient(circle_at_44%_92%,rgba(14,165,233,0.22),transparent_28%)]" />
           <div className="absolute -left-24 top-28 h-80 w-80 rounded-full bg-sky-400/20 blur-3xl" />

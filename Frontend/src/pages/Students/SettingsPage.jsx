@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { LockKeyhole, ShieldCheck, SlidersHorizontal } from "lucide-react";
 import { useDispatch, useSelector } from "react-redux";
 import { useMutation } from "@tanstack/react-query";
@@ -20,26 +20,6 @@ export default function SettingsPage() {
     confirmPassword: "",
   });
   const [inlineError, setInlineError] = useState("");
-
-  useEffect(() => {
-    const root = document.documentElement;
-
-    if (selectedTheme === "dark") {
-      root.classList.add("dark");
-      root.dataset.theme = "dark";
-      return;
-    }
-
-    if (selectedTheme === "light") {
-      root.classList.remove("dark");
-      root.dataset.theme = "light";
-      return;
-    }
-
-    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-    root.classList.toggle("dark", prefersDark);
-    root.dataset.theme = "system";
-  }, [selectedTheme]);
 
   const passwordValidationError = useMemo(() => {
     if (!passwordForm.currentPassword && !passwordForm.newPassword && !passwordForm.confirmPassword) {

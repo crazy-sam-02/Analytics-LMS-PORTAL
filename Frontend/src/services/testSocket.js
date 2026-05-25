@@ -1,19 +1,12 @@
 import { io } from "socket.io-client";
 import { getAccessToken } from "@/services/httpClient";
 import { adminTokenStorage, superAdminTokenStorage } from "@/services/api";
+import { SOCKET_BASE_URL } from "@/services/runtimeConfig";
 
 const socketsByRole = new Map();
 
 const getSocketUrl = () => {
-  if (import.meta.env.VITE_SOCKET_URL) {
-    return import.meta.env.VITE_SOCKET_URL;
-  }
-
-  if (import.meta.env.VITE_API_BASE_URL) {
-    return import.meta.env.VITE_API_BASE_URL.replace(/\/api\/?$/, "");
-  }
-
-  return typeof window !== "undefined" ? window.location.origin : "";
+  return SOCKET_BASE_URL;
 };
 
 const getSocketToken = (role = "student") => {

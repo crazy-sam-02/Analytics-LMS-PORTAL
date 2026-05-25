@@ -1,6 +1,7 @@
 import { getAccessToken } from "@/services/httpClient";
+import { API_BASE_URL } from "@/services/runtimeConfig";
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
+const API_BASE = API_BASE_URL;
 const isFormDataBody = (value) => typeof FormData !== "undefined" && value instanceof FormData;
 const shouldAttachJsonContentType = (options = {}) => !isFormDataBody(options.body);
 

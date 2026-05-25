@@ -1,6 +1,7 @@
 import axios from "axios";
+import { API_BASE_URL } from "@/services/runtimeConfig";
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
+const API_BASE = API_BASE_URL;
 const STUDENT_ACCESS_TOKEN_KEY = "student_access_token";
 const STUDENT_REFRESH_TOKEN_KEY = "student_refresh_token";
 

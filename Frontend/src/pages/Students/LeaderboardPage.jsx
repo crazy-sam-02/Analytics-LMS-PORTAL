@@ -1,14 +1,7 @@
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { useSelector } from "react-redux";
 import { useQuery } from "@tanstack/react-query";
-import { useVirtualizer } from "@tanstack/react-virtual";
 import { Crown, Medal, Rocket, Trophy } from "lucide-react";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Card } from "@/components/ui/card";
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
-import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { leaderboardQueryOptions, reportsQueryOptions, upcomingTestsQueryOptions } from "@/services/studentQueries";
 
 const ALL_TESTS_VALUE = "__all_tests__";
@@ -155,7 +148,6 @@ export default function LeaderboardPage() {
     ...reportsQueryOptions({ view: "overall" }),
     enabled: true,
   });
-  const parentRef = useRef(null);
 
   const rankedRows = useMemo(() => {
     const normalizedRows = normalizeRows(leaderboardQuery.data);
@@ -236,13 +228,6 @@ export default function LeaderboardPage() {
     return rows;
   }, [currentStudentRow, focusMyPosition, nearbyRows, shouldPinCurrentAtBottom]);
 
-  const rowVirtualizer = useVirtualizer({
-    count: displayRows.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: (index) => (displayRows[index]?.kind === "separator" ? 40 : 54),
-    overscan: 10,
-  });
-
   const showNotAttempted = filters.view === "per_test" && Boolean(filters.test_id) && shouldFetchLeaderboard && !currentStudentRow;
 
   const testOptionsMap = new Map();
@@ -271,7 +256,8 @@ export default function LeaderboardPage() {
 
   const testOptions = Array.from(testOptionsMap.entries()).map(([id, name]) => ({ id, name }));
   const selectedTestName = testOptions.find((item) => item.id === filters.test_id)?.name || "Selected Test";
-  const currentStudentDisplayIndex = displayRows.findIndex((row) => row?.kind === "row" && isCurrentStudentRow(row));
+  const currentStudentDisplayRow = displayRows.find((row) => row?.kind === "row" && isCurrentStudentRow(row));
+  const getRowDomId = (row, index) => `leaderboard-row-${row?.id || "student"}-${row?.rank || index}`;
 
   const formatPercentage = (value) => {
     const num = Number(value);
@@ -279,89 +265,122 @@ export default function LeaderboardPage() {
     return `${num.toFixed(1)}%`;
   };
 
+  const viewOptions = [
+    { id: "overall", label: "Overall" },
+    { id: "per_test", label: "Per Test" },
+    { id: "department_wise", label: "Department-wise" },
+  ];
+
   return (
-    <section className="space-y-5">
-      <Card className="rounded-2xl border border-primary/25 bg-linear-to-br from-primary-dark via-primary to-primary-dark p-6 text-primary-foreground shadow-lg shadow-primary/30">
-              <div className="flex items-center gap-2 text-primary-foreground/90">
-                <Rocket className="size-4" />
-                <p className="text-xs font-semibold tracking-[0.12em] uppercase">Track Window</p>
-              </div>
-              <h1 className="mt-3 text-3xl font-semibold tracking-tight">Track Your Status</h1>
-              <p className="mt-2 text-sm text-primary-foreground/90">Track Your Status Among your Friend on the Test You Participated</p>
-            </Card>
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card className="flex items-center gap-3 p-5">
-          <div className="grid size-10 place-items-center rounded-xl bg-yellow-100 text-yellow-600"><Crown className="size-5" /></div>
-          <div className="flex flex-col items-center">
-            <p className="text-xs tracking-wide text-text-secondary uppercase">Top Rank</p>
-            <p className="text-lg font-semibold text-text-primary">#{topHundred[0]?.rank || "-"}</p>
-          </div>
-        </Card>
-        <Card className="flex items-center gap-3 p-5">
-          <div className="grid size-10 place-items-center rounded-xl bg-primary/15 text-primary"><Trophy className="size-5" /></div>
-          <div className="flex flex-col items-center">
-            <p className="text-xs tracking-wide text-text-secondary uppercase">Highest Score</p>
-            <p className="text-lg font-semibold text-text-primary">{topHundred[0]?.score ?? "-"}</p>
-          </div>
-        </Card>
-        <Card className="flex items-center gap-3 p-5">
-          <div className="grid size-10 place-items-center rounded-xl bg-indigo-100 text-indigo-700"><Medal className="size-5" /></div>
-          <div className="flex flex-col items-center">
-            <p className="text-xs tracking-wide text-text-secondary uppercase">Visible Entries</p>
-            <p className="text-lg font-semibold text-text-primary">{displayRows.filter((row) => row.kind === "row").length}</p>
-          </div>
-        </Card>
+    <section className="relative space-y-6">
+      <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_10%_0%,rgba(59,130,246,0.16),transparent_38%),radial-gradient(circle_at_90%_30%,rgba(14,165,233,0.14),transparent_36%)]" />
+
+      <div className="overflow-hidden rounded-3xl border border-blue-200/70 bg-linear-to-br from-blue-950 via-blue-700 to-cyan-600 p-6 text-white shadow-[0_24px_70px_-30px_rgba(8,47,120,0.8)] sm:p-8">
+        <div className="flex items-center gap-2 text-blue-100/95">
+          <Rocket className="size-4" />
+          <p className="text-xs font-semibold tracking-[0.12em] uppercase">Track Window</p>
+        </div>
+        <h1 className="mt-3 text-3xl font-semibold tracking-tight sm:text-4xl">Track Your Status</h1>
+        <p className="mt-2 max-w-2xl text-sm text-blue-100/90 sm:text-base">
+          Track your status among your friends on the tests you participated in.
+        </p>
       </div>
 
-      <Card className="space-y-4 p-5">
-        <Tabs value={filters.view} onValueChange={(value) => setFilters((prev) => ({ ...prev, view: value }))}>
-          <TabsList>
-            <TabsTrigger value="overall">Overall</TabsTrigger>
-            <TabsTrigger value="per_test">Per Test</TabsTrigger>
-            <TabsTrigger value="department_wise">Department-wise</TabsTrigger>
-          </TabsList>
-        </Tabs>
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-yellow-100 text-yellow-600">
+            <Crown className="size-5" />
+          </div>
+          <div>
+            <p className="text-xs tracking-wide text-slate-500 uppercase">Top Rank</p>
+            <p className="text-lg font-semibold text-slate-900">#{topHundred[0]?.rank || "-"}</p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-blue-100 text-blue-600">
+            <Trophy className="size-5" />
+          </div>
+          <div>
+            <p className="text-xs tracking-wide text-slate-500 uppercase">Highest Score</p>
+            <p className="text-lg font-semibold text-slate-900">{topHundred[0]?.score ?? "-"}</p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:col-span-2 xl:col-span-1">
+          <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-indigo-100 text-indigo-700">
+            <Medal className="size-5" />
+          </div>
+          <div>
+            <p className="text-xs tracking-wide text-slate-500 uppercase">Visible Entries</p>
+            <p className="text-lg font-semibold text-slate-900">{displayRows.filter((row) => row.kind === "row").length}</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-5 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+        <div className="inline-flex w-full flex-wrap items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-2">
+          {viewOptions.map((option) => {
+            const isActive = filters.view === option.id;
+            return (
+              <button
+                key={option.id}
+                type="button"
+                onClick={() => setFilters((prev) => ({ ...prev, view: option.id }))}
+                className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+                  isActive
+                    ? "bg-white text-blue-700 shadow-[0_10px_18px_-12px_rgba(37,99,235,0.9)]"
+                    : "text-slate-600 hover:bg-white/80 hover:text-slate-900"
+                }`}
+              >
+                {option.label}
+              </button>
+            );
+          })}
+        </div>
 
         <div className="grid gap-3 md:grid-cols-2">
-          <Select
+          <select
             value={filters.test_id || ALL_TESTS_VALUE}
-            onValueChange={(value) => setFilters((prev) => ({ ...prev, test_id: value === ALL_TESTS_VALUE ? "" : value }))}
+            onChange={(event) =>
+              setFilters((prev) => ({
+                ...prev,
+                test_id: event.target.value === ALL_TESTS_VALUE ? "" : event.target.value,
+              }))
+            }
+            className="h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-blue-500 focus:ring-3 focus:ring-blue-100"
           >
-            <SelectTrigger className="w-full">
-              <SelectValue placeholder="Select test (for Per Test view)" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ALL_TESTS_VALUE}>All tests</SelectItem>
-              {testOptions.map((item) => (
-                <SelectItem key={item.id} value={item.id}>
-                  {item.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Input
+            <option value={ALL_TESTS_VALUE}>All tests</option>
+            {testOptions.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name}
+              </option>
+            ))}
+          </select>
+
+          <input
             placeholder="Search by student name or ID"
             value={searchText}
             onChange={(event) => setSearchText(event.target.value)}
+            className="h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-sm text-slate-700 placeholder:text-slate-400 outline-none transition focus:border-blue-500 focus:ring-3 focus:ring-blue-100"
           />
         </div>
 
-        <div className="grid gap-3 md:grid-cols-3">
-          <Select value={sortBy} onValueChange={setSortBy}>
-            <SelectTrigger className="w-full">
-              <SelectValue placeholder="Sort rows" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="rank">Sort by Rank</SelectItem>
-              <SelectItem value="score">Sort by Score</SelectItem>
-              <SelectItem value="time">Sort by Time Taken</SelectItem>
-            </SelectContent>
-          </Select>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <select
+            value={sortBy}
+            onChange={(event) => setSortBy(event.target.value)}
+            className="h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-blue-500 focus:ring-3 focus:ring-blue-100"
+          >
+            <option value="rank">Sort by Rank</option>
+            <option value="score">Sort by Score</option>
+            <option value="time">Sort by Time Taken</option>
+          </select>
 
           <button
             type="button"
             onClick={() => setFocusMyPosition((prev) => !prev)}
-            className="h-10 rounded-md border border-border px-3 text-sm font-medium text-text-secondary"
+            className="h-11 rounded-xl border border-slate-300 px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
             disabled={!currentStudentRow}
           >
             {focusMyPosition ? "Show Full List" : "Focus My Position"}
@@ -370,83 +389,82 @@ export default function LeaderboardPage() {
           <button
             type="button"
             onClick={() => {
-              if (currentStudentDisplayIndex >= 0) {
-                rowVirtualizer.scrollToIndex(currentStudentDisplayIndex, { align: "center" });
+              if (currentStudentDisplayRow) {
+                const targetId = getRowDomId(currentStudentDisplayRow, 0);
+                const target = document.getElementById(targetId);
+                target?.scrollIntoView({ behavior: "smooth", block: "center" });
               }
             }}
-            className="h-10 rounded-md border border-border px-3 text-sm font-medium text-text-secondary"
-            disabled={currentStudentDisplayIndex < 0}
+            className="h-11 rounded-xl border border-slate-300 px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={!currentStudentDisplayRow}
           >
             Jump To Me
           </button>
         </div>
 
         {requiresTestSelection && !hasSelectedTest ? (
-          <p className="text-sm text-text-secondary">Choose a test from the dropdown to load per-test rankings.</p>
+          <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-700">
+            Choose a test from the dropdown to load per-test rankings.
+          </p>
         ) : null}
 
         {requiresTestSelection && hasSelectedTest ? (
-          <p className="text-sm text-text-secondary">
-            Viewing leaderboard for <span className="font-semibold text-text-primary">{selectedTestName}</span>
+          <p className="text-sm text-slate-600">
+            Viewing leaderboard for <span className="font-semibold text-slate-900">{selectedTestName}</span>
           </p>
         ) : null}
-      </Card>
+      </div>
 
       {showNotAttempted ? (
-        <Alert className="border-warning/30 bg-warning/10 text-warning">
-          <AlertTitle>Per test status</AlertTitle>
-          <AlertDescription>You did not attempt this test.</AlertDescription>
-        </Alert>
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-700">
+          <p className="text-sm font-semibold">Per test status</p>
+          <p className="text-sm">You did not attempt this test.</p>
+        </div>
       ) : null}
 
       {shouldFetchLeaderboard && leaderboardQuery.isLoading ? (
-        <div className="grid min-h-[40vh] place-items-center text-text-secondary">Loading leaderboard...</div>
+        <div className="grid min-h-[40vh] place-items-center rounded-2xl border border-slate-200 bg-white text-slate-500">
+          Loading leaderboard...
+        </div>
       ) : null}
 
       {shouldFetchLeaderboard && leaderboardQuery.isError ? (
-        <Alert variant="destructive">
-          <AlertTitle>Failed to load leaderboard</AlertTitle>
-          <AlertDescription>{leaderboardQuery.error?.message || "Please retry shortly."}</AlertDescription>
-        </Alert>
+        <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-rose-700">
+          <p className="text-sm font-semibold">Failed to load leaderboard</p>
+          <p className="text-sm">{leaderboardQuery.error?.message || "Please retry shortly."}</p>
+        </div>
       ) : null}
 
       {!leaderboardQuery.isLoading && !leaderboardQuery.isError && shouldFetchLeaderboard && displayRows.length === 0 ? (
-        <Card className="p-6">
-          <Empty className="border border-border">
-            <EmptyHeader>
-              <EmptyTitle>{normalizeText(searchText) ? "No matching students" : "No rankings yet"}</EmptyTitle>
-              <EmptyDescription>
-                {normalizeText(searchText)
-                  ? "Try a shorter search or clear filters to see more results."
-                  : "Once students submit tests, this leaderboard will populate."}
-              </EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        </Card>
+        <div className="rounded-2xl border border-slate-200 bg-white px-6 py-10 text-center shadow-sm">
+          <p className="text-lg font-semibold text-slate-900">
+            {normalizeText(searchText) ? "No matching students" : "No rankings yet"}
+          </p>
+          <p className="mt-2 text-sm text-slate-500">
+            {normalizeText(searchText)
+              ? "Try a shorter search or clear filters to see more results."
+              : "Once students submit tests, this leaderboard will populate."}
+          </p>
+        </div>
       ) : null}
 
       {!leaderboardQuery.isLoading && !leaderboardQuery.isError && shouldFetchLeaderboard && displayRows.length > 0 ? (
-        <Card className="overflow-hidden">
-          <div className="overflow-x-auto">
-          <div className="grid w-max min-w-full grid-cols-[88px_1.4fr_1fr_110px_120px] gap-3 border-b border-border bg-background px-4 py-3 text-xs font-semibold tracking-wide text-text-secondary uppercase">
-            <p>Rank</p>
-            <p>Student</p>
-            <p>Department</p>
-            <p>Score</p>
-            <p>Percentage</p>
-          </div>
+        <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+          <div className="hidden md:block">
+            <div className="grid grid-cols-[88px_1.8fr_120px_120px] items-center gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+              <p>Rank</p>
+              <p>Student</p>
+              <p>Score</p>
+              <p>Percentage</p>
+            </div>
 
-          <div ref={parentRef} className="h-96 overflow-auto lg:h-140">
-            <div className="min-w-max" style={{ height: `${rowVirtualizer.getTotalSize()}px`, position: "relative" }}>
-              {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-                const row = displayRows[virtualRow.index];
-
+            <div>
+              {displayRows.map((row, index) => {
                 if (row?.kind === "separator") {
                   return (
                     <div
                       key={row.id}
-                      className="absolute left-0 top-0 flex w-full items-center justify-center px-4 text-xs font-medium tracking-wide text-text-secondary uppercase"
-                      style={{ height: `${virtualRow.size}px`, transform: `translateY(${virtualRow.start}px)` }}
+                      className="flex items-center justify-center border-y border-dashed border-blue-200 bg-blue-50 px-4 py-3 text-xs font-medium tracking-wide text-blue-700 uppercase"
                     >
                       Your Position
                     </div>
@@ -457,39 +475,82 @@ export default function LeaderboardPage() {
 
                 return (
                   <div
+                    id={getRowDomId(row, index)}
                     key={`${row.id}-${row.rank}`}
-                    className={`absolute left-0 top-0 grid w-full grid-cols-[88px_1.4fr_1fr_110px_120px] gap-3 border-b border-border px-4 py-3 text-sm ${
-                      isCurrent ? "bg-primary/10" : "bg-card"
+                    className={`grid grid-cols-[88px_1.8fr_120px_120px] items-center gap-3 border-b border-slate-100 px-4 py-3 text-sm ${
+                      isCurrent ? "bg-blue-50" : "bg-white"
                     }`}
-                    style={{ height: `${virtualRow.size}px`, transform: `translateY(${virtualRow.start}px)` }}
                   >
-                    <p className="font-semibold text-primary">#{row.rank}</p>
-                    <p className="font-medium text-text-primary">{maskStudentName(row.fullName)} {isCurrent ? "(You)" : ""}</p>
-                    <p className="text-text-secondary">{row.department}</p>
-                    <p className="font-semibold text-text-primary">{row.score}</p>
-                    <p className="text-text-secondary">{formatPercentage(row.percentage)}</p>
+                    <p className="font-semibold text-blue-700">#{row.rank}</p>
+                    <p className="font-medium text-slate-900">
+                      {maskStudentName(row.fullName)} {isCurrent ? "(You)" : ""}
+                    </p>
+                    <p className="font-semibold text-slate-900">{row.score}</p>
+                    <p className="text-slate-600">{formatPercentage(row.percentage)}</p>
                   </div>
                 );
               })}
             </div>
           </div>
+
+          <div className="space-y-3 p-3 md:hidden">
+            {displayRows.map((row, index) => {
+              if (row?.kind === "separator") {
+                return (
+                  <div
+                    key={row.id}
+                    className="rounded-xl border border-dashed border-blue-200 bg-blue-50 px-4 py-2 text-center text-xs font-medium tracking-wide text-blue-700 uppercase"
+                  >
+                    Your Position
+                  </div>
+                );
+              }
+
+              const isCurrent = isCurrentStudentRow(row);
+
+              return (
+                <div
+                  id={getRowDomId(row, index)}
+                  key={`${row.id}-${row.rank}`}
+                  className={`rounded-2xl border p-4 ${
+                    isCurrent ? "border-blue-300 bg-blue-50" : "border-slate-200 bg-white"
+                  }`}
+                >
+                  <div className="mb-3 flex items-start justify-between gap-3">
+                    <p className="text-lg font-semibold text-blue-700">#{row.rank}</p>
+                    <p className="text-right text-sm font-medium text-slate-900">
+                      {maskStudentName(row.fullName)} {isCurrent ? "(You)" : ""}
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <p className="text-xs tracking-wide text-slate-500 uppercase">Score</p>
+                      <p className="mt-1 font-semibold text-slate-900">{row.score}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs tracking-wide text-slate-500 uppercase">Percentage</p>
+                      <p className="mt-1 font-medium text-slate-700">{formatPercentage(row.percentage)}</p>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
-        </Card>
+        </div>
       ) : null}
 
       {!shouldFetchLeaderboard ? (
-        <Card className="p-6">
-          <Empty className="border border-border">
-            <EmptyHeader>
-              <EmptyTitle>Select a test</EmptyTitle>
-              <EmptyDescription>Per-test leaderboard needs a test selection from the dropdown above.</EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        </Card>
+        <div className="rounded-2xl border border-slate-200 bg-white px-6 py-10 text-center shadow-sm">
+          <p className="text-lg font-semibold text-slate-900">Select a test</p>
+          <p className="mt-2 text-sm text-slate-500">Per-test leaderboard needs a test selection from the dropdown above.</p>
+        </div>
       ) : null}
 
       {!currentStudentRow && shouldFetchLeaderboard ? (
-        <Card className="p-4 text-sm text-text-secondary">No attempts found for your profile yet. You will appear here after your first submission.</Card>
+        <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 shadow-sm">
+          No attempts found for your profile yet. You will appear here after your first submission.
+        </div>
       ) : null}
     </section>
   );
