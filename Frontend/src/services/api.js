@@ -5,38 +5,49 @@ const API_BASE = API_BASE_URL;
 const isFormDataBody = (value) => typeof FormData !== "undefined" && value instanceof FormData;
 const shouldAttachJsonContentType = (options = {}) => !isFormDataBody(options.body);
 
+const safeReadStorage = (key) => {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+};
+
+const safeWriteStorage = (key, value) => {
+  try {
+    if (value === null || value === undefined || value === "") {
+      localStorage.removeItem(key);
+      return;
+    }
+
+    localStorage.setItem(key, value);
+  } catch {
+    // Ignore storage failures.
+  }
+};
+
 const createTokenStorage = (prefix) => {
   const accessKey = `${prefix}_access_token`;
   const refreshKey = `${prefix}_refresh_token`;
-  let accessToken = null;
-
-  try {
-    localStorage.removeItem(accessKey);
-    localStorage.removeItem(refreshKey);
-  } catch {
-    // Ignore legacy storage cleanup failures.
-  }
+  const persistedAccessToken = safeReadStorage(accessKey);
+  const persistedRefreshToken = safeReadStorage(refreshKey);
+  let accessToken = persistedAccessToken || null;
+  let refreshToken = persistedRefreshToken || null;
 
   return {
     getAccess: () => accessToken,
-    getRefresh: () => null,
-    setTokens: ({ accessToken: nextAccessToken }) => {
+    getRefresh: () => refreshToken,
+    setTokens: ({ accessToken: nextAccessToken, refreshToken: nextRefreshToken }) => {
       accessToken = nextAccessToken || null;
-      try {
-        localStorage.removeItem(accessKey);
-        localStorage.removeItem(refreshKey);
-      } catch {
-        // Ignore legacy storage cleanup failures.
-      }
+      refreshToken = nextRefreshToken === undefined ? refreshToken : nextRefreshToken || null;
+      safeWriteStorage(accessKey, accessToken);
+      safeWriteStorage(refreshKey, refreshToken);
     },
     clear: () => {
       accessToken = null;
-      try {
-        localStorage.removeItem(accessKey);
-        localStorage.removeItem(refreshKey);
-      } catch {
-        // Ignore storage cleanup failures.
-      }
+      refreshToken = null;
+      safeWriteStorage(accessKey, null);
+      safeWriteStorage(refreshKey, null);
     },
   };
 };
