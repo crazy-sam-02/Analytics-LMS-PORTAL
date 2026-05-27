@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
+    "postinstall": "node scripts/install-puppeteer-browser.js",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "load:exam-start": "k6 run scripts/load/exam-start-spike.k6.js",

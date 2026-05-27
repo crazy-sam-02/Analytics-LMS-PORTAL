@@ -8,13 +8,21 @@ const WINDOWS_BROWSER_PATHS = [
   "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
 ];
 
+const LINUX_BROWSER_PATHS = [
+  "/usr/bin/google-chrome",
+  "/usr/bin/google-chrome-stable",
+  "/usr/bin/chromium",
+  "/usr/bin/chromium-browser",
+  "/snap/bin/chromium",
+];
+
 const resolveExecutablePath = () => {
   const fromEnv = process.env.PUPPETEER_EXECUTABLE_PATH;
   if (fromEnv && fs.existsSync(fromEnv)) {
     return fromEnv;
   }
 
-  return WINDOWS_BROWSER_PATHS.find((filePath) => fs.existsSync(filePath)) || undefined;
+  return [...LINUX_BROWSER_PATHS, ...WINDOWS_BROWSER_PATHS].find((filePath) => fs.existsSync(filePath)) || undefined;
 };
 
 const renderHtmlToPdfBuffer = async (html, options = {}) => {
