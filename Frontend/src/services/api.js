@@ -632,6 +632,7 @@ export const superAdminApi = {
   bulkImportStudents: (body) => superAdminApiRequest("/super-admin/students/bulk-import", { method: "POST", body: JSON.stringify(body) }),
   getStudentImportJobStatus: (jobId) => superAdminApiRequest(`/super-admin/students/import-jobs/${jobId}`),
   updateStudentStatus: (studentId, body) => superAdminApiRequest(`/super-admin/students/${studentId}/status`, { method: "PATCH", body: JSON.stringify(body) }),
+  resetStudentPassword: (studentId) => superAdminApiRequest(`/super-admin/students/${studentId}/reset-password`, { method: "PATCH", body: JSON.stringify({}) }),
   updateStudent: (studentId, body) => superAdminApiRequest(`/super-admin/students/${studentId}`, { method: "PATCH", body: JSON.stringify(body) }),
   deleteStudent: (studentId, body) => superAdminApiRequest(`/super-admin/students/${studentId}`, { method: "DELETE", body: JSON.stringify(body || {}) }),
   getTests: (params = "") => superAdminApiRequest(`/super-admin/tests${params}`),

@@ -7,6 +7,16 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
 import ConfirmActionDialog from "@/components/Admin/ConfirmActionDialog";
 import TypedConfirmDialog from "@/components/SuperAdmin/TypedConfirmDialog";
@@ -57,6 +67,7 @@ export default function AdminsPage() {
   const colleges = useSelector((state) => state.superAdminPanel.colleges);
   const [form, setForm] = useState({ fullName: "", email: "", employeeId: "", password: "", collegeId: "", departmentId: "", accessProfile: "EDITOR" });
   const [pendingAction, setPendingAction] = useState(null);
+  const [resetPasswordValue, setResetPasswordValue] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [importCsv, setImportCsv] = useState(IMPORT_SAMPLE);
   const [importDefaultCollegeId, setImportDefaultCollegeId] = useState("");
@@ -150,12 +161,8 @@ export default function AdminsPage() {
   };
 
   const resetPassword = async (adminId) => {
-    const result = await superAdminApi.resetAdminPassword(adminId, {});
-    if (result?.temporaryPassword) {
-      toast.success(`Temporary password: ${result.temporaryPassword}`);
-    } else {
-      toast.success("Admin password reset.");
-    }
+    await superAdminApi.resetAdminPassword(adminId, { password: resetPasswordValue.trim() });
+    toast.success("Admin password changed.");
     loadAdmins();
   };
 
@@ -173,14 +180,18 @@ export default function AdminsPage() {
   };
 
   const openResetConfirm = (admin) => {
+    setResetPasswordValue("");
     setPendingAction({
       type: "reset",
       admin,
       title: "Reset Admin Password",
-      description: `Generate a unique temporary password for ${admin.fullName}? Share it securely and ask them to change it after login.`,
-      confirmLabel: "Reset Password",
-      confirmVariant: "outline",
+      description: `Enter a new password for ${admin.fullName}. The admin will use this password to sign in immediately after the reset.`,
     });
+  };
+
+  const closeResetDialog = () => {
+    setPendingAction(null);
+    setResetPasswordValue("");
   };
 
   const openDeactivateConfirm = (admin) => {
@@ -218,7 +229,7 @@ export default function AdminsPage() {
       await reactivate(adminId);
     }
 
-    setPendingAction(null);
+      closeResetDialog();
   };
 
   const toCell = (value) => String(value ?? "").replace(/,/g, " ").trim();
@@ -485,7 +496,7 @@ export default function AdminsPage() {
       </Card>
 
       <ConfirmActionDialog
-        open={Boolean(pendingAction && (pendingAction.type === "reset" || pendingAction.type === "reactivate"))}
+        open={Boolean(pendingAction && pendingAction.type === "reactivate")}
         onOpenChange={(open) => !open && setPendingAction(null)}
         title={pendingAction?.title || "Confirm Action"}
         description={pendingAction?.description || "Please confirm this action."}
@@ -493,6 +504,34 @@ export default function AdminsPage() {
         confirmVariant={pendingAction?.confirmVariant || "default"}
         onConfirm={confirmPendingAction}
       />
+
+      <AlertDialog open={Boolean(pendingAction && pendingAction.type === "reset")} onOpenChange={(open) => !open && closeResetDialog()}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{pendingAction?.title || "Reset Admin Password"}</AlertDialogTitle>
+            <AlertDialogDescription>{pendingAction?.description || "Enter a new password for this admin."}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2">
+            <p className="text-xs text-text-secondary">Password rule: at least 8 characters. This will replace the current password immediately.</p>
+            <Input
+              type="password"
+              value={resetPasswordValue}
+              onChange={(event) => setResetPasswordValue(event.target.value)}
+              placeholder="Enter new password"
+            />
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={closeResetDialog}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="default"
+              disabled={resetPasswordValue.trim().length < 8}
+              onClick={confirmPendingAction}
+            >
+              Change Password
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <TypedConfirmDialog
         open={Boolean(pendingAction && pendingAction.type === "deactivate")}

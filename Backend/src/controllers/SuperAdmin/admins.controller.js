@@ -28,12 +28,6 @@ const resolveAdminUpdateWhere = (adminId, existing) => {
   return { _id: adminId };
 };
 
-const generateTemporaryPassword = () => {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*";
-  const bytes = crypto.randomBytes(18);
-  return Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("");
-};
-
 const parseCsvRecords = (csvText) => {
   const records = [];
   let row = [];
@@ -311,8 +305,12 @@ const resetAdminPassword = asyncHandler(async (req, res) => {
     throw new ApiError(404, "Admin not found");
   }
 
-  const temporaryPassword = req.body.password || generateTemporaryPassword();
-  const passwordHash = await bcrypt.hash(temporaryPassword, 10);
+  const newPassword = String(req.body.password || "").trim();
+  if (newPassword.length < 8) {
+    throw new ApiError(400, "Password must be at least 8 characters.");
+  }
+
+  const passwordHash = await bcrypt.hash(newPassword, 10);
   await Admin.update({
     where: resolveAdminUpdateWhere(adminId, existing),
     data: { passwordHash },
@@ -328,7 +326,6 @@ const resetAdminPassword = asyncHandler(async (req, res) => {
 
   res.status(200).json({
     message: "Admin password reset",
-    temporaryPassword: req.body.password ? undefined : temporaryPassword,
   });
 });
 

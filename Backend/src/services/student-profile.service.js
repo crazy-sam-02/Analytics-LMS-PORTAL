@@ -28,6 +28,12 @@ const changePassword = async (userId, currentPassword, newPassword) => {
   const m = await models.init();
   const db = m.dbClient;
   const user = await db.student.findUnique({ where: { id: userId } });
+  if (!currentPassword || !newPassword) {
+    throw new ApiError(400, "Current password and new password are required", null, "PASSWORDS_REQUIRED");
+  }
+  if (!user?.passwordHash) {
+    throw new ApiError(400, "Student password is not set", null, "PASSWORD_NOT_SET");
+  }
   const matches = await bcrypt.compare(currentPassword, user.passwordHash);
   if (!matches) throw new ApiError(400, "Current password is incorrect");
   const passwordHash = await bcrypt.hash(newPassword, 10);

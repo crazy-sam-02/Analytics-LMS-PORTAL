@@ -72,6 +72,7 @@ export default function StudentsPage() {
   const [activeImportJobId, setActiveImportJobId] = useState("");
   const [importFileName, setImportFileName] = useState("");
   const [csvData, setCsvData] = useState(IMPORT_SAMPLE);
+  const [pendingResetStudent, setPendingResetStudent] = useState(null);
   const [studentForm, setStudentForm] = useState({
     fullName: "",
     email: "",
@@ -264,6 +265,19 @@ export default function StudentsPage() {
     },
   });
 
+  const resetPasswordMutation = useMutation({
+    mutationFn: (studentId) => superAdminApi.resetStudentPassword(studentId),
+    onSuccess: () => {
+      toast.success("Student password reset to the default rule.");
+      setBanner({ type: "success", title: "Password reset", message: "Student password has been reset successfully." });
+      setPendingResetStudent(null);
+    },
+    onError: (error) => {
+      setBanner({ type: "error", title: "Reset failed", message: error?.message || "Unable to reset student password." });
+      toast.error(error?.message || "Unable to reset student password");
+    },
+  });
+
   const deleteStudentHandler = async (student, confirmationText = null) => {
     try {
       await superAdminApi.deleteStudent(student.id, {
@@ -289,6 +303,10 @@ export default function StudentsPage() {
       departmentId: student.departmentId || "",
       batchId: student.batchId || "",
     });
+  };
+
+  const openResetConfirm = (student) => {
+    setPendingResetStudent(student);
   };
 
   const handleEditSubmit = () => {
@@ -599,10 +617,13 @@ export default function StudentsPage() {
                   <p className="text-xs text-text-secondary">{student.email} • {student.studentId} • {student.college?.name} • Year {student.year || "-"}</p>
                 </div>
                 <div className="flex items-center justify-center gap-4">
-                  <Button size="sm" variant="outline" onClick={() => openEditForm(student)}>
+                  <Button size="sm" variant="destructive" onClick={() => openResetConfirm(student)} disabled={resetPasswordMutation.isPending}>
+                    Reset Password
+                  </Button>
+                  <Button size="sm" className="bg-blue-600 text-white hover:bg-blue-700 px-4 py-2 rounded-md" onClick={() => openEditForm(student)}>
                     Edit
                   </Button>
-                  <Button size="sm" variant="destructive" onClick={() => setPendingDelete(student)}>
+                  <Button size="sm" className="bg-gray-600 text-white hover:bg-red-700 px-4 py-2 rounded-md" onClick={() => setPendingDelete(student)}>
                     Delete
                   </Button>
                 </div>
@@ -701,6 +722,22 @@ export default function StudentsPage() {
           </div>
         </div>
       )}
+
+      <TypedConfirmDialog
+        open={Boolean(pendingResetStudent)}
+        onOpenChange={(open) => !open && setPendingResetStudent(null)}
+        title="Reset Student Password"
+        description={`Generate a new temporary password for ${pendingResetStudent?.fullName || "this student"}? The old password will stop working after refresh tokens are revoked.`}
+        expectedText={`RESET ${pendingResetStudent?.studentId || pendingResetStudent?.id || ""}`}
+        inputLabel="Type the exact phrase to confirm"
+        confirmLabel="Reset Password"
+        confirmVariant="destructive"
+        onConfirm={async () => {
+          if (pendingResetStudent) {
+            await resetPasswordMutation.mutateAsync(pendingResetStudent.id);
+          }
+        }}
+      />
 
 
 

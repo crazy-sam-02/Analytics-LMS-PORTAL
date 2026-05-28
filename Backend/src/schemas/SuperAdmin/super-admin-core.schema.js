@@ -119,7 +119,7 @@ const updateAdminSchema = z.object({
 
 const resetAdminPasswordSchema = z.object({
   body: z.object({
-    password: z.string().min(12).optional(),
+    password: z.string().min(8),
   }),
   params: z.object({ adminId: idSchema }),
   query: z.object({}).optional().default({}),
@@ -255,6 +255,12 @@ const toggleStudentStatusSchema = z.object({
     isActive: z.boolean(),
     confirmationText: z.string().trim().optional(),
   }),
+  params: z.object({ studentId: idSchema }),
+  query: z.object({}).optional().default({}),
+});
+
+const resetStudentPasswordSchema = z.object({
+  body: z.object({}).optional().default({}),
   params: z.object({ studentId: idSchema }),
   query: z.object({}).optional().default({}),
 });
@@ -542,6 +548,7 @@ module.exports = {
   deleteBatchGlobalSchema,
   assignStudentsToGlobalBatchSchema,
   toggleStudentStatusSchema,
+  resetStudentPasswordSchema,
   createGlobalTestSchema,
   updateGlobalTestSchema,
   cloneTestSchema,

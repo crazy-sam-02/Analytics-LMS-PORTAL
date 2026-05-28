@@ -1,6 +1,7 @@
 const models = require("../../models");
 const bcrypt = require("bcrypt");
 const { redisClient, getRedisQueueConnection } = require("../../config/redis");
+const { invalidateRefreshToken } = require("../../services/refresh-token-cache.service");
 const { createAuditLog } = require("../../services/audit.service");
 const { ApiError, asyncHandler } = require("../../utils/http");
 const { getPagination } = require("../../utils/pagination");
@@ -432,6 +433,53 @@ const toggleStudentStatus = asyncHandler(async (req, res) => {
   res.status(200).json(student);
 });
 
+const resetStudentPassword = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
+  const StudentRefreshToken = m.StudentRefreshToken;
+  const { studentId } = req.params;
+
+  const existing = await db.student.findUnique({ where: { id: studentId } });
+  if (!existing) {
+    throw new ApiError(404, "Student not found");
+  }
+
+  const resetPassword = createStudentPassword(existing.fullName, existing.enrollNumber || existing.enrollmentNumber || existing.studentId);
+  const passwordHash = await bcrypt.hash(resetPassword, 10);
+
+  await db.student.update({
+    where: { id: studentId },
+    data: { passwordHash },
+  });
+
+  const activeRefreshTokens = await StudentRefreshToken.findMany({
+    where: {
+      userId: studentId,
+      revokedAt: null,
+    },
+  });
+
+  await StudentRefreshToken.updateMany(
+    { userId: studentId, revokedAt: null },
+    { $set: { revokedAt: new Date() } }
+  );
+
+  await Promise.all(activeRefreshTokens.map((record) => invalidateRefreshToken("student", record.token)));
+
+  await createAuditLog({
+    action: "SUPER_ADMIN_RESET_STUDENT_PASSWORD",
+    targetType: "STUDENT",
+    targetId: existing.id,
+    collegeId: existing.collegeId,
+    superAdminId: req.superAdmin.id,
+  });
+
+  res.status(200).json({
+    message: "Student password reset",
+    password: resetPassword,
+  });
+});
+
 const createStudentGlobal = asyncHandler(async (req, res) => {
   const m = await models.init();
   const db = m.dbClient;
@@ -712,6 +760,7 @@ const deleteStudentGlobal = asyncHandler(async (req, res) => {
 module.exports = {
   getStudentsGlobal,
   toggleStudentStatus,
+  resetStudentPassword,
   createStudentGlobal,
   bulkImportStudentsGlobal,
   getStudentImportJobGlobal,
