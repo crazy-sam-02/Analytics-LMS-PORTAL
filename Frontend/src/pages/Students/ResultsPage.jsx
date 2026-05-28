@@ -58,6 +58,17 @@ const isCompletedTest = (payload) =>
       )
   );
 
+const formatReviewAnswer = (value, fallback) => {
+  if (Array.isArray(value)) {
+    return value.length > 0 ? value.join(", ") : fallback;
+  }
+  if (value == null) {
+    return fallback;
+  }
+  const text = String(value).trim();
+  return text || fallback;
+};
+
 const resolveBreakdown = (payload) => {
   const rows = payload?.question_breakdown || payload?.questionBreakdown || payload?.breakdown || payload?.questions || [];
 
@@ -69,8 +80,8 @@ const resolveBreakdown = (payload) => {
     id: item?.id || item?.question_id || item?.questionId || `q-${index + 1}`,
     prompt: item?.prompt || item?.question || `Question ${index + 1}`,
     topic: item?.topic || "-",
-    studentAnswer: item?.student_answer ?? item?.studentAnswer ?? "Not answered",
-    correctAnswer: item?.correct_answer ?? item?.correctAnswer ?? "-",
+    studentAnswer: formatReviewAnswer(item?.student_answer ?? item?.studentAnswer, "Not answered"),
+    correctAnswer: formatReviewAnswer(item?.correct_answer ?? item?.correctAnswer, "-"),
     marks: toNumber(item?.marks ?? item?.obtained_marks ?? item?.obtainedMarks ?? 0),
     totalMarks: toNumber(item?.total_marks ?? item?.max_marks ?? item?.maxMarks ?? 0),
     isCorrect: Boolean(item?.is_correct ?? item?.isCorrect),
@@ -238,11 +249,11 @@ export default function ResultsPage() {
                   <div className="grid gap-2 md:grid-cols-3">
                     <div className="rounded-lg bg-background p-3">
                       <p className="text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Your answer</p>
-                      <p className="mt-1 text-sm text-text-primary">{String(item.studentAnswer || "Not answered")}</p>
+                      <p className="mt-1 text-sm text-text-primary">{item.studentAnswer}</p>
                     </div>
                     <div className="rounded-lg bg-background p-3">
                       <p className="text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Correct answer</p>
-                      <p className="mt-1 text-sm text-text-primary">{String(item.correctAnswer || "-")}</p>
+                      <p className="mt-1 text-sm text-text-primary">{item.correctAnswer}</p>
                     </div>
                     <div className="rounded-lg bg-background p-3">
                       <p className="text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Marks</p>

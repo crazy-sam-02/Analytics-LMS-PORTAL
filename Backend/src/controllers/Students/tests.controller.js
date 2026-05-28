@@ -1353,13 +1353,13 @@ const getAttemptResult = asyncHandler(async (req, res) => {
   ]);
 
   const total = rankedScores.length || 1;
-  const higherCount = rankedScores.filter((item) => Number(item.score || 0) > Number(summary.score || 0)).length;
+  const higherCount = rankedScores.filter((item) => Number(item.score || 0) > Number(summary?.score ?? 0)).length;
   const percentile = Number((((total - higherCount) / total) * 100).toFixed(2));
   const hydratedTest = attachResolvedTestConfiguration(submission.test);
   const totalMarks = getTestTotalMarks(submission.test);
   const scorePercent = getSubmissionScorePercent({
     ...submission,
-    score: Number(summary.score || submission.score || 0),
+    score: Number(summary?.score ?? submission.score ?? 0),
   });
 
   const revealQuestionDetails = canRevealCorrectAnswers(submission.test);
@@ -1393,7 +1393,7 @@ const getAttemptResult = asyncHandler(async (req, res) => {
     attempt_id: submission.id,
     submission_id: submission.id,
     test_id: submission.testId,
-    score: Number(summary.score || submission.score || 0),
+    score: Number(summary?.score ?? submission.score ?? 0),
     total_marks: totalMarks,
     percentage: scorePercent,
     score_percent: scorePercent,

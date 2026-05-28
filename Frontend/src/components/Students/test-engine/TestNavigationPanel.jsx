@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button";
 
 const hasAnswer = (answer) => {
   if (!answer) return false;
-  if (answer.selected_option) return true;
+  if (answer.selected_option != null && String(answer.selected_option).trim()) return true;
   if (Array.isArray(answer.selected_options) && answer.selected_options.length > 0) return true;
   if (typeof answer.answer_boolean === "boolean") return true;
   return Boolean(String(answer.answer_text || "").trim());

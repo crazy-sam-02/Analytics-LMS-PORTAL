@@ -2,7 +2,7 @@ import React, { StrictMode } from "react";
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import ResultsPage from "@/pages/Students/ResultsPage";
 import ReportsPage from "@/pages/Students/ReportsPage";
 
@@ -78,6 +78,43 @@ describe("Student results and reports pages", () => {
     await waitFor(() => {
       expect(screen.getByText("Result Summary")).toBeInTheDocument();
     });
+  });
+
+  it("shows zero-valued answers instead of treating them as unanswered", async () => {
+    studentApi.getAttemptResult.mockResolvedValue({
+      score: 5,
+      percentile: 50,
+      time_taken: 120,
+      review_mode: "show_all",
+      is_test_completed: true,
+      can_review_answers: true,
+      question_breakdown: [
+        {
+          question_id: "q-1",
+          prompt: "Pick the first option",
+          student_answer: 0,
+          correct_answer: 1,
+          marks: 0,
+          total_marks: 1,
+        },
+      ],
+    });
+
+    renderWithQueryRouter(
+      <Routes>
+        <Route path="/results/:attemptId" element={<ResultsPage />} />
+      </Routes>,
+      "/results/attempt-1"
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("View Answers")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText("View Answers"));
+
+    expect(screen.getByText("0")).toBeInTheDocument();
+    expect(screen.queryByText("Not answered")).not.toBeInTheDocument();
   });
 
   it("renders the reports page without crashing during query updates", async () => {

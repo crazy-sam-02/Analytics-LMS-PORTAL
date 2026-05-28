@@ -28,10 +28,13 @@ const navItems = [
 function Sidebar({ collapsed, mobile = false, onNavigate, upcomingCount = 0 }) {
   const dispatch = useDispatch();
   const shellWidthClass = collapsed ? "w-12" : "w-60";
+  const shellPositionClass = mobile
+    ? "flex h-full w-full max-w-80"
+    : `fixed inset-y-0 left-0 z-40 hidden lg:flex ${shellWidthClass}`;
 
   return (
     <aside
-      className={`flex h-full flex-col border-r border-sidebar-border bg-linear-to-b from-primary-dark to-sidebar px-2 py-4 text-sidebar-foreground ${mobile ? "w-full max-w-80" : shellWidthClass}`}
+      className={`${shellPositionClass} flex-col border-r border-sidebar-border bg-linear-to-b from-primary-dark to-sidebar px-2 py-4 text-sidebar-foreground transition-all duration-200`}
     >
       <Link
         to="/tests/ongoing"

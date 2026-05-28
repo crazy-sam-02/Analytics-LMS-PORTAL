@@ -21,7 +21,7 @@ function AppShell() {
     return uniqueIds.size;
   }, [upcomingPayload]);
 
-  const sidebarWidthClass = sidebarCollapsed ? "lg:w-12" : "lg:w-60";
+  const sidebarOffsetClass = sidebarCollapsed ? "lg:ml-12" : "lg:ml-60";
   const handleMobileSidebarChange = useCallback((open) => {
     dispatch(setMobileSidebarOpen(open));
   }, [dispatch]);
@@ -36,10 +36,8 @@ function AppShell() {
   }, [dispatch]);
 
   return (
-    <div className="min-h-screen bg-linear-to-b from-background via-background to-primary/5 lg:flex">
-      <aside className={`hidden shrink-0 lg:block ${sidebarWidthClass}`}>
-        <Sidebar collapsed={sidebarCollapsed} upcomingCount={upcomingCount} />
-      </aside>
+    <div className="min-h-screen bg-linear-to-b from-background via-background to-primary/5">
+      <Sidebar collapsed={sidebarCollapsed} upcomingCount={upcomingCount} />
 
       <Sheet open={mobileSidebarOpen} onOpenChange={handleMobileSidebarChange}>
         {mobileSidebarOpen ? (
@@ -54,7 +52,7 @@ function AppShell() {
         ) : null}
       </Sheet>
 
-      <main className="min-w-0 flex-1">
+      <main className={`min-w-0 transition-all duration-200 ${sidebarOffsetClass}`}>
         <Header
           collapsed={sidebarCollapsed}
           onToggleSidebar={handleToggleSidebar}

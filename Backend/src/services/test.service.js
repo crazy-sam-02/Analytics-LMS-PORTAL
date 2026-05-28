@@ -6,7 +6,7 @@ const SubmissionStatus = {
   AUTO_SUBMITTED: "AUTO_SUBMITTED",
 };
 
-const normalize = (value) => String(value || "").trim().toLowerCase();
+const normalize = (value) => (value == null ? "" : String(value)).trim().toLowerCase();
 
 const parseOptions = (value) => {
   if (Array.isArray(value)) {
@@ -40,7 +40,7 @@ const compareOptionSets = (actual, expected) => {
   return [...actualSet].every((item) => expectedSet.has(item));
 };
 
-const getAnswerQuestionId = (answer = {}) => answer.questionId || answer.question_id || null;
+const getAnswerQuestionId = (answer = {}) => answer.questionId ?? answer.question_id ?? answer.question?.id ?? null;
 
 const getAnswerSelectedOption = (answer = {}) => answer.selectedOption ?? answer.selected_option ?? null;
 
@@ -66,7 +66,17 @@ const findAnswerForQuestion = (answers = [], question = {}) => {
     .filter(Boolean)
     .map((item) => String(item));
 
-  return (answers || []).find((answer) => questionIds.includes(String(getAnswerQuestionId(answer)))) || null;
+  return (answers || []).find((answer) => {
+    const answerQuestionIds = [
+      getAnswerQuestionId(answer),
+      answer?.question?.sourceQuestionId,
+      answer?.question?.source_question_id,
+    ]
+      .filter(Boolean)
+      .map((item) => String(item));
+
+    return answerQuestionIds.some((answerQuestionId) => questionIds.includes(answerQuestionId));
+  }) || null;
 };
 
 const isAnswerProvided = (answer) => {

@@ -1,6 +1,7 @@
 const models = require("../../models");
 const {
   calculateSubmissionScore,
+  findAnswerForQuestion,
   isAnswerProvided,
   isQuestionCorrect,
 } = require("../../services/test.service");
@@ -54,7 +55,29 @@ describe("test service scoring", () => {
   it("uses the same answered check as the student test palette", () => {
     expect(isAnswerProvided({ selectedOption: null, selectedOptions: [], answerText: "" })).toBe(false);
     expect(isAnswerProvided({ markedForReview: true })).toBe(false);
+    expect(isAnswerProvided({ selectedOption: 0 })).toBe(true);
     expect(isAnswerProvided({ answerBoolean: false })).toBe(true);
     expect(isAnswerProvided({ selectedOptions: ["A"] })).toBe(true);
+  });
+
+  it("scores numeric zero as a real selected option", () => {
+    const question = {
+      type: "MCQ",
+      correctOption: "0",
+    };
+
+    expect(isQuestionCorrect(question, { selectedOption: 0 })).toBe(true);
+  });
+
+  it("matches answers through included question source ids", () => {
+    const answer = {
+      questionId: "question-copy-1",
+      question: {
+        id: "question-copy-1",
+        sourceQuestionId: "bank-question-1",
+      },
+    };
+
+    expect(findAnswerForQuestion([answer], { id: "bank-question-1" })).toBe(answer);
   });
 });

@@ -12,3 +12,5 @@ Thumbs.db
 
 # Scratch / temp
 scratch/
+
+.env/
