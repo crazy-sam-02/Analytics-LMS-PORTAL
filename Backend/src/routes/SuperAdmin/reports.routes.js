@@ -24,11 +24,19 @@ const superReportLimiter = createRateLimiter({
 	message: "Super admin reports are rate limited. Please wait a moment and retry.",
 });
 
+const superReportReadLimiter = createRateLimiter({
+	scope: "super-report-read",
+	routeLabel: "/api/super-admin/reports/*",
+	windowMs: env.rateLimit.superReportReadWindowMs,
+	max: env.rateLimit.superReportReadMax,
+	message: "Super admin report reads are rate limited. Please wait a moment and retry.",
+});
+
 router.post("/generate", authenticateSuperAdmin, superReportLimiter, validate(createSuperReportSchema), generateSuperReport);
-router.get("/", authenticateSuperAdmin, superReportLimiter, getSuperReportJobs);
-router.get("/analytics", authenticateSuperAdmin, superReportLimiter, getSuperReportAnalytics);
-router.get("/anomalies/escalations", authenticateSuperAdmin, superReportLimiter, getEscalatedAnomalies);
+router.get("/", authenticateSuperAdmin, superReportReadLimiter, getSuperReportJobs);
+router.get("/analytics", authenticateSuperAdmin, superReportReadLimiter, getSuperReportAnalytics);
+router.get("/anomalies/escalations", authenticateSuperAdmin, superReportReadLimiter, getEscalatedAnomalies);
 router.post("/jobs/:reportJobId/regenerate-link", authenticateSuperAdmin, superReportLimiter, validate(reportJobParamSchema), regenerateSuperReportLink);
-router.get("/:reportJobId/download", authenticateSuperAdmin, superReportLimiter, validate(reportJobParamSchema), downloadSuperReport);
+router.get("/:reportJobId/download", authenticateSuperAdmin, superReportReadLimiter, validate(reportJobParamSchema), downloadSuperReport);
 
 module.exports = router;

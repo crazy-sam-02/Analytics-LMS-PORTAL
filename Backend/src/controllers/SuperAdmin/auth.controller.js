@@ -1,30 +1,39 @@
 const bcrypt = require("bcrypt");
 const models = require("../../models");
 const env = require("../../config/env");
-const { createAccessToken, createRefreshToken, verifyRefreshToken } = require("../../utils/token");
+const { createAccessToken } = require("../../utils/token");
 const { ApiError, asyncHandler } = require("../../utils/http");
 const {
-  cacheRefreshToken,
-  getCachedRefreshToken,
-  invalidateRefreshToken,
-} = require("../../services/refresh-token-cache.service");
+  assertRefreshTokenRecordUsable,
+  createRefreshTokenRecord,
+  findRefreshTokenRecord,
+  revokeRefreshTokenValue,
+  rotateRefreshTokenRecord,
+  verifyRefreshPayloadOrThrow,
+} = require("../../services/refresh-token-session.service");
+const { revokeAccessTokenFromRequest } = require("../../services/access-token-revocation.service");
 
 const SUPER_ADMIN_REFRESH_COOKIE = "lms_super_admin_refresh_token";
+const SUPER_ADMIN_AUTH_COOKIE_PATHS = ["/api/super-admin/auth", "/api/superadmin/auth"];
 
-const getRefreshCookieOptions = () => ({
+const getRefreshCookieOptions = (path = "/api/super-admin/auth") => ({
   httpOnly: true,
   secure: process.env.NODE_ENV === "production",
   sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
-  path: "/api/super-admin/auth",
+  path,
   maxAge: 1000 * 60 * 60 * 24 * 7,
 });
 
-const verifyRefreshPayloadOrThrow = (refreshToken) => {
-  try {
-    return verifyRefreshToken(refreshToken);
-  } catch {
-    throw new ApiError(401, "Invalid refresh token");
-  }
+const setRefreshCookie = (res, refreshToken) => {
+  SUPER_ADMIN_AUTH_COOKIE_PATHS.forEach((path) => {
+    res.cookie(SUPER_ADMIN_REFRESH_COOKIE, refreshToken, getRefreshCookieOptions(path));
+  });
+};
+
+const clearRefreshCookie = (res) => {
+  SUPER_ADMIN_AUTH_COOKIE_PATHS.forEach((path) => {
+    res.clearCookie(SUPER_ADMIN_REFRESH_COOKIE, getRefreshCookieOptions(path));
+  });
 };
 
 const superAdminLogin = asyncHandler(async (req, res) => {
@@ -38,7 +47,6 @@ const superAdminLogin = asyncHandler(async (req, res) => {
     const passwordHash = await bcrypt.hash(envPassword, 10);
     const m = await models.init();
     const SuperAdmin = m.dbClient.superAdmin;
-    const SuperAdminRefreshToken = m.dbClient.superAdminRefreshToken;
 
     const superAdmin = await SuperAdmin.upsert({
       where: { email: env.superAdminEmail },
@@ -58,18 +66,14 @@ const superAdminLogin = asyncHandler(async (req, res) => {
     });
 
     const accessToken = createAccessToken(superAdmin);
-    const refreshToken = createRefreshToken(superAdmin);
-    const refreshPayload = verifyRefreshPayloadOrThrow(refreshToken);
-
-    const refreshRecord = await SuperAdminRefreshToken.create({
-      data: {
-        token: refreshToken,
-        superAdminId: superAdmin.id,
-        expiresAt: new Date(refreshPayload.exp * 1000),
-      }
+    const { refreshToken } = await createRefreshTokenRecord({
+      db: m.dbClient,
+      modelName: "superAdminRefreshToken",
+      scope: "super-admin",
+      principal: superAdmin,
+      ownerField: "superAdminId",
     });
-    await cacheRefreshToken("super-admin", refreshToken, refreshRecord);
-    res.cookie(SUPER_ADMIN_REFRESH_COOKIE, refreshToken, getRefreshCookieOptions());
+    setRefreshCookie(res, refreshToken);
 
     return res.status(200).json({
       accessToken,
@@ -99,20 +103,14 @@ const superAdminLogin = asyncHandler(async (req, res) => {
   }
 
   const accessToken = createAccessToken(superAdmin);
-  const refreshToken = createRefreshToken(superAdmin);
-  const refreshPayload = verifyRefreshPayloadOrThrow(refreshToken);
-
-  const m2 = await models.init();
-  const SuperAdminRefreshToken = m2.dbClient.superAdminRefreshToken;
-  const refreshRecord = await SuperAdminRefreshToken.create({
-    data: {
-      token: refreshToken,
-      superAdminId: superAdmin.id,
-      expiresAt: new Date(refreshPayload.exp * 1000),
-    }
+  const { refreshToken } = await createRefreshTokenRecord({
+    db: m.dbClient,
+    modelName: "superAdminRefreshToken",
+    scope: "super-admin",
+    principal: superAdmin,
+    ownerField: "superAdminId",
   });
-  await cacheRefreshToken("super-admin", refreshToken, refreshRecord);
-  res.cookie(SUPER_ADMIN_REFRESH_COOKIE, refreshToken, getRefreshCookieOptions());
+  setRefreshCookie(res, refreshToken);
 
   res.status(200).json({
     accessToken,
@@ -133,51 +131,68 @@ const superAdminRefresh = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Refresh token required");
   }
 
-  let dbToken = await getCachedRefreshToken("super-admin", refreshToken);
-  if (!dbToken) {
-    const m3 = await models.init();
-    const SuperAdminRefreshToken = m3.dbClient.superAdminRefreshToken;
-    dbToken = await SuperAdminRefreshToken.findUnique({
-      where: { token: refreshToken }
-    });
-    if (dbToken && !dbToken.revokedAt && new Date(dbToken.expiresAt) >= new Date()) {
-      await cacheRefreshToken("super-admin", refreshToken, dbToken);
-    }
-  }
-  if (!dbToken || dbToken.revokedAt || new Date(dbToken.expiresAt) < new Date()) {
-    throw new ApiError(401, "Invalid refresh token");
-  }
-
   const payload = verifyRefreshPayloadOrThrow(refreshToken);
+  const m = await models.init();
+  const db = m.dbClient;
+  const dbToken = await findRefreshTokenRecord({
+    db,
+    modelName: "superAdminRefreshToken",
+    scope: "super-admin",
+    refreshToken,
+  });
+  await assertRefreshTokenRecordUsable({
+    db,
+    modelName: "superAdminRefreshToken",
+    scope: "super-admin",
+    ownerField: "superAdminId",
+    record: dbToken,
+    ownerId: payload.sub,
+  });
+
   if (payload.role !== "SUPER_ADMIN") {
     throw new ApiError(401, "Invalid refresh token role");
   }
 
-  const m4 = await models.init();
-  const SuperAdmin = m4.dbClient.superAdmin;
-  const superAdmin = await SuperAdmin.findUnique({ where: { id: payload.sub } });
+  const superAdmin = await db.superAdmin.findUnique({ where: { id: payload.sub } });
   if (!superAdmin || !superAdmin.isActive) {
     throw new ApiError(401, "Invalid refresh token");
   }
 
   const accessToken = createAccessToken(superAdmin);
-  res.status(200).json({ accessToken });
+  const { refreshToken: newRefreshToken, refreshRecord } = await rotateRefreshTokenRecord({
+    db,
+    modelName: "superAdminRefreshToken",
+    scope: "super-admin",
+    ownerField: "superAdminId",
+    oldRefreshToken: refreshToken,
+    oldRecord: dbToken,
+    principal: superAdmin,
+  });
+  setRefreshCookie(res, newRefreshToken);
+
+  res.status(200).json({
+    accessToken,
+    refreshToken: newRefreshToken,
+    sessionId: refreshRecord.id,
+  });
 });
 
 const superAdminLogout = asyncHandler(async (req, res) => {
   const refreshToken = req.cookies?.[SUPER_ADMIN_REFRESH_COOKIE] || req.body?.refreshToken;
+  await revokeAccessTokenFromRequest(req);
 
   if (refreshToken) {
-    const m5 = await models.init();
-    const SuperAdminRefreshToken = m5.dbClient.superAdminRefreshToken;
-    await SuperAdminRefreshToken.updateMany({
-      where: { token: refreshToken, revokedAt: null },
-      data: { revokedAt: new Date() }
+    const db = (await models.init()).dbClient;
+    await revokeRefreshTokenValue({
+      db,
+      modelName: "superAdminRefreshToken",
+      scope: "super-admin",
+      refreshToken,
+      reason: "logout",
     });
-    await invalidateRefreshToken("super-admin", refreshToken);
   }
 
-  res.clearCookie(SUPER_ADMIN_REFRESH_COOKIE, getRefreshCookieOptions());
+  clearRefreshCookie(res);
   res.status(200).json({ message: "Logged out" });
 });
 

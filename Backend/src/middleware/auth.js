@@ -3,6 +3,14 @@ const { TokenExpiredError, JsonWebTokenError, NotBeforeError } = require("jsonwe
 const { verifyAccessToken } = require("../utils/token");
 const { ApiError, asyncHandler } = require("../utils/http");
 const { resolveAdminPermissions } = require("../constants/admin-access-profiles");
+const { isAccessTokenRevoked } = require("../services/access-token-revocation.service");
+const {
+  ROLES,
+  normalizeRole,
+  isAdminLikeRole,
+  isCollegeAdminRole,
+  isDepartmentAdminRole,
+} = require("../constants/roles");
 const { getCachedUser, setCachedUser } = require("../services/auth-cache.service");
 
 const parseTokenPayload = (req) => {
@@ -29,16 +37,43 @@ const parseTokenPayload = (req) => {
   }
 };
 
+const validatePrincipalTokenClaims = ({ payload, principal }) => {
+  if (!principal) {
+    throw new ApiError(401, "Invalid access token");
+  }
+
+  if (payload.collegeId && principal.collegeId && String(payload.collegeId) !== String(principal.collegeId)) {
+    throw new ApiError(401, "Invalid access token");
+  }
+
+  if (payload.departmentId && principal.departmentId && String(payload.departmentId) !== String(principal.departmentId)) {
+    throw new ApiError(401, "Invalid access token");
+  }
+
+  const tokenVersion = Number(payload.tokenVersion || 0);
+  const principalTokenVersion = Number(principal.tokenVersion || 0);
+  if (tokenVersion !== principalTokenVersion) {
+    throw new ApiError(401, "Access token has been revoked", null, "TOKEN_REVOKED");
+  }
+};
+
+const assertAccessTokenNotRevoked = async (payload) => {
+  if (await isAccessTokenRevoked(payload)) {
+    throw new ApiError(401, "Access token has been revoked", null, "TOKEN_REVOKED");
+  }
+};
+
 const authenticateStudent = asyncHandler(async (req, _res, next) => {
   const payload = parseTokenPayload(req);
+  const role = normalizeRole(payload.role || ROLES.STUDENT);
 
-  if (payload.role && payload.role !== "STUDENT") {
+  if (role !== ROLES.STUDENT) {
     throw new ApiError(403, "Student role required");
   }
 
-  req.authIdentity = `user:STUDENT:${payload.sub}`;
+  await assertAccessTokenNotRevoked(payload);
+  req.authIdentity = `user:${ROLES.STUDENT}:${payload.sub}`;
 
-  // Cache-aside: check Redis/memory cache before hitting MongoDB.
   let user = await getCachedUser("student", payload.sub);
 
   if (!user) {
@@ -52,46 +87,38 @@ const authenticateStudent = asyncHandler(async (req, _res, next) => {
     });
 
     if (user) {
-      // Normalize batchId / batchIds into a consistent batchIds array.
-      // Students may have a singular batchId (legacy) or a batchIds array.
       const rawBatchIds = Array.isArray(user.batchIds) ? user.batchIds : [];
       const singleBatchId = user.batchId || null;
-      const merged = [...new Set([...rawBatchIds, singleBatchId].filter(Boolean))];
-      user.batchIds = merged;
-
-      // Cache for subsequent requests (passwordHash is stripped automatically).
+      user.batchIds = [...new Set([...rawBatchIds, singleBatchId].filter(Boolean))];
       await setCachedUser("student", payload.sub, user);
     }
   }
 
-  if (!user) {
-    throw new ApiError(401, "Invalid access token");
-  }
+  validatePrincipalTokenClaims({ payload, principal: user });
 
-  // Validate token department claim (defense-in-depth)
-  if (payload.departmentId && user.departmentId && String(payload.departmentId) !== String(user.departmentId)) {
-    throw new ApiError(401, "Invalid access token");
-  }
-
-  if (!user.isActive) {
+  if (!user?.isActive) {
     throw new ApiError(403, "Account is inactive", null, "ACCOUNT_INACTIVE");
   }
 
   req.user = user;
+  req.collegeId = user.collegeId;
+  req.collegeFilter = user.collegeId ? { collegeId: user.collegeId } : {};
   next();
 });
 
-const authenticateAdmin = asyncHandler(async (req, _res, next) => {
+const authenticatePlatformAdminCore = async (req) => {
   const payload = parseTokenPayload(req);
+  const role = normalizeRole(payload.role);
 
-  if (payload.role !== "ADMIN") {
+  if (!isAdminLikeRole(role)) {
     throw new ApiError(403, "Admin role required");
   }
 
-  req.authIdentity = `user:ADMIN:${payload.sub}`;
+  await assertAccessTokenNotRevoked(payload);
+  req.authIdentity = `user:${role}:${payload.sub}`;
 
-  // Cache-aside: check Redis/memory cache before hitting MongoDB.
-  let admin = await getCachedUser("admin", payload.sub);
+  const cacheBucket = isCollegeAdminRole(role) ? "college-admin" : "admin";
+  let admin = await getCachedUser(cacheBucket, payload.sub);
 
   if (!admin) {
     admin = await db.admin.findUnique({
@@ -103,40 +130,65 @@ const authenticateAdmin = asyncHandler(async (req, _res, next) => {
     });
 
     if (admin) {
-      await setCachedUser("admin", payload.sub, admin);
+      await setCachedUser(cacheBucket, payload.sub, admin);
     }
   }
 
-  if (!admin || !admin.isActive) {
+  validatePrincipalTokenClaims({ payload, principal: admin });
+
+  if (!admin || !admin.isActive || normalizeRole(admin.role) !== role) {
     throw new ApiError(401, "Invalid access token");
   }
 
-  if (!admin.collegeId || !admin.departmentId) {
-    throw new ApiError(403, "Admin must be assigned to a college and department", null, "ADMIN_SCOPE_REQUIRED");
+  if (!admin.collegeId) {
+    throw new ApiError(403, "Admin must be assigned to a college", null, "COLLEGE_SCOPE_REQUIRED");
   }
 
-  // Validate token department claim
-  if (payload.departmentId && admin.departmentId && String(payload.departmentId) !== String(admin.departmentId)) {
-    throw new ApiError(401, "Invalid access token");
+  if (isDepartmentAdminRole(role) && !admin.departmentId) {
+    throw new ApiError(403, "Admin must be assigned to a department", null, "DEPARTMENT_SCOPE_REQUIRED");
   }
 
-  req.admin = admin;
+  req.admin = {
+    ...admin,
+    role,
+    permissions: resolveAdminPermissions(admin),
+  };
   req.collegeId = admin.collegeId;
   req.collegeFilter = { collegeId: admin.collegeId };
-  req.admin.permissions = resolveAdminPermissions(admin);
+};
+
+const authenticatePlatformAdmin = asyncHandler(async (req, _res, next) => {
+  await authenticatePlatformAdminCore(req);
+  next();
+});
+
+const authenticateAdmin = asyncHandler(async (req, res, next) => {
+  await authenticatePlatformAdminCore(req);
+  if (normalizeRole(req.admin?.role) !== ROLES.ADMIN) {
+    throw new ApiError(403, "Admin role required");
+  }
+  next();
+});
+
+const authenticateCollegeAdmin = asyncHandler(async (req, res, next) => {
+  await authenticatePlatformAdminCore(req);
+  if (normalizeRole(req.admin?.role) !== ROLES.COLLEGE_ADMIN) {
+    throw new ApiError(403, "College admin role required");
+  }
   next();
 });
 
 const authenticateSuperAdmin = asyncHandler(async (req, _res, next) => {
   const payload = parseTokenPayload(req);
+  const role = normalizeRole(payload.role);
 
-  if (payload.role !== "SUPER_ADMIN") {
+  if (role !== ROLES.SUPER_ADMIN) {
     throw new ApiError(403, "Super admin role required");
   }
 
-  req.authIdentity = `user:SUPER_ADMIN:${payload.sub}`;
+  await assertAccessTokenNotRevoked(payload);
+  req.authIdentity = `user:${ROLES.SUPER_ADMIN}:${payload.sub}`;
 
-  // Cache-aside: check Redis/memory cache before hitting MongoDB.
   let superAdmin = await getCachedUser("superadmin", payload.sub);
 
   if (!superAdmin) {
@@ -153,6 +205,8 @@ const authenticateSuperAdmin = asyncHandler(async (req, _res, next) => {
     throw new ApiError(401, "Invalid access token");
   }
 
+  validatePrincipalTokenClaims({ payload, principal: superAdmin });
+
   req.superAdmin = superAdmin;
   next();
 });
@@ -164,7 +218,7 @@ const requireSameCollege = (fieldName = "collegeId") =>
     const queryCollegeId = req.query?.[fieldName];
     const candidate = bodyCollegeId || paramsCollegeId || queryCollegeId;
 
-    if (candidate && candidate !== req.collegeId) {
+    if (candidate && req.collegeId && String(candidate) !== String(req.collegeId)) {
       throw new ApiError(403, "Cross-college access denied");
     }
 
@@ -175,6 +229,8 @@ module.exports = {
   authenticate: authenticateStudent,
   authenticateStudent,
   authenticateAdmin,
+  authenticateCollegeAdmin,
+  authenticatePlatformAdmin,
   authenticateSuperAdmin,
   requireSameCollege,
 };

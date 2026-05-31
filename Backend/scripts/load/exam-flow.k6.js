@@ -11,20 +11,64 @@ const THINK_TIME_SECONDS = Number(__ENV.THINK_TIME_SECONDS || 1);
 const EXPECT_STATUS = (__ENV.EXPECT_STATUS || "200,201").split(",").map((item) => Number(item.trim()));
 const RUN_SUBMIT = String(__ENV.RUN_SUBMIT || "false").toLowerCase() === "true";
 const DEBUG_FAILURES = String(__ENV.DEBUG_FAILURES || "true").toLowerCase() !== "false";
+const PROFILE = String(__ENV.PROFILE || "").trim().toLowerCase();
+
+const LOAD_PROFILES = {
+  "100": {
+    warmupUsers: 25,
+    targetUsers: 100,
+    warmupDuration: "2m",
+    holdDuration: "5m",
+    rampdownDuration: "1m",
+  },
+  "500": {
+    warmupUsers: 100,
+    targetUsers: 500,
+    warmupDuration: "3m",
+    holdDuration: "10m",
+    rampdownDuration: "2m",
+  },
+  "1000": {
+    warmupUsers: 250,
+    targetUsers: 1000,
+    warmupDuration: "5m",
+    holdDuration: "15m",
+    rampdownDuration: "3m",
+  },
+  "5000": {
+    warmupUsers: 1000,
+    targetUsers: 5000,
+    warmupDuration: "20m",
+    holdDuration: "30m",
+    rampdownDuration: "10m",
+  },
+};
+
+const selectedProfile = PROFILE ? LOAD_PROFILES[PROFILE] : null;
+
+if (PROFILE && !selectedProfile) {
+  throw new Error(`Unknown load PROFILE "${PROFILE}". Use one of: ${Object.keys(LOAD_PROFILES).join(", ")}`);
+}
+
+const numberOption = (envName, profileName, fallback) => Number(__ENV[envName] || selectedProfile?.[profileName] || fallback);
+const stringOption = (envName, profileName, fallback) => __ENV[envName] || selectedProfile?.[profileName] || fallback;
 
 const apiFailures = new Counter("api_failures");
 const startSuccessRate = new Rate("exam_start_success");
 const answerLatency = new Trend("answer_save_latency_ms");
 
 export const options = {
+  tags: {
+    profile: PROFILE || "custom",
+  },
   scenarios: {
     warmup: {
       executor: "ramping-vus",
       startVUs: 0,
       stages: [
-        { duration: __ENV.WARMUP_DURATION || "2m", target: Number(__ENV.WARMUP_USERS || 100) },
-        { duration: __ENV.HOLD_DURATION || "5m", target: Number(__ENV.TARGET_USERS || 500) },
-        { duration: __ENV.RAMPDOWN_DURATION || "1m", target: 0 },
+        { duration: stringOption("WARMUP_DURATION", "warmupDuration", "2m"), target: numberOption("WARMUP_USERS", "warmupUsers", 100) },
+        { duration: stringOption("HOLD_DURATION", "holdDuration", "5m"), target: numberOption("TARGET_USERS", "targetUsers", 500) },
+        { duration: stringOption("RAMPDOWN_DURATION", "rampdownDuration", "1m"), target: 0 },
       ],
       gracefulRampDown: "30s",
     },

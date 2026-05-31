@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Eye, EyeOff, Lock, ShieldCheck, UserRound } from "lucide-react";
+import { Eye, EyeOff, Lock, ShieldCheck, User } from "lucide-react";
 import { useDispatch, useSelector } from "react-redux";
 import { Navigate } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
@@ -7,8 +7,10 @@ import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { loginAdmin } from "@/features/Admin/adminAuthSlice";
+import { loginAdmin, logoutAdmin } from "@/features/Admin/adminAuthSlice";
+import { isAdminRole, isCollegeAdminRole, normalizeAdminRole } from "@/features/Admin/adminRole";
 import { useSeo } from "@/hooks/useSeo";
+import HardRedirect from "@/components/common/HardRedirect";
 
 export default function AdminLoginPage() {
   useSeo({
@@ -23,14 +25,46 @@ export default function AdminLoginPage() {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [rememberAdmin, setRememberAdmin] = useState(true);
+  const [localError, setLocalError] = useState("");
 
-  if (admin) {
+  if (admin && isCollegeAdminRole(admin.role)) {
+    return <HardRedirect to="/college-admin/dashboard" message="Redirecting to College Admin portal..." />;
+  }
+
+  if (admin && isAdminRole(admin.role)) {
     return <Navigate to="/admin/dashboard" replace />;
   }
 
   const onSubmit = async (event) => {
     event.preventDefault();
-    await dispatch(loginAdmin({ email, password }));
+    setLocalError("");
+    const normalizedEmail = email.trim();
+    if (!normalizedEmail || !password) {
+      setLocalError("Please enter your email and password.");
+      return;
+    }
+
+    const result = await dispatch(loginAdmin({ email: normalizedEmail, password }));
+
+    if (loginAdmin.rejected.match(result)) {
+      setLocalError(result.error?.message || "Unable to sign in. Please try again.");
+      return;
+    }
+
+    if (loginAdmin.fulfilled.match(result)) {
+      const role = normalizeAdminRole(result.payload?.role);
+      if (isCollegeAdminRole(role)) {
+        window.location.replace("/college-admin/dashboard");
+        return;
+      }
+      if (isAdminRole(role)) {
+        window.location.replace("/admin/dashboard");
+        return;
+      }
+
+      await dispatch(logoutAdmin());
+      setLocalError("This account is not mapped to a supported admin portal.");
+    }
   };
 
   return (
@@ -38,8 +72,8 @@ export default function AdminLoginPage() {
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_12%_8%,rgba(37,99,235,0.16),transparent_32%),radial-gradient(circle_at_88%_78%,rgba(14,165,233,0.14),transparent_34%),linear-gradient(180deg,#ffffff_0%,#f4f8ff_100%)]" />
       <div className="pointer-events-none absolute inset-x-8 top-8 h-32 rounded-full bg-blue-500/10 blur-3xl" />
 
-      <Card className="relative grid w-full max-w-7xl overflow-hidden rounded-[24px] border-white/80 bg-white shadow-[0_32px_90px_-36px_rgba(15,35,71,0.55)] lg:min-h-[760px] lg:grid-cols-[1.12fr_0.88fr]">
-        <div className="relative hidden min-h-[580px] overflow-hidden bg-[#0837df] p-8 text-white lg:block lg:min-h-full lg:p-14">
+      <Card className="relative grid w-full max-w-7xl overflow-hidden rounded-[24px] border-white/80 bg-white shadow-[0_32px_90px_-36px_rgba(15,35,71,0.55)] lg:min-h-190 lg:grid-cols-[1.12fr_0.88fr]">
+        <div className="relative hidden min-h-145 overflow-hidden bg-[#0837df] p-8 text-white lg:block lg:min-h-full lg:p-14">
           <div className="absolute inset-0 bg-[linear-gradient(135deg,#0c4cff_0%,#082bb7_44%,#06166f_100%)]" />
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_22%_18%,rgba(56,189,248,0.34),transparent_30%),radial-gradient(circle_at_80%_70%,rgba(124,58,237,0.30),transparent_34%),radial-gradient(circle_at_44%_92%,rgba(14,165,233,0.22),transparent_28%)]" />
           <div className="absolute right-12 top-16 grid grid-cols-4 gap-3 opacity-50">
@@ -54,7 +88,7 @@ export default function AdminLoginPage() {
           </div>
           <div className="absolute -left-24 top-28 h-80 w-80 rounded-full bg-sky-400/20 blur-3xl" />
           <div className="absolute -right-28 bottom-10 h-96 w-96 rounded-full bg-blue-300/16 blur-3xl" />
-          <div className="absolute left-[-18%] top-[21%] h-64 w-[138%] rotate-[-31deg] rounded-[42px] border border-cyan-300/20 bg-white/[0.03] shadow-[0_0_50px_rgba(34,211,238,0.16)]" />
+          <div className="absolute left-[-18%] top-[21%] h-64 w-[138%] rotate-[-31deg] rounded-[42px] border border-cyan-300/20 bg-white/3 shadow-[0_0_50px_rgba(34,211,238,0.16)]" />
           <div className="absolute left-[-12%] bottom-[12%] h-48 w-[130%] rotate-[-27deg] rounded-[36px] border border-blue-100/12 bg-blue-950/10" />
           <div className="absolute bottom-31 left-[-10%] h-px w-[120%] rotate-[-28deg] bg-linear-to-r from-transparent via-cyan-300/70 to-transparent shadow-[0_0_22px_rgba(34,211,238,0.8)]" />
           <div className="absolute bottom-18 left-[6%] h-px w-[110%] rotate-[-28deg] bg-linear-to-r from-transparent via-violet-300/65 to-transparent shadow-[0_0_20px_rgba(167,139,250,0.7)]" />
@@ -63,7 +97,7 @@ export default function AdminLoginPage() {
             src="/favicon.svg"
             alt=""
             aria-hidden="true"
-            className="pointer-events-none absolute left-1/2 top-1/2 h-[460px] w-[460px] -translate-x-1/2 -translate-y-1/2 opacity-[0.07] brightness-0 invert"
+            className="pointer-events-none absolute left-1/2 top-1/2 h-115 w-115 -translate-x-1/2 -translate-y-1/2 opacity-[0.07] brightness-0 invert"
           />
 
           <div className="relative z-10 flex h-full flex-col justify-between">
@@ -94,7 +128,7 @@ export default function AdminLoginPage() {
         </div>
 
         <div className="flex items-center bg-white p-7 sm:p-10 lg:p-16">
-          <div className="mx-auto w-full max-w-[520px]">
+          <div className="mx-auto w-full max-w-130">
             <Badge className="rounded-full bg-blue-600/12 px-4 py-1.5 text-xs font-bold tracking-wide text-blue-700 uppercase shadow-sm" variant="secondary">
               <ShieldCheck className="mr-1.5 size-3.5" />
               Admin Portal
@@ -106,7 +140,7 @@ export default function AdminLoginPage() {
               <div>
                 <label className="mb-2.5 block text-xs font-bold tracking-wide text-slate-600 uppercase">Admin Email</label>
                 <div className="flex h-14 items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 shadow-[0_1px_2px_rgba(15,23,42,0.04),inset_0_1px_0_rgba(255,255,255,0.9)] transition focus-within:border-blue-500 focus-within:shadow-[0_0_0_4px_rgba(37,99,235,0.10)]">
-                  <UserRound className="size-5 text-slate-500" />
+                  <User className="size-5 text-slate-500" />
                   <Input
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
@@ -150,7 +184,7 @@ export default function AdminLoginPage() {
                 Keep me logged in for 30 days
               </label>
 
-              {error ? <p className="text-sm font-medium text-danger">{error}</p> : null}
+              {(localError || error) ? <p className="text-sm font-medium text-danger">{localError || error}</p> : null}
 
               <Button
                 type="submit"

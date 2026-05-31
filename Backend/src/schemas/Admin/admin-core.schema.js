@@ -10,6 +10,23 @@ const optionalIdSchema = z.preprocess(
   idSchema.optional()
 );
 
+const dateStringSchema = z.string().trim().min(1).refine((value) => {
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime());
+}, "Invalid date");
+
+const validateQueryDateRange = (input, ctx) => {
+  const from = input.query?.dateFrom ? new Date(input.query.dateFrom) : null;
+  const to = input.query?.dateTo ? new Date(input.query.dateTo) : null;
+  if (from && to && from > to) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["query", "dateTo"],
+      message: "dateTo must be greater than or equal to dateFrom",
+    });
+  }
+};
+
 const studentFiltersSchema = z.object({
   body: z.object({}).optional().default({}),
   params: z.object({}).optional().default({}),
@@ -217,6 +234,14 @@ const studentBulkImportSchema = z.object({
   query: z.object({}).optional().default({}),
 });
 
+const promoteStudentsYearSchema = z.object({
+  body: z.object({
+    confirmationText: z.string().trim().min(1),
+  }),
+  params: z.object({}).optional().default({}),
+  query: z.object({}).optional().default({}),
+});
+
 const studentBulkImportJobParamSchema = z.object({
   body: z.object({}).optional().default({}),
   params: z.object({
@@ -372,8 +397,10 @@ const reportAnalyticsQuerySchema = z.object({
     studentId: z.string().trim().optional(),
     testId: z.string().trim().optional(),
     academicYear: z.string().trim().optional(),
+    dateFrom: dateStringSchema.optional(),
+    dateTo: dateStringSchema.optional(),
   }),
-});
+}).superRefine(validateQueryDateRange);
 
 const reportJobStatusParamSchema = z.object({
   body: z.object({}).optional().default({}),
@@ -445,6 +472,7 @@ module.exports = {
   assignStudentBatchSchema,
   studentIdParamSchema,
   studentBulkImportSchema,
+  promoteStudentsYearSchema,
   studentBulkImportJobParamSchema,
   updateAdminSettingsSchema,
   changeAdminPasswordSchema,

@@ -1,19 +1,25 @@
 const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
 const env = require("../config/env");
+const { ROLES, normalizeRole } = require("../constants/roles");
 
 const createAccessToken = (principal) => {
-  const role = principal.role || "STUDENT";
+  const role = normalizeRole(principal.role || ROLES.STUDENT);
 
   return jwt.sign(
     {
       sub: principal.id,
       role,
-      collegeId: principal.collegeId,
-      departmentId: principal.departmentId,
+      collegeId: principal.collegeId || null,
+      departmentId: principal.departmentId || null,
+      tokenVersion: Number(principal.tokenVersion || 0),
       permissions: Array.isArray(principal.permissions) ? principal.permissions : undefined,
     },
     env.jwtAccessSecret,
-    { expiresIn: env.jwtAccessExpiresIn }
+    {
+      expiresIn: env.jwtAccessExpiresIn,
+      jwtid: crypto.randomUUID(),
+    }
   );
 };
 
@@ -21,11 +27,14 @@ const createRefreshToken = (principal) => {
   return jwt.sign(
     {
       sub: principal.id,
-      role: principal.role || "STUDENT",
+      role: normalizeRole(principal.role || ROLES.STUDENT),
       type: "refresh",
     },
     env.jwtRefreshSecret,
-    { expiresIn: env.jwtRefreshExpiresIn }
+    {
+      expiresIn: env.jwtRefreshExpiresIn,
+      jwtid: crypto.randomUUID(),
+    }
   );
 };
 

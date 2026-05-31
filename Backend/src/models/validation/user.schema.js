@@ -4,6 +4,7 @@ const {
   referenceValidator,
   optionalReferenceValidator,
 } = require("./shared");
+const { ROLES } = require("../../constants/roles");
 
 const UserValidationSchema = new mongoose.Schema(
   {
@@ -12,11 +13,21 @@ const UserValidationSchema = new mongoose.Schema(
     role: {
       type: String,
       required: true,
-      enum: ["student", "admin", "superadmin", "STUDENT", "ADMIN", "SUPER_ADMIN"],
+      enum: [
+        "student",
+        "admin",
+        "college_admin",
+        "super_admin",
+        "superadmin",
+        "STUDENT",
+        "ADMIN",
+        "COLLEGE_ADMIN",
+        "SUPER_ADMIN",
+      ],
       set: normalizeLowerEnumValue,
     },
     password: { type: String, trim: true, minlength: 8, default: undefined },
-    collegeId: { type: String, required: true, validate: referenceValidator },
+    collegeId: { type: String, default: null, validate: optionalReferenceValidator },
     departmentId: { type: String, default: null, validate: optionalReferenceValidator },
     batchId: { type: String, default: null, validate: optionalReferenceValidator },
     year: { type: Number, required: true, min: 1, max: 4 },
@@ -32,6 +43,29 @@ const UserValidationSchema = new mongoose.Schema(
 UserValidationSchema.pre("validate", function normalizeRole(next) {
   if (this.role) {
     this.role = normalizeLowerEnumValue(this.role);
+  }
+
+  const role = String(this.role || "").toUpperCase();
+
+  if (role === ROLES.SUPER_ADMIN) {
+    this.collegeId = null;
+    this.departmentId = null;
+  }
+
+  if (role === ROLES.COLLEGE_ADMIN) {
+    if (!this.collegeId) {
+      this.invalidate("collegeId", "collegeId is required for COLLEGE_ADMIN");
+    }
+    this.departmentId = null;
+  }
+
+  if (role === ROLES.ADMIN) {
+    if (!this.collegeId) {
+      this.invalidate("collegeId", "collegeId is required for ADMIN");
+    }
+    if (!this.departmentId) {
+      this.invalidate("departmentId", "departmentId is required for ADMIN");
+    }
   }
 
   next();

@@ -81,6 +81,7 @@ const clearStudentAuth = () => {
 
 const TestEnvironmentPage = lazy(() => import("@/pages/Students/TestEnvironmentPage"));
 const EventsPage = lazy(() => import("@/pages/Students/EventsPage"));
+const LearningResourcesPage = lazy(() => import("@/pages/Students/LearningResourcesPage"));
 const ProfilePage = lazy(() => import("@/pages/Students/ProfilePage"));
 const SettingsPage = lazy(() => import("@/pages/Students/SettingsPage"));
 
@@ -220,6 +221,7 @@ const router = createBrowserRouter([
               { path: "/tests/upcoming", element: <UpcomingTestsPage /> },
               { path: "/reports", element: <ReportsPage /> },
               { path: "/leaderboard", element: <LeaderboardPage /> },
+              { path: "/resources", element: <PageRoute><LearningResourcesPage /></PageRoute> },
               { path: "/events", element: <PageRoute><EventsPage /></PageRoute> },
               { path: "/profile", element: <PageRoute><ProfilePage /></PageRoute> },
               { path: "/settings", element: <PageRoute><SettingsPage /></PageRoute> },

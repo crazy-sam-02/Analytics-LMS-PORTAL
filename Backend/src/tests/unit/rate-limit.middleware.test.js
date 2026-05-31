@@ -9,6 +9,7 @@ describe("createRateLimiter", () => {
         incr: jest.fn(),
         pexpire: jest.fn(),
         pttl: jest.fn(),
+        set: jest.fn(),
       },
       isRedisAvailable: () => false,
     }));
@@ -119,5 +120,57 @@ describe("createRateLimiter", () => {
     expect(heartbeat.nextCalled).toBe(true);
     expect(heartbeat.statusCode).toBeNull();
     expect(recordRateLimitEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not count CORS preflight requests", async () => {
+    const { createRateLimiter } = loadModule();
+    const limiter = createRateLimiter({
+      scope: "api-general",
+      max: 1,
+      windowMs: 60_000,
+    });
+
+    const preflight = await invokeLimiter(limiter, { method: "OPTIONS" });
+    expect(preflight.nextCalled).toBe(true);
+    expect(preflight.statusCode).toBeNull();
+    expect(preflight.headers).toEqual({});
+
+    const firstGet = await invokeLimiter(limiter, { method: "GET" });
+    expect(firstGet.nextCalled).toBe(true);
+    expect(firstGet.statusCode).toBeNull();
+  });
+
+  it("repairs Redis counters that lost their expiry", async () => {
+    jest.resetModules();
+
+    const redisClient = {
+      incr: jest.fn().mockResolvedValue(500),
+      pexpire: jest.fn(),
+      pttl: jest.fn().mockResolvedValue(-1),
+      set: jest.fn().mockResolvedValue("OK"),
+    };
+
+    jest.doMock("../../config/redis", () => ({
+      redisClient,
+      isRedisAvailable: () => true,
+    }));
+
+    jest.doMock("../../services/rate-limit-metrics.service", () => ({
+      recordRateLimitEvent: jest.fn().mockResolvedValue(undefined),
+    }));
+
+    const { createRateLimiter } = require("../../middleware/rate-limit");
+    const limiter = createRateLimiter({
+      scope: "api-general",
+      max: 1,
+      windowMs: 60_000,
+    });
+
+    const result = await invokeLimiter(limiter, { method: "GET" });
+
+    expect(result.nextCalled).toBe(true);
+    expect(result.statusCode).toBeNull();
+    expect(redisClient.set).toHaveBeenCalledWith(expect.stringContaining("rate:api-general:"), "1", "PX", 60_000);
+    expect(result.headers["RateLimit-Remaining"]).toBe("0");
   });
 });

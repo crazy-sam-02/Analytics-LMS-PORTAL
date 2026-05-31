@@ -4,6 +4,7 @@ const { redisClient, getRedisQueueConnection } = require("../config/redis");
 const { ApiError } = require("../utils/http");
 const { createAuditLog } = require("./audit.service");
 const { getPagination } = require("../utils/pagination");
+const { invalidatePrincipalAuthCache } = require("./auth-revocation.service");
 
 let Queue = null;
 let Worker = null;
@@ -396,6 +397,7 @@ const assignStudentToBatch = async (collegeId, adminId, studentId, batchId) => {
   });
 
   await createAuditLog({ action: "ADMIN_STUDENT_BATCH_ASSIGNED", targetType: "STUDENT", targetId: studentId, collegeId, adminId, afterState: { batchId, departmentId: batch.isGlobal ? student.departmentId : batch.departmentId, isGlobalBatch: Boolean(batch.isGlobal) } });
+  await invalidatePrincipalAuthCache("student", studentId);
 
   return {
     ...updated,

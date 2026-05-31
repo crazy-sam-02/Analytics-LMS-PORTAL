@@ -1,6 +1,6 @@
-const express = require("express");
+﻿const express = require("express");
 const env = require("../../config/env");
-const { authenticateAdmin } = require("../../middleware/auth");
+const { authenticatePlatformAdmin } = require("../../middleware/auth");
 const { createRateLimiter } = require("../../middleware/rate-limit");
 const { createResponseCache } = require("../../middleware/response-cache");
 const { adminSearch } = require("../../controllers/Admin/search.controller");
@@ -10,7 +10,14 @@ const router = express.Router();
 const adminSearchCache = createResponseCache({
 	scope: "admin-search",
 	ttlSeconds: env.responseCache.adminSearchTtlSeconds,
-	keyBuilder: (req) => `${req.admin?.collegeId || "unknown"}:${String(req.query.q || "").trim().toLowerCase()}`,
+	keyBuilder: (req) => JSON.stringify({
+		q: String(req.query.q || "").trim().toLowerCase(),
+		adminId: req.admin?.id || null,
+		collegeId: req.admin?.collegeId || "unknown",
+		departmentId: req.admin?.departmentId || null,
+		role: req.admin?.role || null,
+		permissions: Array.isArray(req.admin?.permissions) ? [...req.admin.permissions].sort() : [],
+	}),
 });
 
 const adminSearchLimiter = createRateLimiter({
@@ -21,6 +28,8 @@ const adminSearchLimiter = createRateLimiter({
 	message: "Search is temporarily rate limited. Please keep typing and retry.",
 });
 
-router.get("/", authenticateAdmin, adminSearchCache, adminSearchLimiter, adminSearch);
+router.get("/", authenticatePlatformAdmin, adminSearchCache, adminSearchLimiter, adminSearch);
 
 module.exports = router;
+
+

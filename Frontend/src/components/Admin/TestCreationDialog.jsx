@@ -90,6 +90,18 @@ const STUDENT_YEAR_OPTIONS = [
   { value: 4, label: "4 YEAR" },
 ];
 const ADMIN_STUDENTS_PAGE_LIMIT = 100;
+const DEFAULT_QB_STATE = Object.freeze({
+  filters: {},
+  subjects: [],
+  questions: [],
+  selected: [],
+  loading: false,
+  pagination: {
+    page: 1,
+    totalPages: 1,
+    limit: 20,
+  },
+});
 
 const resolveDepartmentId = (departmentRef) => {
   if (!departmentRef) return null;
@@ -114,7 +126,8 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
   const scopedUser = isSuperAdminContext ? superAdminUser : (adminUser || studentUser);
   const currentUserDeptId = resolveDepartmentId(scopedUser?.departmentId || scopedUser?.department);
   const colleges = useSelector((state) => state.superAdminPanel.colleges);
-  const qb = useSelector((state) => (isSuperAdminContext ? state.superQuestionBank : state.questionBank));
+  const qbState = useSelector((state) => (isSuperAdminContext ? state.superQuestionBank : state.questionBank));
+  const qb = qbState || DEFAULT_QB_STATE;
   const { form, open, step, stepTitles, errors, isSubmitting, questionRenderLimit, mode } = testCreation;
   const isEditMode = mode === "edit";
   const draftKey = isSuperAdminContext ? SUPER_ADMIN_DRAFT_KEY : ADMIN_DRAFT_KEY;

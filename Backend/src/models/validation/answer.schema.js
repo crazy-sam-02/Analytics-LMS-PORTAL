@@ -24,6 +24,6 @@ const AnswerValidationSchema = new mongoose.Schema(
 );
 
 // Unique constraint: one answer per submission per question
-AnswerValidationSchema.index({ submissionId: 1, questionId: 1 }, { unique: false });
+AnswerValidationSchema.index({ submissionId: 1, questionId: 1 }, { unique: true });
 
 module.exports = mongoose.models.AnswerValidation || mongoose.model("AnswerValidation", AnswerValidationSchema);

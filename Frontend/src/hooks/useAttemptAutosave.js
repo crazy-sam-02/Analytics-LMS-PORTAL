@@ -164,7 +164,7 @@ export const useAttemptAutosave = () => {
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [attempt_id, changedPayload.length, test_id]);
+  }, [attempt_id, changedPayload.length, flush, test_id]);
 
   useEffect(() => {
     if (!attempt_id || !test_id) {

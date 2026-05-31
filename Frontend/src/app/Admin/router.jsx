@@ -12,9 +12,12 @@ import StudentsPage from "@/pages/Admin/StudentsPage";
 import EventsPage from "@/pages/Admin/EventsPage";
 import ReportsPage from "@/pages/Admin/ReportsPage";
 import AdminSettingsPage from "@/pages/Admin/SettingsPage";
+import LearningResourcesPage from "@/pages/Admin/LearningResourcesPage";
 import usePermission from "@/hooks/usePermission";
 import PermissionDenied from "@/components/Admin/PermissionDenied";
 import { ADMIN_PERMISSIONS } from "@/features/Admin/adminPermissions";
+import { isCollegeAdminRole } from "@/features/Admin/adminRole";
+import HardRedirect from "@/components/common/HardRedirect";
 
 function PermissionRoute({ permission, action }) {
   const allowed = usePermission(permission);
@@ -38,12 +41,24 @@ function AdminAuthBootstrap() {
 
 function AdminProtectedRoute() {
   const admin = useSelector((state) => state.adminAuth.admin);
-  return admin ? <Outlet /> : <Navigate to="/admin/login" replace />;
+  if (!admin) {
+    return <Navigate to="/admin/login" replace />;
+  }
+  if (isCollegeAdminRole(admin.role)) {
+    return <HardRedirect to="/college-admin/dashboard" message="Redirecting to College Admin portal..." />;
+  }
+  return <Outlet />;
 }
 
 function AdminPublicOnlyRoute() {
   const admin = useSelector((state) => state.adminAuth.admin);
-  return admin ? <Navigate to="/admin/dashboard" replace /> : <Outlet />;
+  if (!admin) {
+    return <Outlet />;
+  }
+  if (isCollegeAdminRole(admin.role)) {
+    return <HardRedirect to="/college-admin/dashboard" message="Redirecting to College Admin portal..." />;
+  }
+  return <Navigate to="/admin/dashboard" replace />;
 }
 
 const router = createBrowserRouter([
@@ -66,6 +81,10 @@ const router = createBrowserRouter([
               {
                 element: <PermissionRoute permission={ADMIN_PERMISSIONS.MANAGE_QUESTIONS} action="access question bank" />,
                 children: [{ path: "/admin/question-bank", element: <QuestionBankPage /> }],
+              },
+              {
+                element: <PermissionRoute permission={ADMIN_PERMISSIONS.VIEW_RESOURCES} action="access learning resources" />,
+                children: [{ path: "/admin/resources", element: <LearningResourcesPage /> }],
               },
               {
                 element: <PermissionRoute permission={ADMIN_PERMISSIONS.MANAGE_BATCHES} action="manage batches" />,

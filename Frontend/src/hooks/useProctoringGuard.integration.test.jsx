@@ -62,6 +62,14 @@ const createStore = () =>
     },
   });
 
+const flushAsyncWork = async () => {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+};
+
 describe("useProctoringGuard integration", () => {
   const originalInnerWidth = window.innerWidth;
   const originalMatchMedia = window.matchMedia;
@@ -140,7 +148,7 @@ describe("useProctoringGuard integration", () => {
     restoreEnvironment();
   });
 
-  it("records only one violation for copy cascade events", async () => {
+  it("records only one server-confirmed violation for copy cascade events", async () => {
     const store = createStore();
     const wrapper = ({ children }) => <Provider store={store}>{children}</Provider>;
 
@@ -165,6 +173,8 @@ describe("useProctoringGuard integration", () => {
       vi.advanceTimersByTime(300);
     });
 
+    await flushAsyncWork();
+
     expect(store.getState().test.violations.total).toBe(1);
   });
 
@@ -172,6 +182,11 @@ describe("useProctoringGuard integration", () => {
     const store = createStore();
     const wrapper = ({ children }) => <Provider store={store}>{children}</Provider>;
     const onThresholdExceeded = vi.fn();
+    let serverCount = 0;
+    studentApi.reportAttemptViolation.mockImplementation(async () => ({
+      autoSubmitted: false,
+      violationCount: ++serverCount,
+    }));
 
     renderHook(
       () =>
@@ -201,13 +216,48 @@ describe("useProctoringGuard integration", () => {
       vi.advanceTimersByTime(1300);
     });
 
-    expect(store.getState().test.violations.total).toBeGreaterThanOrEqual(3);
+    await flushAsyncWork();
 
-    await act(async () => {
-      await Promise.resolve();
+    expect(store.getState().test.violations.total).toBeGreaterThanOrEqual(3);
+    expect(onThresholdExceeded).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not auto-submit from local overcount when server dedupes violations", async () => {
+    const store = createStore();
+    const wrapper = ({ children }) => <Provider store={store}>{children}</Provider>;
+    const onThresholdExceeded = vi.fn();
+    studentApi.reportAttemptViolation.mockResolvedValue({
+      autoSubmitted: false,
+      duplicate: true,
+      violationCount: 1,
     });
 
-    expect(onThresholdExceeded).toHaveBeenCalledTimes(1);
+    renderHook(
+      () =>
+        useProctoringGuard({
+          attemptId: "attempt-1",
+          testId: "test-1",
+          enabled: true,
+          paused: false,
+          threshold: 2,
+          fullscreenRequired: false,
+          onThresholdExceeded,
+        }),
+      { wrapper }
+    );
+
+    act(() => {
+      document.dispatchEvent(new Event("copy", { bubbles: true, cancelable: true }));
+      vi.advanceTimersByTime(1300);
+      document.dispatchEvent(new Event("contextmenu", { bubbles: true, cancelable: true }));
+      vi.advanceTimersByTime(1300);
+    });
+
+    await flushAsyncWork();
+
+    expect(studentApi.reportAttemptViolation).toHaveBeenCalledTimes(2);
+    expect(store.getState().test.violations.total).toBe(1);
+    expect(onThresholdExceeded).not.toHaveBeenCalled();
   });
 
   it("does not report mobile blur when page remains visible", () => {
@@ -241,7 +291,7 @@ describe("useProctoringGuard integration", () => {
     expect(studentApi.reportAttemptViolation).not.toHaveBeenCalled();
   });
 
-  it("reports mobile blur only when page is backgrounded", () => {
+  it("reports mobile blur only when page is backgrounded", async () => {
     setMobileLikeEnvironment();
     setDocumentVisibility({ hidden: true, visibilityState: "hidden" });
 
@@ -267,6 +317,8 @@ describe("useProctoringGuard integration", () => {
       window.dispatchEvent(new Event("blur"));
       vi.advanceTimersByTime(250);
     });
+
+    await flushAsyncWork();
 
     expect(store.getState().test.violations.total).toBe(1);
     expect(studentApi.reportAttemptViolation).toHaveBeenCalledTimes(1);

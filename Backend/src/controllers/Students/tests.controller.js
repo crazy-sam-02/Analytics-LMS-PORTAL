@@ -19,11 +19,13 @@ const {
 const { createAuditLog } = require("../../services/audit.service");
 const { withRedisLock } = require("../../services/redis-lock.service");
 const { setExamState, clearExamState } = require("../../services/exam-state-cache.service");
+const { bufferHeartbeat } = require("../../services/heartbeat-buffer.service");
 const { emitToCollege, emitToUser, emitToTestRoom } = require("../../realtime/socket");
 const { ApiError, asyncHandler } = require("../../utils/http");
 const { getSubmissionScorePercent, getTestTotalMarks } = require("../../utils/score");
 const { getCachedTestQuestions, setCachedTestQuestions } = require("../../services/test-cache.service");
 const { attachResolvedTestConfiguration } = require("../../services/test-config.service");
+const { recordExamViolation } = require("../../services/exam-violation.service");
 const {
   buildStudentAssignmentScope,
   isStudentAssignedToTest,
@@ -31,6 +33,65 @@ const {
 
 const HEARTBEAT_STALE_SECONDS = 20;
 const HEARTBEAT_FORCE_AUTOSUBMIT_SECONDS = 15 * 60;
+const SENSITIVE_QUESTION_FIELDS = new Set([
+  "answer",
+  "answer_key",
+  "answerKey",
+  "answers",
+  "correct",
+  "correct_answer",
+  "correctAnswer",
+  "correct_boolean",
+  "correctBoolean",
+  "correct_option",
+  "correctOption",
+  "correct_options",
+  "correctOptions",
+  "correct_text",
+  "correctText",
+  "explanation",
+  "explanations",
+  "is_correct",
+  "isCorrect",
+  "solution",
+  "solutions",
+]);
+
+const stripSensitiveQuestionFields = (value) => {
+  if (Array.isArray(value)) {
+    return value.map(stripSensitiveQuestionFields);
+  }
+
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => !SENSITIVE_QUESTION_FIELDS.has(key))
+      .map(([key, nestedValue]) => [key, stripSensitiveQuestionFields(nestedValue)])
+  );
+};
+
+const sanitizeQuestionForStudent = (question = {}) => stripSensitiveQuestionFields(question);
+
+const sanitizeQuestionsForStudent = (questions = []) =>
+  Array.isArray(questions) ? questions.map(sanitizeQuestionForStudent) : [];
+
+const getStudentQuestionPayload = async (testId, questions = []) => {
+  let cachedQuestions = await getCachedTestQuestions(testId);
+  if (!cachedQuestions) {
+    cachedQuestions = sanitizeQuestionsForStudent(questions);
+    await setCachedTestQuestions(testId, cachedQuestions);
+  }
+  return sanitizeQuestionsForStudent(cachedQuestions);
+};
+
+const withStudentSafeTest = (test = {}) =>
+  attachResolvedTestConfiguration({
+    ...test,
+    questions: sanitizeQuestionsForStudent(test?.questions),
+  });
 
 const getClientSessionId = (req) => {
   const fromHeader = req.headers["x-test-client-id"];
@@ -39,14 +100,24 @@ const getClientSessionId = (req) => {
   return sessionId || null;
 };
 
-const isSubmissionExpired = (submission) => {
+const getSubmissionExpiryMs = (submission, session = null) => {
+  const sessionExpiryMs = session?.expiresAt ? new Date(session.expiresAt).getTime() : NaN;
+  if (Number.isFinite(sessionExpiryMs)) {
+    return sessionExpiryMs;
+  }
+
   const durationMins = submission?.test?.durationMins;
   const startedAt = submission?.startedAt ? new Date(submission.startedAt).getTime() : 0;
   if (!durationMins || !startedAt) {
-    return false;
+    return NaN;
   }
 
-  return Date.now() > startedAt + durationMins * 60 * 1000;
+  return startedAt + durationMins * 60 * 1000;
+};
+
+const isSubmissionExpired = (submission, session = null) => {
+  const expiresAtMs = getSubmissionExpiryMs(submission, session);
+  return Number.isFinite(expiresAtMs) && Date.now() > expiresAtMs;
 };
 
 const hasTestEnded = (test = {}) => {
@@ -282,18 +353,7 @@ const startTest = asyncHandler(async (req, res) => {
         });
 
         if (submission && submission.status === "IN_PROGRESS") {
-          let cachedQuestions = await getCachedTestQuestions(testId);
-          if (!cachedQuestions) {
-            cachedQuestions = test.questions.map((q) => ({
-              id: q.id,
-              prompt: q.prompt,
-              type: q.type,
-              options: q.options,
-              marks: q.marks,
-              order: q.order,
-            }));
-            await setCachedTestQuestions(testId, cachedQuestions);
-          }
+          const cachedQuestions = await getStudentQuestionPayload(testId, test.questions);
 
           const hydratedTest = attachResolvedTestConfiguration({
             ...test,
@@ -335,18 +395,7 @@ const startTest = asyncHandler(async (req, res) => {
 
   // Build sanitized question list for student view (no correct answers).
   // Cache it so 500+ concurrent startTest requests don't all hit MongoDB.
-  let cachedQuestions = await getCachedTestQuestions(testId);
-  if (!cachedQuestions) {
-    cachedQuestions = test.questions.map((q) => ({
-      id: q.id,
-      prompt: q.prompt,
-      type: q.type,
-      options: q.options,
-      marks: q.marks,
-      order: q.order,
-    }));
-    await setCachedTestQuestions(testId, cachedQuestions);
-  }
+  const cachedQuestions = await getStudentQuestionPayload(testId, test.questions);
 
   const now = new Date();
   // During local automated load/k6 runs we sometimes bypass time-window checks.
@@ -654,7 +703,7 @@ const getSession = asyncHandler(async (req, res) => {
     throw new ApiError(404, "No existing session found");
   }
 
-  if (isSubmissionExpired(submission)) {
+  if (isSubmissionExpired(submission, session)) {
     const completed = await completeSubmission({ submissionId: submission.id, autoSubmitted: true });
     throw new ApiError(409, "Test time expired. Submission auto-submitted.", { submission: completed }, "TEST_TIME_EXPIRED");
   }
@@ -670,13 +719,21 @@ const getSession = asyncHandler(async (req, res) => {
     );
   }
 
-  await upsertSessionHeartbeat({
-    db,
+  const buffered = await bufferHeartbeat({
     userId,
     testId,
     submissionId: submission.id,
-    clientSessionId,
   });
+
+  if (!buffered) {
+    await upsertSessionHeartbeat({
+      db,
+      userId,
+      testId,
+      submissionId: submission.id,
+      clientSessionId,
+    });
+  }
 
   await setExamState({
     userId,
@@ -689,7 +746,7 @@ const getSession = asyncHandler(async (req, res) => {
     },
   });
 
-  const hydratedTest = attachResolvedTestConfiguration(submission.test);
+  const hydratedTest = withStudentSafeTest(submission.test);
 
   res.status(200).json({
     ...submission,
@@ -738,7 +795,12 @@ const getAttemptSession = asyncHandler(async (req, res) => {
     throw new ApiError(409, "No active session for attempt", null, "NO_ACTIVE_SESSION");
   }
 
-  const hydratedTest = attachResolvedTestConfiguration(submission.test);
+  if (isSubmissionExpired(submission, session)) {
+    const completed = await completeSubmission({ submissionId: submission.id, autoSubmitted: true });
+    throw new ApiError(409, "Test time expired. Submission auto-submitted.", { submission: completed }, "TEST_TIME_EXPIRED");
+  }
+
+  const hydratedTest = withStudentSafeTest(submission.test);
 
   res.status(200).json({
     ...submission,
@@ -786,7 +848,7 @@ const heartbeatTest = asyncHandler(async (req, res) => {
     throw new ApiError(409, "Submission already completed", null, "SUBMISSION_ALREADY_COMPLETED");
   }
 
-  if (isSubmissionExpired(submission)) {
+  if (isSubmissionExpired(submission, session)) {
     const completed = await completeSubmission({ submissionId: submission.id, autoSubmitted: true });
     return res.status(200).json({
       ok: false,
@@ -796,13 +858,21 @@ const heartbeatTest = asyncHandler(async (req, res) => {
     });
   }
 
-  await upsertSessionHeartbeat({
-    db,
+  const heartbeatBuffered = await bufferHeartbeat({
     userId,
     testId,
     submissionId: submission.id,
-    clientSessionId,
   });
+
+  if (!heartbeatBuffered) {
+    await upsertSessionHeartbeat({
+      db,
+      userId,
+      testId,
+      submissionId: submission.id,
+      clientSessionId,
+    });
+  }
 
   await setExamState({
     userId,
@@ -837,7 +907,7 @@ const saveAnswer = asyncHandler(async (req, res) => {
     markedForReview,
   } = req.body;
 
-  const { clientSessionId } = await assertSessionOwnership({
+  const { session, clientSessionId } = await assertSessionOwnership({
     db,
     req,
     userId: req.user.id,
@@ -857,7 +927,7 @@ const saveAnswer = asyncHandler(async (req, res) => {
     throw new ApiError(409, "Submission already completed", null, "SUBMISSION_ALREADY_COMPLETED");
   }
 
-  if (isSubmissionExpired(submission)) {
+  if (isSubmissionExpired(submission, session)) {
     const completed = await completeSubmission({ submissionId, autoSubmitted: true });
     throw new ApiError(409, "Test time expired. Submission auto-submitted.", { submission: completed }, "TEST_TIME_EXPIRED");
   }
@@ -983,7 +1053,7 @@ const reportViolation = asyncHandler(async (req, res) => {
   const db = m.dbClient;
   const { submissionId, type, metadata } = req.body;
 
-  const { clientSessionId } = await assertSessionOwnership({
+  const { session, clientSessionId } = await assertSessionOwnership({
     db,
     req,
     userId: req.user.id,
@@ -1003,7 +1073,7 @@ const reportViolation = asyncHandler(async (req, res) => {
     throw new ApiError(409, "Submission already completed", null, "SUBMISSION_ALREADY_COMPLETED");
   }
 
-  if (isSubmissionExpired(submission)) {
+  if (isSubmissionExpired(submission, session)) {
     const completed = await completeSubmission({ submissionId, autoSubmitted: true });
     return res.status(200).json({
       message: "Test time expired. Submission auto-submitted.",
@@ -1021,22 +1091,33 @@ const reportViolation = asyncHandler(async (req, res) => {
     clientSessionId,
   });
 
-  await db.violation.create({
-    data: {
-      submissionId,
-      type,
-      metadata: metadata || null,
+  const violationResult = await withRedisLock({
+    lockKey: `lock:test-violation:submission:${submissionId}`,
+    ttlMs: 3_000,
+    waitTimeoutMs: 1_000,
+    onLockTimeout: async () => {
+      throw new ApiError(429, "Violation is already being processed. Please retry.", null, "VIOLATION_LOCKED");
+    },
+    task: async () => {
+      const result = await recordExamViolation({
+        db,
+        submission,
+        user: req.user,
+        type,
+        metadata,
+      });
+
+      await db.submission.update({
+        where: { id: submissionId },
+        data: {
+          violationCount: result.violationCount,
+        },
+      });
+
+      return result;
     },
   });
-
-  const violationCount = await db.violation.count({ where: { submissionId } });
-
-  await db.submission.update({
-    where: { id: submissionId },
-    data: {
-      violationCount,
-    },
-  });
+  const { duplicate, violationCount } = violationResult;
 
   const [answersForState, questionCountForState] = await Promise.all([
     db.answer.findMany({
@@ -1079,6 +1160,7 @@ const reportViolation = asyncHandler(async (req, res) => {
     afterState: {
       type,
       violationCount,
+      duplicate,
       metadata: metadata || null,
     },
   });
@@ -1088,6 +1170,7 @@ const reportViolation = asyncHandler(async (req, res) => {
     testId: submission.testId,
     type,
     violationCount,
+    duplicate,
     threshold: submission.test?.violationLimit || 3,
   });
   emitToCollege(req.user.collegeId, "test:violation:college", {
@@ -1096,6 +1179,7 @@ const reportViolation = asyncHandler(async (req, res) => {
     userId: req.user.id,
     type,
     violationCount,
+    duplicate,
   });
   emitToCollege(req.user.collegeId, "violation_event", {
     submissionId,
@@ -1103,6 +1187,7 @@ const reportViolation = asyncHandler(async (req, res) => {
     studentId: req.user.id,
     type,
     violationCount,
+    duplicate,
     at: new Date().toISOString(),
   });
   emitToTestRoom(submission.testId, "violation_event", {
@@ -1111,6 +1196,7 @@ const reportViolation = asyncHandler(async (req, res) => {
     studentId: req.user.id,
     type,
     violationCount,
+    duplicate,
     at: new Date().toISOString(),
   });
   emitToTestRoom(submission.testId, "student_status_update", {
@@ -1133,6 +1219,7 @@ const reportViolation = asyncHandler(async (req, res) => {
   res.status(200).json({
     message: "Violation recorded",
     autoSubmitted: false,
+    duplicate,
     violationCount,
   });
 });
@@ -1170,7 +1257,7 @@ const submitTest = asyncHandler(async (req, res) => {
     },
     task: async () => {
 
-  const { clientSessionId } = await assertSessionOwnership({
+  const { session, clientSessionId } = await assertSessionOwnership({
     db,
     req,
     userId: req.user.id,
@@ -1194,7 +1281,7 @@ const submitTest = asyncHandler(async (req, res) => {
     clientSessionId,
   });
 
-      if (isSubmissionExpired(submission)) {
+      if (isSubmissionExpired(submission, session)) {
         const completed = await completeSubmission({ submissionId, autoSubmitted: true });
         const summaryExpired = await calculateSubmissionScore(submissionId);
         await clearExamState({ userId: req.user.id, testId: submission.testId });

@@ -16,6 +16,7 @@ import ReportsPage from "@/pages/SuperAdmin/ReportsPage";
 import AnalyticsPage from "@/pages/SuperAdmin/AnalyticsPage";
 import SettingsPage from "@/pages/SuperAdmin/SettingsPage";
 import QuestionBankPage from "@/pages/SuperAdmin/QuestionBankPage";
+import LearningResourcesPage from "@/pages/SuperAdmin/LearningResourcesPage";
 
 function SuperAdminBootstrap() {
   const dispatch = useDispatch();
@@ -64,6 +65,7 @@ const router = createBrowserRouter([
               { path: "/super-admin/departments", element: <DepartmentsPage /> },
               { path: "/super-admin/tests", element: <TestsPage /> },
               { path: "/super-admin/question-bank", element: <QuestionBankPage /> },
+              { path: "/super-admin/resources", element: <LearningResourcesPage /> },
               { path: "/super-admin/batches", element: <BatchesPage /> },
               { path: "/super-admin/events", element: <EventsPage /> },
               { path: "/super-admin/reports", element: <ReportsPage /> },

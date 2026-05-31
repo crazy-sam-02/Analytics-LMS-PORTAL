@@ -13,10 +13,13 @@ const getLeaderboard = asyncHandler(async (req, res) => {
   const db = m.dbClient;
   const view = String(req.query.view || "overall").trim().toLowerCase();
   const testId = String(req.query.testId || req.query.test_id || "").trim();
-  const collegeId = req.query.collegeId || req.user.collegeId;
-  const departmentId = req.query.departmentId || req.user.departmentId;
+  const collegeId = req.user.collegeId;
+  const departmentId = req.user.departmentId;
   const userBatchIds = normalizeIdList(req.user.batchIds || []);
-  const batchId = req.query.batchId || (userBatchIds.length > 0 ? userBatchIds[0] : req.user.batchId);
+  const requestedBatchId = req.query.batchId ? String(req.query.batchId).trim() : "";
+  const batchId = requestedBatchId && userBatchIds.includes(requestedBatchId)
+    ? requestedBatchId
+    : (userBatchIds.length > 0 ? userBatchIds[0] : req.user.batchId);
   const { page, limit, skip } = getPagination(req.query, { defaultLimit: 50, maxLimit: 100 });
 
   if (view === "per_test" && !testId) {

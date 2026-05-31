@@ -1,7 +1,7 @@
 const express = require("express");
 const env = require("../../config/env");
 const validate = require("../../middleware/validate");
-const { authenticateAdmin } = require("../../middleware/auth");
+const { authenticatePlatformAdmin } = require("../../middleware/auth");
 const { createRateLimiter } = require("../../middleware/rate-limit");
 const { requirePermission } = require("../../middleware/permissions");
 const { requireSameDepartment } = require("../../middleware/department-guard");
@@ -47,19 +47,19 @@ const adminReportReadLimiter = createRateLimiter({
   message: "Report analytics are rate limited. Please wait a moment and retry.",
 });
 
-router.get("/", authenticateAdmin, requirePermission("view_reports"), getReportJobs);
-router.get("/summary", authenticateAdmin, adminReportReadLimiter, requirePermission("view_reports"), requireSameDepartment(), validate(reportDashboardQuerySchema), getReportSummaryDashboard);
-router.get("/charts", authenticateAdmin, adminReportReadLimiter, requirePermission("view_reports"), requireSameDepartment(), validate(reportDashboardQuerySchema), getReportChartsDashboard);
-router.get("/table", authenticateAdmin, adminReportReadLimiter, requirePermission("view_reports"), requireSameDepartment(), validate(reportDashboardQuerySchema), getReportTableDashboard);
-router.get("/student/:studentId", authenticateAdmin, adminReportReadLimiter, requirePermission("view_reports"), validate(reportStudentDetailDashboardSchema), getReportStudentDetailDashboard);
-router.get("/analytics", authenticateAdmin, adminReportReadLimiter, requirePermission("view_reports"), requireSameDepartment(), validate(reportAnalyticsQuerySchema), getReportAnalytics);
-router.get("/jobs/:reportJobId/status", authenticateAdmin, adminReportReadLimiter, requirePermission("view_reports"), validate(reportJobStatusParamSchema), getReportJobStatus);
-router.get("/:reportJobId/download", authenticateAdmin, adminReportReadLimiter, requirePermission("export_reports"), downloadReport);
-router.post("/jobs/:reportJobId/regenerate-link", authenticateAdmin, reportGenerationLimiter, requirePermission("export_reports"), regenerateReportLink);
-router.post("/anomalies/review", authenticateAdmin, requirePermission("view_reports"), validate(reviewReportAnomalySchema), reviewAnomaly);
+router.get("/", authenticatePlatformAdmin, adminReportReadLimiter, requirePermission("view_reports"), getReportJobs);
+router.get("/summary", authenticatePlatformAdmin, adminReportReadLimiter, requirePermission("view_reports"), requireSameDepartment(), validate(reportDashboardQuerySchema), getReportSummaryDashboard);
+router.get("/charts", authenticatePlatformAdmin, adminReportReadLimiter, requirePermission("view_reports"), requireSameDepartment(), validate(reportDashboardQuerySchema), getReportChartsDashboard);
+router.get("/table", authenticatePlatformAdmin, adminReportReadLimiter, requirePermission("view_reports"), requireSameDepartment(), validate(reportDashboardQuerySchema), getReportTableDashboard);
+router.get("/student/:studentId", authenticatePlatformAdmin, adminReportReadLimiter, requirePermission("view_reports"), validate(reportStudentDetailDashboardSchema), getReportStudentDetailDashboard);
+router.get("/analytics", authenticatePlatformAdmin, adminReportReadLimiter, requirePermission("view_reports"), requireSameDepartment(), validate(reportAnalyticsQuerySchema), getReportAnalytics);
+router.get("/jobs/:reportJobId/status", authenticatePlatformAdmin, adminReportReadLimiter, requirePermission("view_reports"), validate(reportJobStatusParamSchema), getReportJobStatus);
+router.get("/:reportJobId/download", authenticatePlatformAdmin, adminReportReadLimiter, requirePermission("export_reports"), validate(reportJobStatusParamSchema), downloadReport);
+router.post("/jobs/:reportJobId/regenerate-link", authenticatePlatformAdmin, reportGenerationLimiter, requirePermission("export_reports"), validate(reportJobStatusParamSchema), regenerateReportLink);
+router.post("/anomalies/review", authenticatePlatformAdmin, requirePermission("view_reports"), validate(reviewReportAnomalySchema), reviewAnomaly);
 router.post(
 	"/generate",
-	authenticateAdmin,
+	authenticatePlatformAdmin,
 	reportGenerationLimiter,
 	requirePermission("view_reports", "export_reports"),
 	requireSameDepartment(),
@@ -69,7 +69,7 @@ router.post(
 
 router.post(
 	"/export",
-	authenticateAdmin,
+	authenticatePlatformAdmin,
 	reportGenerationLimiter,
 	requirePermission("view_reports", "export_reports"),
 	requireSameDepartment(),

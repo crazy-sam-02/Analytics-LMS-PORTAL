@@ -151,6 +151,47 @@ const calculateSubmissionScore = async (submissionId) => {
   };
 };
 
+const toValidTime = (value) => {
+  const time = new Date(value || 0).getTime();
+  return Number.isFinite(time) ? time : null;
+};
+
+const getCompletionTimeSpentSeconds = async (db, submission, submittedAt = new Date()) => {
+  const startedAtMs = toValidTime(submission?.startedAt);
+  if (!startedAtMs) {
+    return 0;
+  }
+
+  const deadlineCandidates = [];
+  const session = db.testSession?.findFirst
+    ? await db.testSession.findFirst({
+        where: { submissionId: submission.id },
+        orderBy: { updatedAt: "desc" },
+        select: { expiresAt: true },
+      }).catch(() => null)
+    : null;
+  const sessionExpiresAtMs = toValidTime(session?.expiresAt);
+  if (sessionExpiresAtMs) {
+    deadlineCandidates.push(sessionExpiresAtMs);
+  }
+
+  const test = db.test?.findUnique
+    ? await db.test.findUnique({
+        where: { id: submission.testId },
+        select: { durationMins: true },
+      }).catch(() => null)
+    : null;
+  const durationMins = Number(test?.durationMins || 0);
+  if (durationMins > 0) {
+    deadlineCandidates.push(startedAtMs + durationMins * 60 * 1000);
+  }
+
+  const submittedAtMs = toValidTime(submittedAt) || Date.now();
+  const deadlineMs = deadlineCandidates.length ? Math.min(...deadlineCandidates) : submittedAtMs;
+  const effectiveEndMs = Math.min(submittedAtMs, deadlineMs);
+  return Math.max(0, Math.floor((effectiveEndMs - startedAtMs) / 1000));
+};
+
 const completeSubmission = async ({ submissionId, autoSubmitted = false }) => {
   const m = await models.init();
   const db = m.dbClient;
@@ -169,14 +210,10 @@ const completeSubmission = async ({ submissionId, autoSubmitted = false }) => {
     return existing;
   }
 
-  const timeSpentSeconds = Math.max(
-    0,
-    Math.floor((Date.now() - new Date(existing.startedAt).getTime()) / 1000)
-  );
-
   // Atomic completion guard to prevent duplicate submit races.
   const submitStatus = autoSubmitted ? SubmissionStatus.AUTO_SUBMITTED : SubmissionStatus.SUBMITTED;
   const submittedAt = new Date();
+  const timeSpentSeconds = await getCompletionTimeSpentSeconds(db, existing, submittedAt);
 
   const updatedCount = await db.submission.updateMany({
     where: {
@@ -225,6 +262,7 @@ module.exports = {
   getAnswerSelectedOption,
   getAnswerSelectedOptions,
   getAnswerText,
+  getCompletionTimeSpentSeconds,
   isAnswerProvided,
   isQuestionCorrect,
 };

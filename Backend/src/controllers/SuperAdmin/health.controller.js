@@ -1,14 +1,11 @@
-const fs = require("fs/promises");
-const path = require("path");
 const env = require("../../config/env");
 const { getRedisHealthSnapshot } = require("../../config/redis");
 const { getIO } = require("../../realtime/socket");
 const { getApiMetricsSnapshot } = require("../../services/api-metrics.service");
+const { getOperationalHealthSnapshot } = require("../../services/operational-health.service");
 const { getRateLimitMetricsSnapshot } = require("../../services/rate-limit-metrics.service");
 const { getDb } = require("../../utils/db");
 const { asyncHandler } = require("../../utils/http");
-
-const toGb = (bytes) => Number((bytes / (1024 ** 3)).toFixed(2));
 
 const getMongoHealth = async () => {
   const start = Date.now();
@@ -69,35 +66,12 @@ const getJobQueueHealth = async () => {
   };
 };
 
-const getStorageHealth = async () => {
-  try {
-    const rootPath = path.resolve(process.cwd());
-    const stats = await fs.statfs(rootPath);
-    const totalBytes = Number(stats.blocks) * Number(stats.bsize);
-    const availableBytes = Number(stats.bavail) * Number(stats.bsize);
-    const usedBytes = totalBytes - availableBytes;
-    const percentUsed = totalBytes > 0 ? (usedBytes / totalBytes) * 100 : 0;
-
-    return {
-      used_gb: toGb(usedBytes),
-      total_gb: toGb(totalBytes),
-      percent_used: Number(percentUsed.toFixed(2)),
-    };
-  } catch (_error) {
-    return {
-      used_gb: 0,
-      total_gb: 0,
-      percent_used: 0,
-    };
-  }
-};
-
 const getSystemHealth = asyncHandler(async (_req, res) => {
-  const [mongodb, redis, job_queue, storage] = await Promise.all([
+  const [mongodb, redis, job_queue, operational] = await Promise.all([
     getMongoHealth(),
     getRedisHealth(),
     getJobQueueHealth(),
-    getStorageHealth(),
+    getOperationalHealthSnapshot(),
   ]);
 
   const io = getIO();
@@ -110,7 +84,9 @@ const getSystemHealth = asyncHandler(async (_req, res) => {
     socket_server: {
       connected_clients: io?.engine?.clientsCount || 0,
     },
-    storage,
+    storage: operational.application_disk,
+    uploads: operational.uploads,
+    backups: operational.backups,
     api: {
       avg_response_ms: apiSnapshot.avgResponseMs,
       error_rate_percent: apiSnapshot.errorRatePercent,

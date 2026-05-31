@@ -9,29 +9,8 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import SkeletonBlock from "@/components/common/SkeletonBlock";
-
-const loadXlsxBrowserLib = () =>
-  new Promise((resolve, reject) => {
-    if (typeof window !== "undefined" && window.XLSX) {
-      resolve(window.XLSX);
-      return;
-    }
-
-    const existing = document.querySelector('script[data-xlsx-loader="true"]');
-    if (existing) {
-      existing.addEventListener("load", () => resolve(window.XLSX));
-      existing.addEventListener("error", () => reject(new Error("Unable to load spreadsheet parser")));
-      return;
-    }
-
-    const script = document.createElement("script");
-    script.src = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
-    script.async = true;
-    script.dataset.xlsxLoader = "true";
-    script.onload = () => resolve(window.XLSX);
-    script.onerror = () => reject(new Error("Unable to load spreadsheet parser"));
-    document.head.appendChild(script);
-  });
+import { parseSpreadsheetRows } from "@/lib/spreadsheet";
+import { isAdminRole } from "@/features/Admin/adminRole";
 
 const IMPORT_SAMPLE = [
   "fullName,email,enrollNumber,department,year,batch",
@@ -99,17 +78,7 @@ export default function StudentsPage() {
       if (name.endsWith(".csv")) {
         parsedCsv = await file.text();
       } else {
-        const XLSX = await loadXlsxBrowserLib();
-        const buffer = await file.arrayBuffer();
-        const workbook = XLSX.read(buffer, { type: "array" });
-        const firstSheetName = workbook.SheetNames[0];
-        const firstSheet = workbook.Sheets[firstSheetName];
-        const rows = XLSX.utils.sheet_to_json(firstSheet, { defval: "" });
-
-        if (!Array.isArray(rows) || rows.length === 0) {
-          throw new Error("Selected file has no rows");
-        }
-
+        const rows = await parseSpreadsheetRows(file);
         parsedCsv = rowsToCsv(rows);
       }
 
@@ -224,18 +193,28 @@ export default function StudentsPage() {
   const batches = useMemo(() => Array.isArray(batchesQuery.data) ? batchesQuery.data : batchesQuery.data?.data || [], [batchesQuery.data]);
   const departments = useMemo(() => Array.isArray(departmentsQuery.data) ? departmentsQuery.data : departmentsQuery.data?.data || [], [departmentsQuery.data]);
 
-  // Auto-apply admin department filter and defaults
   const admin = useSelector((state) => state.adminAuth.admin);
+  const scopedDepartmentId = useMemo(
+    () => admin?.department?.id || admin?.departmentId || "",
+    [admin?.department?.id, admin?.departmentId]
+  );
+  const isDepartmentScopedAdmin = useMemo(
+    () => isAdminRole(admin?.role) && Boolean(scopedDepartmentId),
+    [admin?.role, scopedDepartmentId]
+  );
+  const scopedDepartmentName = !isDepartmentScopedAdmin
+    ? ""
+    : admin?.department?.name || departments.find((department) => String(department.id) === String(scopedDepartmentId))?.name || "";
 
   useEffect(() => {
     if (!admin) return;
-    const adminDeptId = admin?.department?.id || admin?.departmentId || "";
-    setDirectoryFilters((prev) => ({ ...prev, departmentId: prev.departmentId || adminDeptId }));
-    // Default student create form department to admin's department name if available
-    if (admin?.department?.name) {
-      setStudentForm((prev) => (prev.department ? prev : { ...prev, department: admin.department.name }));
+    if (!isDepartmentScopedAdmin) return;
+
+    setDirectoryFilters((prev) => ({ ...prev, departmentId: prev.departmentId || scopedDepartmentId }));
+    if (scopedDepartmentName) {
+      setStudentForm((prev) => (prev.department ? prev : { ...prev, department: scopedDepartmentName }));
     }
-  }, [admin]);
+  }, [admin, isDepartmentScopedAdmin, scopedDepartmentId, scopedDepartmentName]);
   const selectedStudent = studentProfileQuery.data;
 
   useEffect(() => {
@@ -291,11 +270,11 @@ export default function StudentsPage() {
               className="h-10 rounded-md border border-border px-3 text-sm"
                 value={studentForm.department}
                 onChange={(event) => setStudentForm((prev) => ({ ...prev, department: event.target.value }))}
-                disabled={Boolean(admin)}
+                disabled={isDepartmentScopedAdmin}
             >
-                {!admin ? <option value="">Select department</option> : null}
-                {admin && admin.department ? (
-                  <option value={admin.department.name}>{admin.department.name}</option>
+                {!isDepartmentScopedAdmin ? <option value="">Select department</option> : null}
+                {isDepartmentScopedAdmin ? (
+                  <option value={scopedDepartmentName}>{scopedDepartmentName || "Scoped Department"}</option>
                 ) : (
                   Array.isArray(departments) && departments.map((department) => (
                     <option key={department.id} value={department.name}>{department.name}</option>
@@ -372,7 +351,7 @@ export default function StudentsPage() {
       <Card className="rounded-2xl border-border">
         <CardHeader>
           <CardTitle>Bulk Import (Excel/CSV)</CardTitle>
-          <CardDescription>Upload .xlsx/.xls/.csv file or paste CSV. Runs as async job and supports large imports.</CardDescription>
+          <CardDescription>Upload .xlsx/.csv file or paste CSV. Runs as async job and supports large imports.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="rounded-lg border border-border bg-background p-3 text-xs text-text-secondary">
@@ -382,7 +361,7 @@ export default function StudentsPage() {
             <p className="mt-1">Example: Alice Doe, alice@example.com, 20261001, Computer Science, 1, CSE-2027-A</p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
-            <Input type="file" accept=".xlsx,.xls,.csv" onChange={handleImportFile} className="max-w-md" />
+            <Input type="file" accept=".xlsx,.csv" onChange={handleImportFile} className="max-w-md" />
             {importFileName ? <p className="text-xs text-text-secondary">Loaded: {importFileName}</p> : null}
           </div>
           <Textarea rows={8} value={csvData} onChange={(event) => setCsvData(event.target.value)} />
@@ -422,11 +401,11 @@ export default function StudentsPage() {
                 setDirectoryFilters((prev) => ({ ...prev, departmentId: event.target.value }));
                 setPage(1);
               }}
-              disabled={Boolean(admin)}
+              disabled={isDepartmentScopedAdmin}
             >
-              {!admin ? <option value="">All departments</option> : null}
-              {admin && admin.department ? (
-                <option value={admin.department.id}>{admin.department.name}</option>
+              {!isDepartmentScopedAdmin ? <option value="">All departments</option> : null}
+              {isDepartmentScopedAdmin ? (
+                <option value={scopedDepartmentId}>{scopedDepartmentName || "Scoped Department"}</option>
               ) : (
                 Array.isArray(departments) && departments.map((department) => (
                   <option key={department.id} value={department.id}>{department.name}</option>

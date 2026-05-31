@@ -15,6 +15,7 @@ import superAdminDashboardReducer from "@/features/SuperAdmin/superAdminDashboar
 import superAdminPanelReducer from "@/features/SuperAdmin/superAdminPanelSlice";
 import superAdminUiReducer from "@/features/SuperAdmin/superAdminUiSlice";
 import superQuestionBankReducer from "@/features/SuperAdmin/superQuestionBankSlice";
+import learningResourcesReducer from "@/features/LearningResources/learningResourcesSlice";
 
 export const store = configureStore({
   reducer: {
@@ -34,5 +35,6 @@ export const store = configureStore({
     superAdminPanel: superAdminPanelReducer,
     superAdminUi: superAdminUiReducer,
     superQuestionBank: superQuestionBankReducer,
+    learningResources: learningResourcesReducer,
   },
 });

@@ -1,6 +1,7 @@
 const models = require("../../models");
 const {
   calculateSubmissionScore,
+  completeSubmission,
   findAnswerForQuestion,
   isAnswerProvided,
   isQuestionCorrect,
@@ -79,5 +80,120 @@ describe("test service scoring", () => {
     };
 
     expect(findAnswerForQuestion([answer], { id: "bank-question-1" })).toBe(answer);
+  });
+
+  it("caps completed attempt time at the server session expiry", async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date("2026-01-01T10:45:00.000Z"));
+
+    const updateMany = jest.fn(async () => ({ count: 1 }));
+    const scoreSubmission = {
+      id: "submission-1",
+      testId: "test-1",
+      startedAt: new Date("2026-01-01T10:00:00.000Z"),
+      status: "IN_PROGRESS",
+      test: {
+        questions: [{ id: "q1", type: "MCQ", correctOption: "A", marks: 10 }],
+      },
+      answers: [{ questionId: "q1", selectedOption: "A" }],
+    };
+    const existingSubmission = {
+      id: "submission-1",
+      testId: "test-1",
+      startedAt: new Date("2026-01-01T10:00:00.000Z"),
+      status: "IN_PROGRESS",
+    };
+    const completedSubmission = {
+      ...existingSubmission,
+      status: "AUTO_SUBMITTED",
+      timeSpentSeconds: 1800,
+    };
+
+    jest.spyOn(models, "init").mockResolvedValue({
+      dbClient: {
+        submission: {
+          findUnique: jest
+            .fn()
+            .mockResolvedValueOnce(scoreSubmission)
+            .mockResolvedValueOnce(existingSubmission)
+            .mockResolvedValueOnce(completedSubmission),
+          updateMany,
+        },
+        testSession: {
+          findFirst: jest.fn(async () => ({
+            expiresAt: new Date("2026-01-01T10:30:00.000Z"),
+          })),
+          updateMany: jest.fn(async () => ({ count: 1 })),
+        },
+        test: {
+          findUnique: jest.fn(async () => ({ durationMins: 60 })),
+        },
+      },
+    });
+
+    const completed = await completeSubmission({ submissionId: "submission-1", autoSubmitted: true });
+
+    expect(completed).toBe(completedSubmission);
+    expect(updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        status: "AUTO_SUBMITTED",
+        timeSpentSeconds: 1800,
+      }),
+    }));
+
+    jest.useRealTimers();
+  });
+
+  it("caps completed attempt time at test duration when no session expiry exists", async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date("2026-01-01T10:45:00.000Z"));
+
+    const updateMany = jest.fn(async () => ({ count: 1 }));
+    const scoreSubmission = {
+      id: "submission-1",
+      testId: "test-1",
+      startedAt: new Date("2026-01-01T10:00:00.000Z"),
+      status: "IN_PROGRESS",
+      test: {
+        questions: [{ id: "q1", type: "MCQ", correctOption: "A", marks: 10 }],
+      },
+      answers: [{ questionId: "q1", selectedOption: "A" }],
+    };
+    const existingSubmission = {
+      id: "submission-1",
+      testId: "test-1",
+      startedAt: new Date("2026-01-01T10:00:00.000Z"),
+      status: "IN_PROGRESS",
+    };
+
+    jest.spyOn(models, "init").mockResolvedValue({
+      dbClient: {
+        submission: {
+          findUnique: jest
+            .fn()
+            .mockResolvedValueOnce(scoreSubmission)
+            .mockResolvedValueOnce(existingSubmission)
+            .mockResolvedValueOnce({ ...existingSubmission, status: "AUTO_SUBMITTED" }),
+          updateMany,
+        },
+        testSession: {
+          findFirst: jest.fn(async () => null),
+          updateMany: jest.fn(async () => ({ count: 1 })),
+        },
+        test: {
+          findUnique: jest.fn(async () => ({ durationMins: 20 })),
+        },
+      },
+    });
+
+    await completeSubmission({ submissionId: "submission-1", autoSubmitted: true });
+
+    expect(updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        timeSpentSeconds: 1200,
+      }),
+    }));
+
+    jest.useRealTimers();
   });
 });

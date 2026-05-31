@@ -4,17 +4,18 @@ const { redisClient, isRedisAvailable } = require("../config/redis");
 const REFRESH_TOKEN_PREFIX = "refresh_token";
 
 const hashToken = (token) => crypto.createHash("sha256").update(String(token || "")).digest("hex");
-const buildKey = (scope, token) => `${REFRESH_TOKEN_PREFIX}:${scope}:${hashToken(token)}`;
+const buildKeyFromHash = (scope, tokenHash) => `${REFRESH_TOKEN_PREFIX}:${scope}:${tokenHash}`;
+const buildKey = (scope, token) => buildKeyFromHash(scope, hashToken(token));
 
 const normalizeRecord = (record, scope) => {
   if (!record) return null;
 
   return {
     id: record.id,
-    token: record.token,
     userId: record.userId || null,
     adminId: record.adminId || null,
     superAdminId: record.superAdminId || null,
+    tokenHash: record.tokenHash || (record.token ? hashToken(record.token) : null),
     scope,
     revokedAt: record.revokedAt || null,
     expiresAt: record.expiresAt ? new Date(record.expiresAt).toISOString() : null,
@@ -75,8 +76,38 @@ const invalidateRefreshToken = async (scope, token) => {
   }
 };
 
+const invalidateRefreshTokenHash = async (scope, tokenHash) => {
+  if (!scope || !tokenHash || !isRedisAvailable()) {
+    return;
+  }
+
+  try {
+    await redisClient.del(buildKeyFromHash(scope, tokenHash));
+  } catch {
+    // Fail-open.
+  }
+};
+
+const invalidateRefreshTokenRecord = async (scope, record) => {
+  if (!scope || !record) {
+    return;
+  }
+
+  if (record.tokenHash) {
+    await invalidateRefreshTokenHash(scope, record.tokenHash);
+    return;
+  }
+
+  if (record.token) {
+    await invalidateRefreshToken(scope, record.token);
+  }
+};
+
 module.exports = {
   cacheRefreshToken,
   getCachedRefreshToken,
   invalidateRefreshToken,
+  invalidateRefreshTokenHash,
+  invalidateRefreshTokenRecord,
+  hashRefreshToken: hashToken,
 };

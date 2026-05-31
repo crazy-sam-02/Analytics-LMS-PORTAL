@@ -1,31 +1,28 @@
 const bcrypt = require("bcrypt");
 const models = require("../../models");
-const { createAccessToken, createRefreshToken, verifyRefreshToken } = require("../../utils/token");
+const { createAccessToken } = require("../../utils/token");
 const { ApiError, asyncHandler } = require("../../utils/http");
 const { resolveAdminPermissions } = require("../../constants/admin-access-profiles");
+const { ROLES, normalizeRole, isAdminLikeRole } = require("../../constants/roles");
 const {
-  cacheRefreshToken,
-  getCachedRefreshToken,
-  invalidateRefreshToken,
-} = require("../../services/refresh-token-cache.service");
+  assertRefreshTokenRecordUsable,
+  createRefreshTokenRecord,
+  findRefreshTokenRecord,
+  revokeRefreshTokenValue,
+  rotateRefreshTokenRecord,
+  verifyRefreshPayloadOrThrow,
+} = require("../../services/refresh-token-session.service");
+const { revokeAccessTokenFromRequest } = require("../../services/access-token-revocation.service");
 
 const ADMIN_REFRESH_COOKIE = "lms_admin_refresh_token";
 
-const getRefreshCookieOptions = () => ({
+const getRefreshCookieOptions = (path = "/api/admin/auth") => ({
   httpOnly: true,
   secure: process.env.NODE_ENV === "production",
   sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
-  path: "/api/admin/auth",
+  path,
   maxAge: 1000 * 60 * 60 * 24 * 7,
 });
-
-const verifyRefreshPayloadOrThrow = (refreshToken) => {
-  try {
-    return verifyRefreshToken(refreshToken);
-  } catch {
-    throw new ApiError(401, "Invalid refresh token");
-  }
-};
 
 const adminLogin = asyncHandler(async (req, res) => {
   const m = await models.init();
@@ -54,18 +51,17 @@ const adminLogin = asyncHandler(async (req, res) => {
 
   const permissions = resolveAdminPermissions(admin);
   const accessToken = createAccessToken({ ...admin, permissions });
-  const refreshToken = createRefreshToken(admin);
-
-  const refreshPayload = verifyRefreshPayloadOrThrow(refreshToken);
-  const refreshRecord = await db.adminRefreshToken.create({
-    data: {
-      token: refreshToken,
-      adminId: admin.id,
-      expiresAt: new Date(refreshPayload.exp * 1000),
-    },
+  const { refreshToken } = await createRefreshTokenRecord({
+    db,
+    modelName: "adminRefreshToken",
+    scope: "admin",
+    principal: admin,
+    ownerField: "adminId",
   });
-  await cacheRefreshToken("admin", refreshToken, refreshRecord);
-  res.cookie(ADMIN_REFRESH_COOKIE, refreshToken, getRefreshCookieOptions());
+  const cookiePath = req.baseUrl && req.baseUrl.startsWith("/api/college-admin/auth")
+    ? "/api/college-admin/auth"
+    : "/api/admin/auth";
+  res.cookie(ADMIN_REFRESH_COOKIE, refreshToken, getRefreshCookieOptions(cookiePath));
 
   res.status(200).json({
     accessToken,
@@ -75,7 +71,7 @@ const adminLogin = asyncHandler(async (req, res) => {
       employeeId: admin.employeeId,
       fullName: admin.fullName,
       email: admin.email,
-      role: admin.role,
+      role: normalizeRole(admin.role),
       permissions,
       college: admin.college,
       department: admin.department,
@@ -92,19 +88,24 @@ const adminRefresh = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Refresh token required");
   }
 
-  let dbToken = await getCachedRefreshToken("admin", refreshToken);
-  if (!dbToken) {
-    dbToken = await db.adminRefreshToken.findUnique({ where: { token: refreshToken } });
-    if (dbToken && !dbToken.revokedAt && dbToken.expiresAt >= new Date()) {
-      await cacheRefreshToken("admin", refreshToken, dbToken);
-    }
-  }
-  if (!dbToken || dbToken.revokedAt || new Date(dbToken.expiresAt) < new Date()) {
-    throw new ApiError(401, "Invalid refresh token");
-  }
-
   const payload = verifyRefreshPayloadOrThrow(refreshToken);
-  if (payload.role !== "ADMIN") {
+  const dbToken = await findRefreshTokenRecord({
+    db,
+    modelName: "adminRefreshToken",
+    scope: "admin",
+    refreshToken,
+  });
+  await assertRefreshTokenRecordUsable({
+    db,
+    modelName: "adminRefreshToken",
+    scope: "admin",
+    ownerField: "adminId",
+    record: dbToken,
+    ownerId: payload.sub,
+  });
+
+  const tokenRole = normalizeRole(payload.role);
+  if (!isAdminLikeRole(tokenRole)) {
     throw new ApiError(401, "Invalid refresh token role");
   }
 
@@ -113,24 +114,53 @@ const adminRefresh = asyncHandler(async (req, res) => {
     throw new ApiError(401, "Invalid refresh token");
   }
 
-  const newAccessToken = createAccessToken({ ...admin, permissions: resolveAdminPermissions(admin) });
-  res.status(200).json({ accessToken: newAccessToken });
+  const adminRole = normalizeRole(admin.role || ROLES.ADMIN);
+  if (adminRole !== tokenRole) {
+    throw new ApiError(401, "Invalid refresh token");
+  }
+
+  const permissions = resolveAdminPermissions(admin);
+  const newAccessToken = createAccessToken({ ...admin, permissions });
+  const { refreshToken: newRefreshToken, refreshRecord } = await rotateRefreshTokenRecord({
+    db,
+    modelName: "adminRefreshToken",
+    scope: "admin",
+    ownerField: "adminId",
+    oldRefreshToken: refreshToken,
+    oldRecord: dbToken,
+    principal: admin,
+  });
+  const cookiePath = req.baseUrl && req.baseUrl.startsWith("/api/college-admin/auth")
+    ? "/api/college-admin/auth"
+    : "/api/admin/auth";
+  res.cookie(ADMIN_REFRESH_COOKIE, newRefreshToken, getRefreshCookieOptions(cookiePath));
+
+  res.status(200).json({
+    accessToken: newAccessToken,
+    refreshToken: newRefreshToken,
+    sessionId: refreshRecord.id,
+  });
 });
 
 const adminLogout = asyncHandler(async (req, res) => {
   const m = await models.init();
   const db = m.dbClient;
   const refreshToken = req.cookies?.[ADMIN_REFRESH_COOKIE] || req.body?.refreshToken;
+  await revokeAccessTokenFromRequest(req);
 
   if (refreshToken) {
-    await db.adminRefreshToken.updateMany({
-      where: { token: refreshToken, revokedAt: null },
-      data: { revokedAt: new Date() },
+    await revokeRefreshTokenValue({
+      db,
+      modelName: "adminRefreshToken",
+      scope: "admin",
+      refreshToken,
+      reason: "logout",
     });
-    await invalidateRefreshToken("admin", refreshToken);
   }
 
-  res.clearCookie(ADMIN_REFRESH_COOKIE, getRefreshCookieOptions());
+  ["/api/admin/auth", "/api/college-admin/auth"].forEach((path) => {
+    res.clearCookie(ADMIN_REFRESH_COOKIE, getRefreshCookieOptions(path));
+  });
   res.status(200).json({ message: "Logged out" });
 });
 

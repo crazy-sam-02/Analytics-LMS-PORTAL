@@ -142,6 +142,8 @@ try {
 let reportQueue = null;
 let reportWorker = null;
 const queueConnection = getRedisQueueConnection();
+const DEFAULT_RECOVERY_LIMIT = 25;
+const STALE_PROCESSING_MS = 15 * 60 * 1000;
 
 const getDbClient = async () => {
   const m = await models.init();
@@ -199,7 +201,11 @@ const processReportSynchronously = async (reportJobId) => {
     const payload = await buildReportPayload(db, reportJob);
     const payloadRef = await saveReportPayload({ scope: "admin-report", jobId: reportJobId, payload });
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
-    const resultUrl = `/api/admin/reports/${reportJobId}/download?expires=${encodeURIComponent(expiresAt)}`;
+    const reportBasePath =
+      String(reportJob?.filters?.reportBasePath || "").startsWith("/api/college-admin/reports")
+        ? "/api/college-admin/reports"
+        : "/api/admin/reports";
+    const resultUrl = `${reportBasePath}/${reportJobId}/download?expires=${encodeURIComponent(expiresAt)}`;
 
     await db.reportJob.update({
       where: { id: reportJobId },
@@ -243,13 +249,44 @@ const enqueueReportJob = async (reportJobId) => {
   }
 
   try {
-    await reportQueue.add("generate", { reportJobId }, { removeOnComplete: true, removeOnFail: false });
+    await reportQueue.add("generate", { reportJobId }, { jobId: reportJobId, removeOnComplete: true, removeOnFail: false });
   } catch (_error) {
     await processReportSynchronously(reportJobId);
   }
 };
 
+const recoverPendingReportJobs = async ({ limit = DEFAULT_RECOVERY_LIMIT, staleAfterMs = STALE_PROCESSING_MS } = {}) => {
+  const db = await getDbClient();
+  const staleCutoff = new Date(Date.now() - staleAfterMs);
+  const reset = await db.reportJob.updateMany({
+    where: {
+      status: "PROCESSING",
+      updatedAt: { lt: staleCutoff },
+    },
+    data: {
+      status: "QUEUED",
+      errorMessage: null,
+    },
+  });
+
+  const queuedJobs = await db.reportJob.findMany({
+    where: { status: "QUEUED" },
+    orderBy: { createdAt: "asc" },
+    take: limit,
+  });
+
+  for (const job of queuedJobs) {
+    await enqueueReportJob(job.id);
+  }
+
+  return {
+    resetProcessing: reset.count || 0,
+    requeued: queuedJobs.length,
+  };
+};
+
 module.exports = {
   enqueueReportJob,
   processReportSynchronously,
+  recoverPendingReportJobs,
 };

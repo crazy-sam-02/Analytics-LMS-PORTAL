@@ -1,3 +1,5 @@
+const mongoose = require("mongoose");
+
 const models = require("../../models");
 const { enqueueSuperReportJob } = require("../../services/super-admin-report-queue.service");
 const { generateSuperAdminReportHTML } = require("../../services/report-formatter.service");
@@ -40,6 +42,16 @@ const toValidDate = (value) => {
 const getViolationCount = (submission) =>
   Number(submission?._count?.violations ?? submission?.violations?.length ?? submission?.violationCount ?? 0);
 const getStudentNumber = (student = {}) => student.enrollNumber || student.enrollmentNumber || student.studentId || "-";
+
+const toObjectIdIfValid = (value) =>
+  mongoose.Types.ObjectId.isValid(String(value || "")) ? new mongoose.Types.ObjectId(String(value)) : value;
+
+const buildSuperReportCollegeWhere = (collegeId) => ({
+  OR: [
+    { "filters.collegeId": collegeId },
+    { "filters.collegeId": toObjectIdIfValid(collegeId) },
+  ],
+});
 
 const validateReportScope = async ({ db, collegeId, departmentId, studentId, testId }) => {
   if (collegeId) {
@@ -583,14 +595,15 @@ const getSuperReportJobs = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Select a college before viewing super admin report exports");
   }
 
+  await validateReportScope({ db, collegeId });
+
   const jobs = await db.superReportJob.findMany({
+    where: buildSuperReportCollegeWhere(collegeId),
     orderBy: { createdAt: "desc" },
-    take: 500,
+    take: 100,
   });
 
   const data = jobs
-    .filter((job) => String(job?.filters?.collegeId || "") === collegeId)
-    .slice(0, 100)
     .map((job) => ({
       ...job,
       resultData: undefined,
@@ -646,6 +659,7 @@ const downloadSuperReport = asyncHandler(async (req, res) => {
 
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `attachment; filename="super-admin-report-${reportJobId}.pdf"`);
+  res.setHeader("Cache-Control", "private, no-store");
   res.status(200).send(pdfBuffer);
 });
 

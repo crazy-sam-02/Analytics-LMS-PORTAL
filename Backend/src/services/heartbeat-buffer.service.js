@@ -16,6 +16,7 @@ const { redisClient, isRedisAvailable } = require("../config/redis");
 
 const BUFFER_TTL_SECONDS = 120;
 const FLUSH_INTERVAL_MS = 30_000;
+const BUFFER_TESTS_KEY = "hb:buffer:tests";
 
 let flushTimer = null;
 let flushCallback = null;
@@ -39,8 +40,13 @@ const bufferHeartbeat = async ({ userId, testId, submissionId }) => {
       at: Date.now(),
     });
 
-    await redisClient.hset(key, userId, value);
-    await redisClient.expire(key, BUFFER_TTL_SECONDS);
+    await redisClient
+      .pipeline()
+      .hset(key, userId, value)
+      .expire(key, BUFFER_TTL_SECONDS)
+      .sadd(BUFFER_TESTS_KEY, testId)
+      .expire(BUFFER_TESTS_KEY, BUFFER_TTL_SECONDS)
+      .exec();
     return true;
   } catch {
     return false;
@@ -57,9 +63,12 @@ const drainTestHeartbeats = async (testId) => {
   const key = buildBufferKey(testId);
   try {
     const raw = await redisClient.hgetall(key);
-    if (!raw || Object.keys(raw).length === 0) return [];
+    if (!raw || Object.keys(raw).length === 0) {
+      await redisClient.srem(BUFFER_TESTS_KEY, testId).catch(() => {});
+      return [];
+    }
 
-    await redisClient.del(key);
+    await redisClient.pipeline().del(key).srem(BUFFER_TESTS_KEY, testId).exec();
 
     return Object.values(raw).map((value) => {
       try {
@@ -80,8 +89,7 @@ const getBufferedTestIds = async () => {
   if (!isRedisAvailable()) return [];
 
   try {
-    const keys = await redisClient.keys("hb:buffer:*");
-    return keys.map((key) => key.replace("hb:buffer:", ""));
+    return redisClient.smembers(BUFFER_TESTS_KEY);
   } catch {
     return [];
   }

@@ -3,53 +3,74 @@ import { useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import {
   LayoutDashboard,
+  Building2,
   FileCheck2,
+  BookOpenCheck,
   LibraryBig,
   Layers3,
   Users,
+  ShieldUser,
   CalendarDays,
   BarChart3,
+  ChartNoAxesCombined,
   Settings,
   LogOut,
-  ChevronLeft,
   PlusSquare,
 } from "lucide-react";
 import usePermission from "@/hooks/usePermission";
 import { ADMIN_PERMISSIONS } from "@/features/Admin/adminPermissions";
 import { logoutAdmin } from "@/features/Admin/adminAuthSlice";
-import { toggleSidebar } from "@/features/Admin/adminUiSlice";
 import ConfirmActionDialog from "@/components/Admin/ConfirmActionDialog";
 
-const navItems = [
-  { to: "/admin/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { to: "/admin/tests", label: "All Tests", icon: FileCheck2, permission: ADMIN_PERMISSIONS.EDIT_TEST },
-  { to: "/admin/tests?create=1", label: "Create New", icon: PlusSquare, permission: ADMIN_PERMISSIONS.CREATE_TEST },
-  { to: "/admin/question-bank", label: "Question Bank", icon: LibraryBig, permission: ADMIN_PERMISSIONS.MANAGE_QUESTIONS },
-  { to: "/admin/batches", label: "Batches", icon: Layers3, permission: ADMIN_PERMISSIONS.MANAGE_BATCHES },
-  { to: "/admin/students", label: "Students", icon: Users, permission: ADMIN_PERMISSIONS.MANAGE_STUDENTS },
-  { to: "/admin/events", label: "Events", icon: CalendarDays, permission: ADMIN_PERMISSIONS.MANAGE_EVENTS },
-  { to: "/admin/reports", label: "Reports", icon: BarChart3, permission: ADMIN_PERMISSIONS.VIEW_REPORTS },
-  { to: "/admin/settings", label: "Settings", icon: Settings },
+const createNavItems = (basePath) => [
+  { to: `${basePath}/dashboard`, label: "Dashboard", icon: LayoutDashboard },
+  { to: `${basePath}/departments`, label: "Departments", icon: Building2, permission: ADMIN_PERMISSIONS.MANAGE_DEPARTMENTS },
+  { to: `${basePath}/admins`, label: "Admin Management", icon: ShieldUser, permission: ADMIN_PERMISSIONS.MANAGE_ADMINS },
+  { to: `${basePath}/students`, label: "Students", icon: Users, permission: ADMIN_PERMISSIONS.MANAGE_STUDENTS },
+  { to: `${basePath}/tests`, label: "All Tests", icon: FileCheck2, permission: ADMIN_PERMISSIONS.EDIT_TEST },
+  { to: `${basePath}/tests?create=1`, label: "Create New", icon: PlusSquare, permission: ADMIN_PERMISSIONS.CREATE_TEST },
+  { to: `${basePath}/question-bank`, label: "Question Bank", icon: LibraryBig, permission: ADMIN_PERMISSIONS.MANAGE_QUESTIONS },
+  { to: `${basePath}/resources`, label: "Learning Resources", icon: BookOpenCheck, permission: ADMIN_PERMISSIONS.VIEW_RESOURCES },
+  { to: `${basePath}/batches`, label: "Batches", icon: Layers3, permission: ADMIN_PERMISSIONS.MANAGE_BATCHES },
+  { to: `${basePath}/events`, label: "Events", icon: CalendarDays, permission: ADMIN_PERMISSIONS.MANAGE_EVENTS },
+  { to: `${basePath}/reports`, label: "Reports", icon: BarChart3, permission: ADMIN_PERMISSIONS.VIEW_REPORTS },
+  { to: `${basePath}/analytics`, label: "Analytics", icon: ChartNoAxesCombined, permission: ADMIN_PERMISSIONS.VIEW_ANALYTICS },
+  { to: `${basePath}/settings`, label: "Settings", icon: Settings },
 ];
 
-export default function AdminSidebar() {
+export default function AdminSidebar({
+  basePath = "/admin",
+  portalTitle = "Admin Portal",
+  portalDescription = "College control and test management",
+  logoutTitle = "Logout from Admin Portal",
+  logoutDescription = "You will be signed out from this admin session and need to login again to continue.",
+}) {
   const dispatch = useDispatch();
   const collapsed = useSelector((state) => state.adminUi?.sidebarCollapsed);
   const [logoutOpen, setLogoutOpen] = useState(false);
+  const navItems = createNavItems(basePath);
   const canEditTest = usePermission(ADMIN_PERMISSIONS.EDIT_TEST);
   const canManageQuestions = usePermission(ADMIN_PERMISSIONS.MANAGE_QUESTIONS);
+  const canViewResources = usePermission(ADMIN_PERMISSIONS.VIEW_RESOURCES);
   const canManageBatches = usePermission(ADMIN_PERMISSIONS.MANAGE_BATCHES);
   const canManageStudents = usePermission(ADMIN_PERMISSIONS.MANAGE_STUDENTS);
   const canManageEvents = usePermission(ADMIN_PERMISSIONS.MANAGE_EVENTS);
   const canViewReports = usePermission(ADMIN_PERMISSIONS.VIEW_REPORTS);
+  const canManageDepartments = usePermission(ADMIN_PERMISSIONS.MANAGE_DEPARTMENTS);
+  const canManageAdmins = usePermission(ADMIN_PERMISSIONS.MANAGE_ADMINS);
+  const canViewAnalytics = usePermission(ADMIN_PERMISSIONS.VIEW_ANALYTICS);
 
   const permissionMap = {
     [ADMIN_PERMISSIONS.EDIT_TEST]: canEditTest,
     [ADMIN_PERMISSIONS.MANAGE_QUESTIONS]: canManageQuestions,
+    [ADMIN_PERMISSIONS.VIEW_RESOURCES]: canViewResources,
     [ADMIN_PERMISSIONS.MANAGE_BATCHES]: canManageBatches,
     [ADMIN_PERMISSIONS.MANAGE_STUDENTS]: canManageStudents,
     [ADMIN_PERMISSIONS.MANAGE_EVENTS]: canManageEvents,
     [ADMIN_PERMISSIONS.VIEW_REPORTS]: canViewReports,
+    [ADMIN_PERMISSIONS.MANAGE_DEPARTMENTS]: canManageDepartments,
+    [ADMIN_PERMISSIONS.MANAGE_ADMINS]: canManageAdmins,
+    [ADMIN_PERMISSIONS.VIEW_ANALYTICS]: canViewAnalytics,
   };
 
   return (
@@ -68,10 +89,10 @@ export default function AdminSidebar() {
           {!collapsed ? (
             <div className="mt-2 space-y-1">
               <p className="text-[15px] font-extrabold uppercase tracking-[0.35em] text-white ">
-                Admin Portal
+                {portalTitle}
               </p>
               <p className="text-sm leading-5 text-sidebar-foreground/85">
-                College control and test management
+                {portalDescription}
               </p>
             </div>
           ) : null}
@@ -115,8 +136,8 @@ export default function AdminSidebar() {
       <ConfirmActionDialog
         open={logoutOpen}
         onOpenChange={setLogoutOpen}
-        title="Logout from Admin Portal"
-        description="You will be signed out from this admin session and need to login again to continue."
+        title={logoutTitle}
+        description={logoutDescription}
         confirmLabel="Logout"
         confirmVariant="destructive"
         onConfirm={() => dispatch(logoutAdmin())}

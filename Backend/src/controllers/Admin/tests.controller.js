@@ -4,12 +4,17 @@ const { completeSubmission } = require("../../services/test.service");
 const { emitToCollege, emitToTestRoom } = require("../../realtime/socket");
 const { ApiError, asyncHandler } = require("../../utils/http");
 const { invalidateTestCache } = require("../../services/test-cache.service");
+const { getExamState } = require("../../services/exam-state-cache.service");
 const { getExamRateLimitMetricsSnapshot } = require("../../services/rate-limit-metrics.service");
 const {
   attachResolvedTestConfiguration,
   resolvePersistedTestConfiguration,
 } = require("../../services/test-config.service");
 const { cloneTestWithinCollege } = require("../../services/clone.service");
+const {
+  getScopedDepartmentId,
+  isCollegeAdminRequest,
+} = require("../../utils/admin-scope");
 
 const TEST_STATUS = {
   DRAFT: "DRAFT",
@@ -230,6 +235,29 @@ const normalizeStudentYears = (years) => {
   return normalized.length ? normalized.sort((a, b) => a - b) : DEFAULT_STUDENT_YEARS;
 };
 
+const getAssignmentDepartmentIdForRequest = (req, requestedDepartmentId = null) => {
+  const scopedDepartmentId = getScopedDepartmentId(req, { requiredForDepartmentAdmin: false });
+  if (scopedDepartmentId) {
+    if (requestedDepartmentId && String(requestedDepartmentId) !== String(scopedDepartmentId)) {
+      throw new ApiError(403, "Admins can only assign tests within their department", null, "INVALID_ASSIGNMENT_SCOPE");
+    }
+    return scopedDepartmentId;
+  }
+
+  return requestedDepartmentId || null;
+};
+
+const assertTestDepartmentScope = (req, test, message = "Test is outside the admin department scope") => {
+  const scopedDepartmentId = getScopedDepartmentId(req, { requiredForDepartmentAdmin: false });
+  if (!scopedDepartmentId) {
+    return;
+  }
+
+  if (test?.departmentId && String(test.departmentId) !== String(scopedDepartmentId)) {
+    throw new ApiError(403, message, null, "CROSS_DEPARTMENT_ACCESS_DENIED");
+  }
+};
+
 const resolveAssignmentBatchIds = async ({ db, assignmentMethod, batchIds, departmentId, collegeId }) => {
   if (assignmentMethod === ASSIGNMENT_METHOD.BATCH_WISE) {
     if (!Array.isArray(batchIds) || batchIds.length === 0) {
@@ -293,7 +321,8 @@ const createTest = asyncHandler(async (req, res) => {
   const db = m.dbClient;
   const collegeId = req.collegeId;
   const adminId = req.admin.id;
-  const adminDepartmentId = req.admin?.departmentId;
+  const scopedDepartmentId = getScopedDepartmentId(req, { requiredForDepartmentAdmin: false });
+  const isCollegeAdmin = isCollegeAdminRequest(req);
 
   const {
     name,
@@ -317,10 +346,6 @@ const createTest = asyncHandler(async (req, res) => {
     skipOverlapCheck,
   } = req.body;
 
-  if (!adminDepartmentId) {
-    throw new ApiError(403, "Admin is not linked to a department", null, "ADMIN_DEPARTMENT_REQUIRED");
-  }
-
   const startsAtDate = new Date(startsAt);
   const endsAtDate = new Date(endsAt);
   const resolvedTestConfiguration = resolvePersistedTestConfiguration({
@@ -336,10 +361,11 @@ const createTest = asyncHandler(async (req, res) => {
 
   const resolvedAssignmentMethod = assignmentMethod || ASSIGNMENT_METHOD.DEPARTMENT_WISE;
   const resolvedYears = normalizeStudentYears(years);
-  if (resolvedAssignmentMethod === ASSIGNMENT_METHOD.EVERYONE) {
+  if (!isCollegeAdmin && resolvedAssignmentMethod === ASSIGNMENT_METHOD.EVERYONE) {
     throw new ApiError(422, "Admins can only assign tests within their department", null, "INVALID_ASSIGNMENT_SCOPE");
   }
-  const resolvedDepartmentId = adminDepartmentId;
+  const requestedDepartmentId = req.body.departmentId || null;
+  const resolvedDepartmentId = getAssignmentDepartmentIdForRequest(req, requestedDepartmentId);
   const resolvedBatchIds = await resolveAssignmentBatchIds({
     db,
     assignmentMethod: resolvedAssignmentMethod,
@@ -349,7 +375,7 @@ const createTest = asyncHandler(async (req, res) => {
   });
 
   await ensureBatchScope({ db, batchIds: resolvedBatchIds, collegeId });
-  if (resolvedAssignmentMethod === ASSIGNMENT_METHOD.BATCH_WISE) {
+  if (scopedDepartmentId && resolvedAssignmentMethod === ASSIGNMENT_METHOD.BATCH_WISE) {
     await ensureBatchDepartmentScope({ db, batchIds: resolvedBatchIds, collegeId, departmentId: resolvedDepartmentId });
   }
   await assertNoOverlap({ db, startsAt: startsAtDate, endsAt: endsAtDate, collegeId, skip: skipOverlapCheck });
@@ -435,6 +461,7 @@ const getTests = asyncHandler(async (req, res) => {
   const m = await models.init();
   const db = m.dbClient;
   const collegeId = req.collegeId;
+  const scopedDepartmentId = getScopedDepartmentId(req, { requiredForDepartmentAdmin: false });
   const page = Math.max(1, Number(req.query.page || 1));
   const limit = Math.min(100, Math.max(1, Number(req.query.limit || 20)));
   const status = req.query.status;
@@ -447,6 +474,10 @@ const getTests = asyncHandler(async (req, res) => {
 
   const allowedSortFields = new Set(["createdAt", "startsAt", "endsAt", "title", "status"]);
   const resolvedSortBy = allowedSortFields.has(sortBy) ? sortBy : "createdAt";
+
+  if (scopedDepartmentId && departmentId && String(departmentId) !== String(scopedDepartmentId)) {
+    throw new ApiError(403, "Cross-department test access denied", null, "CROSS_DEPARTMENT_ACCESS_DENIED");
+  }
 
   const statusFilter = status
     ? {
@@ -461,10 +492,28 @@ const getTests = asyncHandler(async (req, res) => {
       }
     : {};
 
+  const scopedBatchIds = scopedDepartmentId
+    ? (await db.batch.findMany({
+        where: { collegeId, departmentId: scopedDepartmentId },
+        select: { id: true },
+      })).map((batch) => batch.id)
+    : [];
+
+  const scopedTestVisibilityFilter = scopedDepartmentId
+    ? {
+        OR: [
+          { departmentId: scopedDepartmentId },
+          { batchId: { in: scopedBatchIds } },
+          { batchAssignments: { some: { batchId: { in: scopedBatchIds } } } },
+        ],
+      }
+    : {};
+
   const baseWhere = {
     collegeId,
+    ...scopedTestVisibilityFilter,
     ...(subject ? { subject } : {}),
-    ...(departmentId ? { departmentId } : {}),
+    ...((scopedDepartmentId || departmentId) ? { departmentId: scopedDepartmentId || departmentId } : {}),
     ...(batchId ? { batchAssignments: { some: { batchId } } } : {}),
     ...(search
       ? {
@@ -581,6 +630,7 @@ const getTestById = asyncHandler(async (req, res) => {
   if (!test) {
     throw new ApiError(404, "Test not found");
   }
+  assertTestDepartmentScope(req, test);
 
   const lifecycleStatus = deriveLifecycleStatus(test);
   if (lifecycleStatus !== test.status) {
@@ -616,6 +666,7 @@ const duplicateTest = asyncHandler(async (req, res) => {
   if (!source) {
     throw new ApiError(404, "Test not found");
   }
+  assertTestDepartmentScope(req, source);
 
   assertAdminCanOperateTest(source);
 
@@ -686,35 +737,35 @@ const cloneTest = asyncHandler(async (req, res) => {
   const db = m.dbClient;
   const { testId } = req.params;
   const collegeId = req.collegeId;
-  const adminDepartmentId = req.admin?.departmentId;
+  const scopedDepartmentId = getScopedDepartmentId(req, { requiredForDepartmentAdmin: false });
+  const isCollegeAdmin = isCollegeAdminRequest(req);
   const { assignmentMethod = "department_wise", departmentId = null, batchIds = [], years } = req.body;
 
-  if (!adminDepartmentId) {
-    throw new ApiError(403, "Admin is not linked to a department", null, "ADMIN_DEPARTMENT_REQUIRED");
-  }
-
-  if (assignmentMethod === ASSIGNMENT_METHOD.EVERYONE) {
+  if (!isCollegeAdmin && assignmentMethod === ASSIGNMENT_METHOD.EVERYONE) {
     throw new ApiError(422, "Admins can only assign tests within their department", null, "INVALID_ASSIGNMENT_SCOPE");
   }
 
   // Validate parameters based on assignment method
-  if (assignmentMethod === "department_wise" && !departmentId) {
-    throw new ApiError(422, "For department-wise assignment, provide departmentId", { assignmentMethod }, "MISSING_DEPARTMENT_ID");
-  }
   if (assignmentMethod === "batch_wise" && (!Array.isArray(batchIds) || batchIds.length === 0)) {
     throw new ApiError(422, "For batch-wise assignment, provide batchIds array with at least one ID", { assignmentMethod }, "MISSING_BATCH_IDS");
   }
 
-  if (departmentId && String(departmentId) !== String(adminDepartmentId)) {
-    throw new ApiError(422, "Admins can only assign tests within their department", null, "INVALID_ASSIGNMENT_SCOPE");
+  const resolvedDepartmentId = getAssignmentDepartmentIdForRequest(req, departmentId);
+  if (assignmentMethod === "department_wise" && !resolvedDepartmentId) {
+    throw new ApiError(422, "For department-wise assignment, provide departmentId", { assignmentMethod }, "MISSING_DEPARTMENT_ID");
   }
 
   if (assignmentMethod === "batch_wise") {
-    await ensureBatchDepartmentScope({ db, batchIds, collegeId, departmentId: adminDepartmentId });
+    await ensureBatchScope({ db, batchIds, collegeId });
+  }
+
+  if (assignmentMethod === "batch_wise" && scopedDepartmentId) {
+    await ensureBatchDepartmentScope({ db, batchIds, collegeId, departmentId: resolvedDepartmentId || scopedDepartmentId });
   }
 
   const source = await db.test.findFirst({ where: { id: testId, collegeId } });
   if (!source) throw new ApiError(404, "Test not found in this college");
+  assertTestDepartmentScope(req, source);
 
   assertAdminCanOperateTest(source);
 
@@ -727,7 +778,7 @@ const cloneTest = asyncHandler(async (req, res) => {
     sourceTestId: testId,
     collegeId,
     assignmentMethod,
-    departmentId,
+    departmentId: resolvedDepartmentId,
     batchIdCount: batchIds.length,
   });
 
@@ -735,7 +786,7 @@ const cloneTest = asyncHandler(async (req, res) => {
     sourceTestId: testId,
     collegeId,
     assignmentMethod,
-    departmentId: adminDepartmentId,
+    departmentId: resolvedDepartmentId,
     batchIds: Array.isArray(batchIds) ? batchIds : [],
     years,
     adminId: req.admin.id,
@@ -754,7 +805,7 @@ const cloneTest = asyncHandler(async (req, res) => {
       clonedTestId: cloned.id,
       sourceTestId: cloned.sourceTestId,
       assignmentMethod,
-      departmentId,
+      departmentId: resolvedDepartmentId,
       batchIds,
       status: cloned.status,
       isPublished: cloned.isPublished,
@@ -779,7 +830,8 @@ const updateTest = asyncHandler(async (req, res) => {
   const db = m.dbClient;
   const { testId } = req.params;
   const collegeId = req.collegeId;
-  const adminDepartmentId = req.admin?.departmentId;
+  const scopedDepartmentId = getScopedDepartmentId(req, { requiredForDepartmentAdmin: false });
+  const isCollegeAdmin = isCollegeAdminRequest(req);
 
   const existing = await db.test.findFirst({
     where: { id: testId, collegeId },
@@ -792,10 +844,7 @@ const updateTest = asyncHandler(async (req, res) => {
   if (!existing) {
     throw new ApiError(404, "Test not found");
   }
-
-  if (!adminDepartmentId) {
-    throw new ApiError(403, "Admin is not linked to a department", null, "ADMIN_DEPARTMENT_REQUIRED");
-  }
+  assertTestDepartmentScope(req, existing);
 
   assertAdminCanOperateTest(existing);
 
@@ -883,13 +932,13 @@ const updateTest = asyncHandler(async (req, res) => {
       : normalizeStudentYears(existing.years);
     if (shouldUpdateAssignment) {
       resolvedAssignmentMethod = req.body.assignmentMethod || resolvedAssignmentMethod;
-      if (resolvedAssignmentMethod === ASSIGNMENT_METHOD.EVERYONE) {
+      if (!isCollegeAdmin && resolvedAssignmentMethod === ASSIGNMENT_METHOD.EVERYONE) {
         throw new ApiError(422, "Admins can only assign tests within their department", null, "INVALID_ASSIGNMENT_SCOPE");
       }
       const requestedBatchIds = Array.isArray(req.body.batchIds)
         ? req.body.batchIds
         : resolvedBatchIds;
-      resolvedDepartmentId = adminDepartmentId;
+      resolvedDepartmentId = getAssignmentDepartmentIdForRequest(req, req.body.departmentId || resolvedDepartmentId);
 
       resolvedBatchIds = await resolveAssignmentBatchIds({
         db,
@@ -899,7 +948,7 @@ const updateTest = asyncHandler(async (req, res) => {
         collegeId,
       });
       await ensureBatchScope({ db, batchIds: resolvedBatchIds, collegeId });
-      if (resolvedAssignmentMethod === ASSIGNMENT_METHOD.BATCH_WISE) {
+      if (scopedDepartmentId && resolvedAssignmentMethod === ASSIGNMENT_METHOD.BATCH_WISE) {
         await ensureBatchDepartmentScope({ db, batchIds: resolvedBatchIds, collegeId, departmentId: resolvedDepartmentId });
       }
     }
@@ -1006,6 +1055,7 @@ const deleteTest = asyncHandler(async (req, res) => {
   if (!existing) {
     throw new ApiError(404, "Test not found");
   }
+  assertTestDepartmentScope(req, existing);
 
   assertAdminCanOperateTest(existing);
 
@@ -1072,6 +1122,7 @@ const transitionTestStatus = asyncHandler(async (req, res) => {
   if (!existing) {
     throw new ApiError(404, "Test not found");
   }
+  assertTestDepartmentScope(req, existing);
 
   assertAdminCanOperateTest(existing);
 
@@ -1156,6 +1207,7 @@ const getLiveMonitoring = asyncHandler(async (req, res) => {
   if (!test) {
     throw new ApiError(404, "Test not found");
   }
+  assertTestDepartmentScope(req, test);
 
   assertAdminCanOperateTest(test);
 
@@ -1190,18 +1242,36 @@ const getLiveMonitoring = asyncHandler(async (req, res) => {
 
   const nowMs = Date.now();
   const sessionMap = new Map(sessions.map((item) => [item.submissionId, item]));
+  const examStates = await Promise.all(
+    inProgress.map(async (submission) => ({
+      submissionId: submission.id,
+      state: await getExamState({ userId: submission.userId, testId }),
+    }))
+  );
+  const examStateMap = new Map(examStates.map((item) => [item.submissionId, item.state]));
   const studentTable = inProgress.map((submission) => {
     const answered = Number(submission?._count?.answers || 0);
-    const progress = questionCount > 0 ? Math.min(100, Math.round((answered / questionCount) * 100)) : 0;
+    const state = examStateMap.get(submission.id);
+    const cachedProgress = Number(state?.progress);
+    const progress = Number.isFinite(cachedProgress) && cachedProgress > 0
+      ? Math.min(100, Math.round(cachedProgress))
+      : questionCount > 0 ? Math.min(100, Math.round((answered / questionCount) * 100)) : 0;
     const session = sessionMap.get(submission.id);
     const baselineExpiry = submission.startedAt
       ? new Date(new Date(submission.startedAt).getTime() + Number(test.durationMins || 0) * 60 * 1000)
       : new Date(nowMs);
     const expiresAt = session?.expiresAt || baselineExpiry;
     const timeLeftSec = Math.max(0, Math.floor((new Date(expiresAt).getTime() - nowMs) / 1000));
-    const lastHeartbeat = submission.lastAutoSavedAt ? new Date(submission.lastAutoSavedAt).getTime() : new Date(submission.updatedAt).getTime();
+    const lastHeartbeat = state?.lastHeartbeatAt
+      ? new Date(state.lastHeartbeatAt).getTime()
+      : submission.lastHeartbeat
+        ? new Date(submission.lastHeartbeat).getTime()
+        : submission.lastAutoSavedAt
+          ? new Date(submission.lastAutoSavedAt).getTime()
+          : new Date(submission.updatedAt).getTime();
     const idleSeconds = Math.max(0, Math.floor((nowMs - lastHeartbeat) / 1000));
-    const connectionStatus = idleSeconds <= 45 ? "ONLINE" : idleSeconds <= 120 ? "UNSTABLE" : "OFFLINE";
+    const connectionStatus = state?.connectionStatus || (idleSeconds <= 45 ? "ONLINE" : idleSeconds <= 120 ? "UNSTABLE" : "OFFLINE");
+    const cachedViolations = Number(state?.violationCount);
 
     return {
       submissionId: submission.id,
@@ -1211,7 +1281,7 @@ const getLiveMonitoring = asyncHandler(async (req, res) => {
       batch: submission.user?.batch?.name || "-",
       progress,
       timeLeftSec,
-      violations: Number(submission?._count?.violations || 0),
+      violations: Number.isFinite(cachedViolations) ? cachedViolations : Number(submission?._count?.violations || 0),
       connectionStatus,
       status: submission.status,
       startedAt: submission.startedAt,

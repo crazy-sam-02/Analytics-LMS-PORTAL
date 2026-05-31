@@ -6,6 +6,8 @@ const env = require("./config/env");
 const { shutdownRedis } = require("./config/redis");
 const { initSocket, shutdownSocket } = require("./realtime/socket");
 const { startHeartbeatFlush, stopHeartbeatFlush } = require("./services/heartbeat-buffer.service");
+const { recoverPendingReportJobs } = require("./services/admin-report-queue.service");
+const { recoverPendingSuperReportJobs } = require("./services/super-admin-report-queue.service");
 
 const server = http.createServer(app);
 initSocket(server, env.frontendOrigins || [env.frontendOrigin]);
@@ -17,7 +19,7 @@ const shutdown = async (signal) => {
 
   // Stop accepting new connections
   server.close(() => {
-    console.log("HTTP server closed — no more incoming connections.");
+    console.log("HTTP server closed - no more incoming connections.");
   });
 
   // Give active requests time to finish, then force exit
@@ -105,28 +107,66 @@ const startServer = async () => {
   // Batches heartbeat DB writes every 30s to reduce MongoDB load during exams.
   const db = require("./config/db");
   startHeartbeatFlush(async (batches) => {
-    for (const { entries } of batches) {
-      for (const entry of entries) {
-        try {
-          await db.submission.updateMany({
-            where: { id: entry.submissionId },
-            data: {
-              lastHeartbeat: new Date(entry.at),
-              connectionStatus: "ONLINE",
-            },
-          });
-        } catch {
-          // Fail-open — heartbeats are best-effort.
-        }
+    for (const { testId, entries } of batches) {
+      try {
+        const latestAt = Math.max(...entries.map((entry) => Number(entry.at || 0)).filter(Number.isFinite));
+        const heartbeatAt = new Date(Number.isFinite(latestAt) && latestAt > 0 ? latestAt : Date.now());
+        const submissionIds = [...new Set(entries.map((entry) => entry.submissionId).filter(Boolean))];
+        const userIds = [...new Set(entries.map((entry) => entry.userId).filter(Boolean))];
+
+        await Promise.all([
+          submissionIds.length
+            ? db.submission.updateMany({
+                where: { id: { in: submissionIds }, status: "IN_PROGRESS" },
+                data: {
+                  lastHeartbeat: heartbeatAt,
+                  connectionStatus: "ONLINE",
+                },
+              })
+            : Promise.resolve(),
+          userIds.length
+            ? db.testSession.updateMany({
+                where: { testId, userId: { in: userIds }, endedAt: null },
+                data: {
+                  lastHeartbeatAt: heartbeatAt,
+                  connectionStatus: "ONLINE",
+                },
+              })
+            : Promise.resolve(),
+        ]);
+      } catch {
+        // Fail-open: heartbeats are best-effort.
       }
     }
   });
+
+  const recoverReportQueues = async () => {
+    const [adminReports, superReports] = await Promise.all([
+      recoverPendingReportJobs(),
+      recoverPendingSuperReportJobs(),
+    ]);
+    const totalRecovered =
+      adminReports.resetProcessing +
+      adminReports.requeued +
+      superReports.resetProcessing +
+      superReports.requeued;
+
+    if (totalRecovered > 0) {
+      console.log(
+        `Recovered report queues: admin requeued=${adminReports.requeued}, admin reset=${adminReports.resetProcessing}, ` +
+        `super requeued=${superReports.requeued}, super reset=${superReports.resetProcessing}.`
+      );
+    }
+  };
 
   server.listen(selectedPort, () => {
     if (selectedPort !== basePort) {
       console.warn(`Port ${basePort} is busy. Using fallback port ${selectedPort}.`);
     }
     console.log(`LMS API running at http://localhost:${selectedPort}`);
+    recoverReportQueues().catch((error) => {
+      console.warn("Report queue recovery skipped:", error?.message || "unknown error");
+    });
   });
 };
 

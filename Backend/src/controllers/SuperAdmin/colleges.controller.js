@@ -2,6 +2,62 @@ const models = require("../../models");
 const { createAuditLog } = require("../../services/audit.service");
 const { ApiError, asyncHandler } = require("../../utils/http");
 const { getPagination } = require("../../utils/pagination");
+const { ROLES } = require("../../constants/roles");
+const { resolvePermissionsForRole } = require("../../constants/admin-access-profiles");
+
+const hydrateCollegeAdminSummary = async ({ db, colleges }) => {
+  if (!Array.isArray(colleges) || colleges.length === 0) {
+    return [];
+  }
+
+  const collegeIds = colleges.map((college) => college.id);
+  const admins = await db.admin.findMany({
+    where: {
+      collegeId: { in: collegeIds },
+      isActive: true,
+      role: { in: [ROLES.ADMIN, ROLES.COLLEGE_ADMIN] },
+    },
+    select: {
+      id: true,
+      collegeId: true,
+      fullName: true,
+      email: true,
+      role: true,
+    },
+  });
+
+  const byCollege = new Map();
+  for (const admin of admins) {
+    const key = String(admin.collegeId);
+    const current = byCollege.get(key) || { totalAdmins: 0, collegeAdmins: [] };
+    if (admin.role === ROLES.ADMIN) {
+      current.totalAdmins += 1;
+    }
+    if (admin.role === ROLES.COLLEGE_ADMIN) {
+      current.collegeAdmins.push({
+        id: admin.id,
+        fullName: admin.fullName,
+        email: admin.email,
+      });
+    }
+    byCollege.set(key, current);
+  }
+
+  return colleges.map((college) => {
+    const summary = byCollege.get(String(college.id)) || { totalAdmins: 0, collegeAdmins: [] };
+    const hasExplicitAssignmentField = Object.prototype.hasOwnProperty.call(college, "collegeAdminId");
+    const assignedById = summary.collegeAdmins.find(
+      (admin) => String(admin.id) === String(college.collegeAdminId || "")
+    );
+    const fallbackAssigned = hasExplicitAssignmentField ? null : summary.collegeAdmins[0] || null;
+
+    return {
+      ...college,
+      totalAdmins: summary.totalAdmins,
+      assignedCollegeAdmin: assignedById || fallbackAssigned || null,
+    };
+  });
+};
 
 const getColleges = asyncHandler(async (req, res) => {
   const { page, limit, skip } = getPagination(req.query);
@@ -44,8 +100,13 @@ const getColleges = asyncHandler(async (req, res) => {
     College.count({ where }),
   ]);
 
+  const enrichedItems = await hydrateCollegeAdminSummary({
+    db: m.dbClient,
+    colleges: items,
+  });
+
   res.status(200).json({
-    data: items,
+    data: enrichedItems,
     pagination: {
       page,
       limit,
@@ -80,7 +141,12 @@ const getCollege = asyncHandler(async (req, res) => {
     throw new ApiError(404, "College not found");
   }
 
-  res.status(200).json(college);
+  const [enrichedCollege] = await hydrateCollegeAdminSummary({
+    db: m.dbClient,
+    colleges: [college],
+  });
+
+  res.status(200).json(enrichedCollege);
 });
 
 const createCollege = asyncHandler(async (req, res) => {
@@ -92,6 +158,7 @@ const createCollege = asyncHandler(async (req, res) => {
       name: req.body.name,
       code: req.body.code,
       location: req.body.location || null,
+      collegeAdminId: null,
       isActive: true,
     },
   });
@@ -112,6 +179,7 @@ const updateCollege = asyncHandler(async (req, res) => {
 
   const m = await models.init();
   const College = m.dbClient.college;
+  const Admin = m.dbClient.admin;
 
   const existing = await College.findUnique({ where: { id: collegeId } });
   if (!existing) {
@@ -125,6 +193,69 @@ const updateCollege = asyncHandler(async (req, res) => {
     }
   }
 
+  const hasCollegeAdminAssignment = Object.prototype.hasOwnProperty.call(req.body || {}, "collegeAdminId");
+  let assignedCollegeAdminId = existing.collegeAdminId || null;
+  const reassignedAdmins = [];
+
+  if (hasCollegeAdminAssignment) {
+    const candidateCollegeAdminId = req.body.collegeAdminId || null;
+
+    if (!candidateCollegeAdminId) {
+      assignedCollegeAdminId = null;
+    } else {
+      const nextCollegeAdmin = await Admin.findFirst({
+        where: {
+          id: candidateCollegeAdminId,
+          collegeId,
+          isActive: true,
+        },
+      });
+
+      if (!nextCollegeAdmin) {
+        throw new ApiError(404, "Selected college admin was not found in this college");
+      }
+
+      if (nextCollegeAdmin.role !== ROLES.COLLEGE_ADMIN) {
+        await Admin.update({
+          where: { id: nextCollegeAdmin.id },
+          data: {
+            role: ROLES.COLLEGE_ADMIN,
+            departmentId: null,
+            permissions: resolvePermissionsForRole(ROLES.COLLEGE_ADMIN, nextCollegeAdmin.accessProfile),
+          },
+        });
+      }
+
+      const otherCollegeAdmins = await Admin.findMany({
+        where: {
+          collegeId,
+          role: ROLES.COLLEGE_ADMIN,
+          isActive: true,
+          id: { not: nextCollegeAdmin.id },
+        },
+        select: {
+          id: true,
+          fullName: true,
+        },
+      });
+
+      if (otherCollegeAdmins.length > 0) {
+        await Admin.updateMany({
+          where: {
+            id: { in: otherCollegeAdmins.map((item) => item.id) },
+            role: ROLES.COLLEGE_ADMIN,
+          },
+          data: {
+            isActive: false,
+          },
+        });
+        reassignedAdmins.push(...otherCollegeAdmins.map((item) => ({ id: item.id, fullName: item.fullName })));
+      }
+
+      assignedCollegeAdminId = nextCollegeAdmin.id;
+    }
+  }
+
   const college = await College.update({
     where: { id: collegeId },
     data: {
@@ -134,7 +265,13 @@ const updateCollege = asyncHandler(async (req, res) => {
       ...(req.body.isActive !== undefined ? { isActive: req.body.isActive } : {}),
       ...(req.body.isActive === false ? { deletedAt: new Date() } : {}),
       ...(req.body.isActive === true ? { deletedAt: null } : {}),
+      ...(hasCollegeAdminAssignment ? { collegeAdminId: assignedCollegeAdminId } : {}),
     },
+  });
+
+  const [enrichedCollege] = await hydrateCollegeAdminSummary({
+    db: m.dbClient,
+    colleges: [college],
   });
 
   await createAuditLog({
@@ -143,10 +280,16 @@ const updateCollege = asyncHandler(async (req, res) => {
     targetId: college.id,
     superAdminId: req.superAdmin.id,
     beforeState: existing,
-    afterState: college,
+    afterState: {
+      ...college,
+      reassignedAdmins,
+    },
   });
 
-  res.status(200).json(college);
+  res.status(200).json({
+    ...enrichedCollege,
+    reassignedAdmins,
+  });
 });
 
 const deactivateCollege = asyncHandler(async (req, res) => {

@@ -1,5 +1,6 @@
 import { createAsyncThunk, createSlice } from "@reduxjs/toolkit";
 import { adminApi } from "@/services/api";
+import { logoutAdmin } from "@/features/Admin/adminAuthSlice";
 
 const initialState = {
   tests: { data: [], loading: false, error: null, pagination: { page: 1, limit: 20, total: 0, totalPages: 1 }, statusCounts: { ALL: 0, DRAFT: 0, SCHEDULED: 0, LIVE: 0, COMPLETED: 0, ARCHIVED: 0 } },
@@ -151,7 +152,11 @@ const adminPanelSlice = createSlice({
       })
       .addCase(fetchDepartments.fulfilled, (state, action) => {
         state.departments.loading = false;
-        state.departments.data = action.payload || [];
+        state.departments.data = Array.isArray(action.payload)
+          ? action.payload
+          : Array.isArray(action.payload?.data)
+            ? action.payload.data
+            : [];
       })
       .addCase(fetchDepartments.rejected, (state, action) => {
         state.departments.loading = false;
@@ -194,6 +199,9 @@ const adminPanelSlice = createSlice({
       })
       .addCase(generateReport.rejected, (state, action) => {
         state.reportJobs.error = action.error.message;
+      })
+      .addCase(logoutAdmin.fulfilled, () => {
+        return initialState;
       });
   },
 });

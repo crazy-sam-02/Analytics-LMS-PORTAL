@@ -8,6 +8,8 @@ const mockEnv = {
     reportGenerationMax: 10,
     adminTestListWindowMs: 30_000,
     adminTestListMax: 30,
+    adminEntityWriteWindowMs: 60_000,
+    adminEntityWriteMax: 20,
     adminBatchGuardWindowMs: 60_000,
     adminBatchGuardMax: 12,
     superReportWindowMs: 60_000,
@@ -28,6 +30,8 @@ const loadRouteWithLimiterSpy = (routeModulePath, extraMocks = {}) => {
   jest.doMock("../../middleware/auth", () => ({
     authenticate: mockMiddleware,
     authenticateAdmin: mockMiddleware,
+    authenticatePlatformAdmin: mockMiddleware,
+    authenticateCollegeAdmin: mockMiddleware,
     authenticateSuperAdmin: mockMiddleware,
   }));
   jest.doMock("../../middleware/permissions", () => ({
@@ -102,7 +106,7 @@ describe("high-risk route rate limit wiring", () => {
       "../../schemas/Admin/admin-tests.schema": {},
       "../../schemas/Admin/admin-core.schema": {},
     });
-    expect(testLimiters.map((config) => config.scope)).toEqual(["admin-test-list"]);
+    expect(testLimiters.map((config) => config.scope)).toEqual(["admin-test-list", "admin-test-write"]);
 
     const batchLimiters = loadRouteWithLimiterSpy("../../routes/Admin/batches.routes", {
       "../../controllers/Admin/batches-with-validation.controller": {
@@ -134,7 +138,7 @@ describe("high-risk route rate limit wiring", () => {
       },
       "../../schemas/SuperAdmin/super-admin-core.schema": {},
     });
-    expect(superReportLimiters.map((config) => config.scope)).toEqual(["super-report"]);
+    expect(superReportLimiters.map((config) => config.scope)).toEqual(["super-report", "super-report-read"]);
 
     const leaderboardLimiters = loadRouteWithLimiterSpy("../../routes/Students/leaderboard.routes", {
       "../../controllers/Students/leaderboard.controller": {

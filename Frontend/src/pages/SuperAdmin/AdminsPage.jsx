@@ -20,29 +20,7 @@ import {
 import { toast } from "sonner";
 import ConfirmActionDialog from "@/components/Admin/ConfirmActionDialog";
 import TypedConfirmDialog from "@/components/SuperAdmin/TypedConfirmDialog";
-
-const loadXlsxBrowserLib = () =>
-  new Promise((resolve, reject) => {
-    if (typeof window !== "undefined" && window.XLSX) {
-      resolve(window.XLSX);
-      return;
-    }
-
-    const existing = document.querySelector('script[data-xlsx-loader="true"]');
-    if (existing) {
-      existing.addEventListener("load", () => resolve(window.XLSX));
-      existing.addEventListener("error", () => reject(new Error("Unable to load spreadsheet parser")));
-      return;
-    }
-
-    const script = document.createElement("script");
-    script.src = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
-    script.async = true;
-    script.dataset.xlsxLoader = "true";
-    script.onload = () => resolve(window.XLSX);
-    script.onerror = () => reject(new Error("Unable to load spreadsheet parser"));
-    document.head.appendChild(script);
-  });
+import { parseSpreadsheetRows } from "@/lib/spreadsheet";
 
 const IMPORT_SAMPLE = [
   "fullName,email,employeeId,collegeCode,password,department",
@@ -65,7 +43,7 @@ export default function AdminsPage() {
   const dispatch = useDispatch();
   const admins = useSelector((state) => state.superAdminPanel.admins);
   const colleges = useSelector((state) => state.superAdminPanel.colleges);
-  const [form, setForm] = useState({ fullName: "", email: "", employeeId: "", password: "", collegeId: "", departmentId: "", accessProfile: "EDITOR" });
+  const [form, setForm] = useState({ fullName: "", email: "", employeeId: "", password: "", role: "ADMIN", collegeId: "", departmentId: "", accessProfile: "EDITOR" });
   const [pendingAction, setPendingAction] = useState(null);
   const [resetPasswordValue, setResetPasswordValue] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -122,12 +100,18 @@ export default function AdminsPage() {
       email: form.email.trim(),
       employeeId: form.employeeId.trim(),
       password: form.password,
+      role: form.role,
       collegeId: form.collegeId,
-      departmentId: form.departmentId,
+      departmentId: form.role === "COLLEGE_ADMIN" ? null : form.departmentId,
       accessProfile: form.accessProfile,
     };
 
-    if (!payload.fullName || !payload.email || !payload.employeeId || !payload.password || !payload.collegeId || !payload.departmentId) {
+    if (!payload.fullName || !payload.email || !payload.employeeId || !payload.password || !payload.collegeId) {
+      toast.error("Please fill all required fields before creating admin.");
+      return;
+    }
+
+    if (payload.role === "ADMIN" && !payload.departmentId) {
       toast.error("Please fill all required fields before creating admin.");
       return;
     }
@@ -141,7 +125,7 @@ export default function AdminsPage() {
       setIsSubmitting(true);
       await dispatch(createSuperAdminUser(payload)).unwrap();
       toast.success("Admin created successfully.");
-      setForm({ fullName: "", email: "", employeeId: "", password: "", collegeId: "", departmentId: "", accessProfile: "EDITOR" });
+      setForm({ fullName: "", email: "", employeeId: "", password: "", role: "ADMIN", collegeId: "", departmentId: "", accessProfile: "EDITOR" });
       loadAdmins();
     } catch (error) {
       toast.error(error?.message || "Unable to create admin.");
@@ -274,17 +258,7 @@ export default function AdminsPage() {
       if (name.endsWith(".csv")) {
         parsedCsv = await file.text();
       } else {
-        const XLSX = await loadXlsxBrowserLib();
-        const buffer = await file.arrayBuffer();
-        const workbook = XLSX.read(buffer, { type: "array" });
-        const firstSheetName = workbook.SheetNames[0];
-        const firstSheet = workbook.Sheets[firstSheetName];
-        const rows = XLSX.utils.sheet_to_json(firstSheet, { defval: "" });
-
-        if (!Array.isArray(rows) || rows.length === 0) {
-          throw new Error("Selected file has no rows");
-        }
-
+        const rows = await parseSpreadsheetRows(file);
         parsedCsv = rowsToCsv(rows);
       }
 
@@ -329,6 +303,10 @@ export default function AdminsPage() {
           <Input placeholder="Email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
           <Input placeholder="Employee ID" value={form.employeeId} onChange={(e) => setForm({ ...form, employeeId: e.target.value })} />
           <Input placeholder="Password" value={form.password} type="password" onChange={(e) => setForm({ ...form, password: e.target.value })} />
+          <select className="h-8 rounded-lg border border-border px-2" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value, departmentId: "" })}>
+            <option value="ADMIN">Department Admin</option>
+            <option value="COLLEGE_ADMIN">College Admin</option>
+          </select>
           <select
             className="h-8 rounded-lg border border-border px-2"
             value={form.collegeId}
@@ -339,17 +317,23 @@ export default function AdminsPage() {
               <option key={college.id} value={college.id}>{college.name}</option>
             ))}
           </select>
-          <select
-            className="h-8 rounded-lg border border-border px-2"
-            value={form.departmentId}
-            onChange={(e) => setForm({ ...form, departmentId: e.target.value })}
-            disabled={!form.collegeId}
-          >
-            <option value="">Select department</option>
-            {departments.map((department) => (
-              <option key={department.id} value={department.id}>{department.name}</option>
-            ))}
-          </select>
+          {form.role === "ADMIN" ? (
+            <select
+              className="h-8 rounded-lg border border-border px-2"
+              value={form.departmentId}
+              onChange={(e) => setForm({ ...form, departmentId: e.target.value })}
+              disabled={!form.collegeId}
+            >
+              <option value="">Select department</option>
+              {departments.map((department) => (
+                <option key={department.id} value={department.id}>{department.name}</option>
+              ))}
+            </select>
+          ) : (
+            <div className="flex h-8 items-center rounded-lg border border-border px-2 text-xs text-text-secondary">
+              College admins are college-scoped (no department binding)
+            </div>
+          )}
           <select className="h-8 rounded-lg border border-border px-2" value={form.accessProfile} onChange={(e) => setForm({ ...form, accessProfile: e.target.value })}>
             <option value="EDITOR">Can Edit</option>
             <option value="VIEW_ONLY">View Only</option>
@@ -377,7 +361,7 @@ export default function AdminsPage() {
                 <option key={college.id} value={college.id}>{college.name}</option>
               ))}
             </select>
-            <Input type="file" accept=".csv,.xlsx,.xls" onChange={handleImportFile} />
+            <Input type="file" accept=".csv,.xlsx" onChange={handleImportFile} />
             <Button className="bg-primary py-5 text-white hover:bg-primary text-sm" onClick={() => { setImportCsv(IMPORT_SAMPLE); setImportFileName(""); setImportResult(null); }}>
               Reset Sample
             </Button>
@@ -467,6 +451,9 @@ export default function AdminsPage() {
                 <div className="mt-1 flex flex-wrap items-center gap-2">
                   <span className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-semibold ${admin.isActive ? "bg-green-500/10 text-green-600" : "bg-red-500/10 text-red-600"}`}>
                     {admin.isActive ? "Active" : "Inactive"}
+                  </span>
+                  <span className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-semibold ${admin.role === "COLLEGE_ADMIN" ? "bg-emerald-500/10 text-emerald-700" : "bg-slate-500/10 text-slate-700"}`}>
+                    {admin.role === "COLLEGE_ADMIN" ? "College Admin" : "Admin"}
                   </span>
                   <span className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-semibold ${String(admin.accessProfile || "EDITOR") === "VIEW_ONLY" ? "bg-blue-500/10 text-blue-600" : "bg-amber-500/10 text-amber-700"}`}>
                     {String(admin.accessProfile || "EDITOR") === "VIEW_ONLY" ? "View Only" : "Can Edit"}

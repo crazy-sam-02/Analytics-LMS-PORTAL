@@ -1,8 +1,8 @@
-const express = require("express");
+﻿const express = require("express");
 const db = require("../../config/db");
 const env = require("../../config/env");
 const validate = require("../../middleware/validate");
-const { authenticateAdmin } = require("../../middleware/auth");
+const { authenticatePlatformAdmin } = require("../../middleware/auth");
 const { createRateLimiter } = require("../../middleware/rate-limit");
 const { requireSameDepartment, departmentMatch } = require("../../middleware/department-guard");
 const { requireAnyPermission, requirePermission } = require("../../middleware/permissions");
@@ -42,9 +42,18 @@ const adminTestListLimiter = createRateLimiter({
 	message: "Test listing is rate limited. Please wait a moment and retry.",
 });
 
+const adminTestWriteLimiter = createRateLimiter({
+	scope: "admin-test-write",
+	routeLabel: "/api/admin/tests/*",
+	windowMs: env.rateLimit.adminEntityWriteWindowMs,
+	max: env.rateLimit.adminEntityWriteMax,
+	failOpen: false,
+	message: "Test management actions are rate limited. Please wait a moment and retry.",
+});
+
 router.get(
 	"/",
-	authenticateAdmin,
+	authenticatePlatformAdmin,
 	adminTestListLimiter,
 	requireAnyPermission("edit_test", "manage_questions", "view_tests"),
 	requireSameDepartment("departmentId"),
@@ -52,7 +61,7 @@ router.get(
 );
 router.get(
 	"/:testId",
-	authenticateAdmin,
+	authenticatePlatformAdmin,
 	requireAnyPermission("edit_test", "manage_questions", "view_tests"),
 	validate(testIdParamSchema),
 	departmentMatch(async (id) => db.test.findFirst({ where: { id } })),
@@ -60,7 +69,8 @@ router.get(
 );
 router.post(
 	"/",
-	authenticateAdmin,
+	authenticatePlatformAdmin,
+	adminTestWriteLimiter,
 	requirePermission("create_test", "manage_questions"),
 	requireSameDepartment("departmentId"),
 	validate(createAdminTestSchema),
@@ -68,7 +78,8 @@ router.post(
 );
 router.post(
 	"/:testId/duplicate",
-	authenticateAdmin,
+	authenticatePlatformAdmin,
+	adminTestWriteLimiter,
 	requirePermission("create_test", "edit_test"),
 	validate(testIdParamSchema),
 	departmentMatch(async (id) => db.test.findFirst({ where: { id } })),
@@ -77,7 +88,8 @@ router.post(
 const { cloneAdminTestSchema } = require("../../schemas/Admin/admin-tests.schema");
 router.post(
 	"/:testId/clone",
-	authenticateAdmin,
+	authenticatePlatformAdmin,
+	adminTestWriteLimiter,
 	requirePermission("create_test", "edit_test"),
 	validate(cloneAdminTestSchema),
 	departmentMatch(async (id) => db.test.findFirst({ where: { id } })),
@@ -85,7 +97,8 @@ router.post(
 );
 router.patch(
 	"/:testId",
-	authenticateAdmin,
+	authenticatePlatformAdmin,
+	adminTestWriteLimiter,
 	requirePermission("edit_test"),
 	validate(updateAdminTestSchema),
 	departmentMatch(async (id) => db.test.findFirst({ where: { id } })),
@@ -93,7 +106,8 @@ router.patch(
 );
 router.patch(
 	"/:testId/status",
-	authenticateAdmin,
+	authenticatePlatformAdmin,
+	adminTestWriteLimiter,
 	requirePermission("edit_test"),
 	validate(transitionTestStatusSchema),
 	departmentMatch(async (id) => db.test.findFirst({ where: { id } })),
@@ -101,7 +115,8 @@ router.patch(
 );
 router.patch(
 	"/:testId/archive",
-	authenticateAdmin,
+	authenticatePlatformAdmin,
+	adminTestWriteLimiter,
 	requirePermission("edit_test"),
 	validate(testIdParamSchema),
 	departmentMatch(async (id) => db.test.findFirst({ where: { id } })),
@@ -109,7 +124,8 @@ router.patch(
 );
 router.delete(
 	"/:testId",
-	authenticateAdmin,
+	authenticatePlatformAdmin,
+	adminTestWriteLimiter,
 	requirePermission("delete_test"),
 	validate(testIdParamSchema),
 	departmentMatch(async (id) => db.test.findFirst({ where: { id } })),
@@ -117,7 +133,8 @@ router.delete(
 );
 router.post(
 	"/:testId/publish",
-	authenticateAdmin,
+	authenticatePlatformAdmin,
+	adminTestWriteLimiter,
 	requirePermission("publish_test"),
 	validate(testIdParamSchema),
 	departmentMatch(async (id) => db.test.findFirst({ where: { id } })),
@@ -125,7 +142,7 @@ router.post(
 );
 router.get(
 	"/:testId/monitoring",
-	authenticateAdmin,
+	authenticatePlatformAdmin,
 	requirePermission("edit_test"),
 	validate(testIdParamSchema),
 	departmentMatch(async (id) => db.test.findFirst({ where: { id } })),
@@ -133,7 +150,8 @@ router.get(
 );
 router.post(
 	"/:testId/monitoring/force-submit",
-	authenticateAdmin,
+	authenticatePlatformAdmin,
+	adminTestWriteLimiter,
 	requirePermission("edit_test"),
 	validate(forceSubmitAttemptSchema),
 	departmentMatch(async (id) => db.test.findFirst({ where: { id } })),
@@ -141,7 +159,8 @@ router.post(
 );
 router.post(
 	"/:testId/monitoring/extend-time",
-	authenticateAdmin,
+	authenticatePlatformAdmin,
+	adminTestWriteLimiter,
 	requirePermission("edit_test"),
 	validate(extendAttemptTimeSchema),
 	departmentMatch(async (id) => db.test.findFirst({ where: { id } })),
@@ -149,7 +168,8 @@ router.post(
 );
 router.post(
 	"/:testId/assign-batch",
-	authenticateAdmin,
+	authenticatePlatformAdmin,
+	adminTestWriteLimiter,
 	requirePermission("edit_test", "manage_batches"),
 	validate(testAssignBatchSchema),
 	departmentMatch(async (id) => db.test.findFirst({ where: { id } })),
@@ -157,7 +177,8 @@ router.post(
 );
 router.post(
 	"/:testId/assign-department",
-	authenticateAdmin,
+	authenticatePlatformAdmin,
+	adminTestWriteLimiter,
 	requirePermission("edit_test", "manage_batches"),
 	validate(testAssignDepartmentSchema),
 	departmentMatch(async (id) => db.test.findFirst({ where: { id } })),
@@ -165,3 +186,5 @@ router.post(
 );
 
 module.exports = router;
+
+

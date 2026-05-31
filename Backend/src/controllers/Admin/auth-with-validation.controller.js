@@ -6,9 +6,10 @@
 
 const bcrypt = require("bcrypt");
 const models = require("../../models");
-const { createAccessToken, createRefreshToken, verifyRefreshToken } = require("../../utils/token");
+const { createAccessToken } = require("../../utils/token");
 const { ApiError, asyncHandler } = require("../../utils/http");
 const { resolveAdminPermissions } = require("../../constants/admin-access-profiles");
+const { createRefreshTokenRecord } = require("../../services/refresh-token-session.service");
 const {
   createAdmin,
   updateAdmin,
@@ -16,14 +17,6 @@ const {
   toggleAdminStatus,
 } = require("../../services/admin.service");
 const { getMetricsSnapshot } = require("../../services/validation-monitoring.service");
-
-const verifyRefreshPayloadOrThrow = (refreshToken) => {
-  try {
-    return verifyRefreshToken(refreshToken);
-  } catch {
-    throw new ApiError(401, "Invalid refresh token");
-  }
-};
 
 /**
  * Admin login (no changes needed, kept for reference)
@@ -55,15 +48,12 @@ const adminLogin = asyncHandler(async (req, res) => {
 
   const permissions = resolveAdminPermissions(admin);
   const accessToken = createAccessToken({ ...admin, permissions });
-  const refreshToken = createRefreshToken(admin);
-
-  const refreshPayload = verifyRefreshPayloadOrThrow(refreshToken);
-  await db.adminRefreshToken.create({
-    data: {
-      token: refreshToken,
-      adminId: admin.id,
-      expiresAt: new Date(refreshPayload.exp * 1000),
-    },
+  const { refreshToken } = await createRefreshTokenRecord({
+    db,
+    modelName: "adminRefreshToken",
+    scope: "admin",
+    principal: admin,
+    ownerField: "adminId",
   });
 
   res.status(200).json({

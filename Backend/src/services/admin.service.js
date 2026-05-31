@@ -3,6 +3,7 @@ const bcrypt = require("bcrypt");
 const { validateDocument, validateDocuments } = require("./model-validation.service");
 const { UserValidation } = require("../models/validation");
 const { ApiError } = require("../utils/http");
+const { bumpPrincipalTokenVersion, invalidatePrincipalAuthCache } = require("./auth-revocation.service");
 
 /**
  * Create admin user with validation
@@ -113,6 +114,12 @@ async function updateAdmin(adminId, payload, collegeId, superAdminId) {
     data: updateData,
   });
 
+  if (payload.password || payload.isActive === false) {
+    await bumpPrincipalTokenVersion(db, "admin", adminId);
+  } else {
+    await invalidatePrincipalAuthCache("admin", adminId);
+  }
+
   await db.auditLog.create({
     data: {
       action: "ADMIN_UPDATED",
@@ -148,6 +155,8 @@ async function assignPermissions(adminId, collegeId, permissions, superAdminId) 
     where: { id: adminId },
     data: { permissions },
   });
+
+  await invalidatePrincipalAuthCache("admin", adminId);
 
   await db.auditLog.create({
     data: {
@@ -190,6 +199,12 @@ async function toggleAdminStatus(adminId, collegeId, superAdminId, isActive) {
     where: { id: adminId },
     data: { isActive: validated.isActive },
   });
+
+  if (!validated.isActive) {
+    await bumpPrincipalTokenVersion(db, "admin", adminId);
+  } else {
+    await invalidatePrincipalAuthCache("admin", adminId);
+  }
 
   await db.auditLog.create({
     data: {

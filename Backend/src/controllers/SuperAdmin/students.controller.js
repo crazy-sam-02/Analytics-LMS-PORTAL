@@ -1,7 +1,8 @@
 const models = require("../../models");
 const bcrypt = require("bcrypt");
 const { redisClient, getRedisQueueConnection } = require("../../config/redis");
-const { invalidateRefreshToken } = require("../../services/refresh-token-cache.service");
+const { invalidateRefreshTokenRecord } = require("../../services/refresh-token-cache.service");
+const { bumpPrincipalTokenVersion, invalidatePrincipalAuthCache } = require("../../services/auth-revocation.service");
 const { createAuditLog } = require("../../services/audit.service");
 const { ApiError, asyncHandler } = require("../../utils/http");
 const { getPagination } = require("../../utils/pagination");
@@ -17,6 +18,21 @@ try {
 
 let superStudentImportQueue = null;
 const queueConnection = getRedisQueueConnection();
+
+const revokeStudentRefreshTokens = async (db, studentId) => {
+  await bumpPrincipalTokenVersion(db, "student", studentId);
+
+  const activeTokens = await db.studentRefreshToken.findMany({
+    where: { userId: studentId, revokedAt: null },
+  });
+
+  await db.studentRefreshToken.updateMany({
+    where: { userId: studentId, revokedAt: null },
+    data: { revokedAt: new Date() },
+  });
+
+  await Promise.all(activeTokens.map((record) => invalidateRefreshTokenRecord("student", record)));
+};
 
 const createStudentPassword = (fullName, enrollNumber) => {
   const nameLetters = String(fullName || "").replace(/[^a-zA-Z]/g, "");
@@ -398,6 +414,57 @@ const getStudentsGlobal = asyncHandler(async (req, res) => {
   });
 });
 
+const promoteStudentsYearGlobal = asyncHandler(async (req, res) => {
+  const collegeId = req.body.collegeId;
+  const superAdminId = req.superAdmin.id;
+  const expectedConfirmation = "PROMOTE STUDENTS YEAR";
+
+  if (String(req.body.confirmationText || "").trim() !== expectedConfirmation) {
+    throw new ApiError(400, `Typed acknowledgment mismatch. Expected: ${expectedConfirmation}`);
+  }
+
+  const m = await models.init();
+  const db = m.dbClient;
+
+  const result = await db.$transaction(async (tx) => {
+    const prior4 = await tx.student.findMany({ where: { collegeId, year: 4 }, select: { id: true } });
+    const prior4Ids = prior4.map((s) => s.id);
+
+    const step1 = await tx.student.updateMany({ where: { collegeId, year: 1 }, data: { year: 2 } });
+    const step2 = await tx.student.updateMany({ where: { collegeId, year: 2 }, data: { year: 3 } });
+    const step3 = await tx.student.updateMany({ where: { collegeId, year: 3 }, data: { year: 4, isActive: true } });
+
+    let deactivated = { count: 0 };
+    if (prior4Ids.length > 0) {
+      deactivated = await tx.student.updateMany({ where: { collegeId, id: { in: prior4Ids } }, data: { isActive: false } });
+    }
+
+    return { step1, step2, step3, deactivated, prior4Ids };
+  });
+
+  if (result.prior4Ids?.length) {
+    await Promise.all(result.prior4Ids.map((studentId) => revokeStudentRefreshTokens(db, studentId)));
+  }
+
+  const summary = {
+    year1To2: result.step1.count || 0,
+    year2To3: result.step2.count || 0,
+    year3To4: result.step3.count || 0,
+    deactivatedPrior4: result.deactivated.count || 0,
+  };
+
+  await createAuditLog({
+    action: "SUPER_ADMIN_STUDENT_YEAR_PROMOTED",
+    targetType: "COLLEGE",
+    targetId: collegeId,
+    collegeId,
+    superAdminId,
+    afterState: summary,
+  });
+
+  res.status(200).json({ message: "Student years updated successfully", summary });
+});
+
 const toggleStudentStatus = asyncHandler(async (req, res) => {
   const m = await models.init();
   const db = m.dbClient;
@@ -419,6 +486,9 @@ const toggleStudentStatus = asyncHandler(async (req, res) => {
     where: { id: studentId },
     data: { isActive: req.body.isActive },
   });
+  if (req.body.isActive === false) {
+    await revokeStudentRefreshTokens(db, studentId);
+  }
 
   await createAuditLog({
     action: req.body.isActive ? "SUPER_ADMIN_UNBLOCK_STUDENT" : "SUPER_ADMIN_BLOCK_STUDENT",
@@ -436,7 +506,6 @@ const toggleStudentStatus = asyncHandler(async (req, res) => {
 const resetStudentPassword = asyncHandler(async (req, res) => {
   const m = await models.init();
   const db = m.dbClient;
-  const StudentRefreshToken = m.StudentRefreshToken;
   const { studentId } = req.params;
 
   const existing = await db.student.findUnique({ where: { id: studentId } });
@@ -452,19 +521,7 @@ const resetStudentPassword = asyncHandler(async (req, res) => {
     data: { passwordHash },
   });
 
-  const activeRefreshTokens = await StudentRefreshToken.findMany({
-    where: {
-      userId: studentId,
-      revokedAt: null,
-    },
-  });
-
-  await StudentRefreshToken.updateMany(
-    { userId: studentId, revokedAt: null },
-    { $set: { revokedAt: new Date() } }
-  );
-
-  await Promise.all(activeRefreshTokens.map((record) => invalidateRefreshToken("student", record.token)));
+  await revokeStudentRefreshTokens(db, studentId);
 
   await createAuditLog({
     action: "SUPER_ADMIN_RESET_STUDENT_PASSWORD",
@@ -713,6 +770,7 @@ const updateStudentGlobal = asyncHandler(async (req, res) => {
     where: { id: studentId },
     data: updateData,
   });
+  await invalidatePrincipalAuthCache("student", studentId);
 
   await createAuditLog({
     action: "SUPER_ADMIN_UPDATE_STUDENT",
@@ -743,6 +801,7 @@ const deleteStudentGlobal = asyncHandler(async (req, res) => {
   }
 
   await db.student.delete({ where: { id: studentId } });
+  await revokeStudentRefreshTokens(db, studentId);
 
   await createAuditLog({
     action: "SUPER_ADMIN_DELETE_STUDENT",
@@ -766,4 +825,5 @@ module.exports = {
   getStudentImportJobGlobal,
   updateStudentGlobal,
   deleteStudentGlobal,
+  promoteStudentsYearGlobal,
 };

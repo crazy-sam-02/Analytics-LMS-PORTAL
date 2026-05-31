@@ -505,7 +505,7 @@ export function StudentIdentityCard({ student, stats }) {
           </div>
           <div className="text-center">
             <p className={`text-2xl font-bold tabular-nums ${percentileClass}`} title={stats.totalSubmissions < 5 ? "Needs 5+ submissions" : "Percentile"}>
-              {stats.totalSubmissions < 5 ? "N/A" : `${Math.round(percentile)}th`}
+              {stats.totalSubmissions < 5 ? "N/A" : `${Math.round(percentile)}%`}
             </p>
             <p className="text-[11px] text-text-secondary">percentile</p>
             {stats.totalSubmissions < 5 ? <p className="text-[10px] text-text-secondary">Needs 5+ submissions</p> : null}

@@ -8,32 +8,11 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { X } from "lucide-react";
 import TypedConfirmDialog from "@/components/SuperAdmin/TypedConfirmDialog";
-
-const loadXlsxBrowserLib = () =>
-  new Promise((resolve, reject) => {
-    if (typeof window !== "undefined" && window.XLSX) {
-      resolve(window.XLSX);
-      return;
-    }
-
-    const existing = document.querySelector('script[data-xlsx-loader="true"]');
-    if (existing) {
-      existing.addEventListener("load", () => resolve(window.XLSX));
-      existing.addEventListener("error", () => reject(new Error("Unable to load spreadsheet parser")));
-      return;
-    }
-
-    const script = document.createElement("script");
-    script.src = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
-    script.async = true;
-    script.dataset.xlsxLoader = "true";
-    script.onload = () => resolve(window.XLSX);
-    script.onerror = () => reject(new Error("Unable to load spreadsheet parser"));
-    document.head.appendChild(script);
-  });
+import { parseSpreadsheetRows } from "@/lib/spreadsheet";
 
 const IMPORT_SAMPLE = [
   "fullName,email,enrollNumber,department,year,batch",
@@ -60,6 +39,7 @@ const unwrapItems = (response) => {
 };
 
 const collegeScopedLimit = 50;
+const YEAR_PROMOTION_CONFIRMATION = "PROMOTE STUDENTS YEAR";
 
 export default function StudentsPage() {
   const dispatch = useDispatch();
@@ -73,6 +53,9 @@ export default function StudentsPage() {
   const [importFileName, setImportFileName] = useState("");
   const [csvData, setCsvData] = useState(IMPORT_SAMPLE);
   const [pendingResetStudent, setPendingResetStudent] = useState(null);
+  const [yearPromotionCollegeId, setYearPromotionCollegeId] = useState("");
+  const [yearPromotionConfirmation, setYearPromotionConfirmation] = useState("");
+  const [yearPromotionVerified, setYearPromotionVerified] = useState(false);
   const [studentForm, setStudentForm] = useState({
     fullName: "",
     email: "",
@@ -183,17 +166,7 @@ export default function StudentsPage() {
       if (name.endsWith(".csv")) {
         parsedCsv = await file.text();
       } else {
-        const XLSX = await loadXlsxBrowserLib();
-        const buffer = await file.arrayBuffer();
-        const workbook = XLSX.read(buffer, { type: "array" });
-        const firstSheetName = workbook.SheetNames[0];
-        const firstSheet = workbook.Sheets[firstSheetName];
-        const rows = XLSX.utils.sheet_to_json(firstSheet, { defval: "" });
-
-        if (!Array.isArray(rows) || rows.length === 0) {
-          throw new Error("Selected file has no rows");
-        }
-
+        const rows = await parseSpreadsheetRows(file);
         parsedCsv = rowsToCsv(rows);
       }
 
@@ -275,6 +248,27 @@ export default function StudentsPage() {
     onError: (error) => {
       setBanner({ type: "error", title: "Reset failed", message: error?.message || "Unable to reset student password." });
       toast.error(error?.message || "Unable to reset student password");
+    },
+  });
+
+  const promoteStudentsYearMutation = useMutation({
+    mutationFn: (body) => superAdminApi.promoteStudentsYear(body),
+    onSuccess: (payload) => {
+      const summary = payload?.summary || {};
+      toast.success("Student years updated");
+      setBanner({
+        type: "success",
+        title: "Year updated",
+        message: `1st->2nd: ${summary.year1To2 || 0} | 2nd->3rd: ${summary.year2To3 || 0} | 3rd->4th: ${summary.year3To4 || 0} | 4th deactivated: ${summary.deactivatedPrior4 || 0}`,
+      });
+      setYearPromotionConfirmation("");
+      setYearPromotionVerified(false);
+      setYearPromotionCollegeId("");
+      runSearch();
+    },
+    onError: (error) => {
+      setBanner({ type: "error", title: "Year update failed", message: error?.message || "Unable to promote student years." });
+      toast.error(error?.message || "Unable to promote student years");
     },
   });
 
@@ -502,8 +496,54 @@ export default function StudentsPage() {
 
       <Card className="rounded-2xl border-border">
         <CardHeader>
+          <CardTitle>Promote Student Years</CardTitle>
+          <CardDescription>Select a college and confirm before applying the year update.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid gap-3 md:grid-cols-3">
+            <select
+              className="h-10 rounded-md border border-border px-3 text-sm"
+              value={yearPromotionCollegeId}
+              onChange={(event) => setYearPromotionCollegeId(event.target.value)}
+            >
+              <option value="">Select college</option>
+              {colleges.filter((college) => college?.isActive !== false).map((college) => (
+                <option key={college.id} value={college.id}>{college.name}</option>
+              ))}
+            </select>
+            <Input
+              placeholder="Type PROMOTE STUDENTS YEAR"
+              value={yearPromotionConfirmation}
+              onChange={(event) => setYearPromotionConfirmation(event.target.value)}
+            />
+            <div className="flex items-center gap-2 rounded-md border border-border px-3 py-2">
+              <Checkbox
+                checked={yearPromotionVerified}
+                onCheckedChange={(checked) => setYearPromotionVerified(Boolean(checked))}
+              />
+              <span className="text-sm text-text-secondary">I understand prior 4th-year accounts will be deactivated.</span>
+            </div>
+          </div>
+
+          <Button
+            className="bg-danger/90 hover:bg-danger"
+            disabled={
+              promoteStudentsYearMutation.isPending ||
+              !yearPromotionCollegeId ||
+              !yearPromotionVerified ||
+              yearPromotionConfirmation.trim() !== YEAR_PROMOTION_CONFIRMATION
+            }
+            onClick={() => promoteStudentsYearMutation.mutate({ collegeId: yearPromotionCollegeId, confirmationText: yearPromotionConfirmation })}
+          >
+            {promoteStudentsYearMutation.isPending ? "Updating..." : "Promote Years for Selected College"}
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Card className="rounded-2xl border-border">
+        <CardHeader>
           <CardTitle>Bulk Import (Excel/CSV)</CardTitle>
-          <CardDescription>Upload .xlsx/.xls/.csv file or paste CSV for the selected college.</CardDescription>
+          <CardDescription>Upload .xlsx/.csv file or paste CSV for the selected college.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="grid gap-3 md:grid-cols-2">
@@ -517,7 +557,7 @@ export default function StudentsPage() {
                 <option key={college.id} value={college.id}>{college.name}</option>
               ))}
             </select>
-            <Input type="file" accept=".xlsx,.xls,.csv" onChange={handleImportFile} />
+            <Input type="file" accept=".xlsx,.csv" onChange={handleImportFile} />
           </div>
 
           {importFileName ? <p className="text-xs text-text-secondary">Loaded: {importFileName}</p> : null}

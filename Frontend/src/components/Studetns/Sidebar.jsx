@@ -4,6 +4,7 @@ import { useDispatch } from "react-redux";
 import {
   CalendarDays,
   FileText,
+  BookOpenCheck,
   Medal,
   Settings,
   User,
@@ -19,6 +20,7 @@ const navItems = [
   { to: "/tests/ongoing", label: "Ongoing Tests", icon: PlayCircle },
   { to: "/tests/upcoming", label: "Upcoming Tests", icon: Clock3 },
   { to: "/events", label: "Events", icon: CalendarDays },
+  { to: "/resources", label: "Learning Resources", icon: BookOpenCheck },
   { to: "/leaderboard", label: "Leaderboard", icon: Medal },
   { to: "/reports", label: "Reports", icon: FileText },
   { to: "/settings", label: "Settings", icon: Settings },

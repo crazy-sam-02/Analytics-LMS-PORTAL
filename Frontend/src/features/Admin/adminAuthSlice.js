@@ -1,5 +1,6 @@
 import { createAsyncThunk, createSlice } from "@reduxjs/toolkit";
 import { adminApi, adminTokenStorage } from "@/services/api";
+import { normalizeAdminPrincipal } from "@/features/Admin/adminRole";
 
 const initialState = {
   admin: null,
@@ -15,16 +16,20 @@ export const loginAdmin = createAsyncThunk("adminAuth/login", async (payload) =>
     accessToken: data.accessToken,
     refreshToken: data.refreshToken,
   });
-  return data.admin;
+  return normalizeAdminPrincipal(data.admin);
 });
 
 export const fetchCurrentAdmin = createAsyncThunk("adminAuth/me", async () => {
-  return adminApi.me();
+  const admin = await adminApi.me();
+  return normalizeAdminPrincipal(admin);
 });
 
 export const logoutAdmin = createAsyncThunk("adminAuth/logout", async () => {
-  await adminApi.logout(adminTokenStorage.getRefresh());
-  adminTokenStorage.clear();
+  try {
+    await adminApi.logout(adminTokenStorage.getRefresh());
+  } finally {
+    adminTokenStorage.clear();
+  }
   return null;
 });
 
@@ -62,6 +67,10 @@ const adminAuthSlice = createSlice({
         state.initialized = true;
       })
       .addCase(logoutAdmin.fulfilled, (state) => {
+        state.admin = null;
+        state.permissions = [];
+      })
+      .addCase(logoutAdmin.rejected, (state) => {
         state.admin = null;
         state.permissions = [];
       });

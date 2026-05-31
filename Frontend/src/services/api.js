@@ -3,7 +3,23 @@ import { API_BASE_URL } from "@/services/runtimeConfig";
 
 const API_BASE = API_BASE_URL;
 const isFormDataBody = (value) => typeof FormData !== "undefined" && value instanceof FormData;
-const shouldAttachJsonContentType = (options = {}) => !isFormDataBody(options.body);
+const shouldAttachJsonContentType = (options = {}) => Boolean(options.body) && !isFormDataBody(options.body);
+const isCollegeAdminRuntimeRoute = () =>
+  typeof window !== "undefined" &&
+  String(window.location?.pathname || "").startsWith("/college-admin");
+
+const resolveAdminScopedPath = (path) => {
+  const normalizedPath = String(path || "");
+  if (!normalizedPath.startsWith("/admin")) {
+    return normalizedPath;
+  }
+
+  if (isCollegeAdminRuntimeRoute()) {
+    return normalizedPath.replace(/^\/admin(?=\/|$)/, "/college-admin");
+  }
+
+  return normalizedPath;
+};
 
 const safeReadStorage = (key) => {
   try {
@@ -157,7 +173,8 @@ const refreshAccessToken = async () => {
 
 const refreshAdminAccessToken = async () => {
   if (!adminRefreshingPromise) {
-    adminRefreshingPromise = fetch(`${API_BASE}/admin/auth/refresh`, {
+    const refreshPath = resolveAdminScopedPath("/admin/auth/refresh");
+    adminRefreshingPromise = fetch(`${API_BASE}${refreshPath}`, {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
@@ -166,7 +183,10 @@ const refreshAdminAccessToken = async () => {
       .then(async (response) => {
         if (!response.ok) throw new Error("Refresh failed");
         const data = await response.json();
-        adminTokenStorage.setTokens({ accessToken: data.accessToken });
+        adminTokenStorage.setTokens({
+          accessToken: data.accessToken,
+          refreshToken: data.refreshToken,
+        });
         return data.accessToken;
       })
       .finally(() => {
@@ -188,7 +208,10 @@ const refreshSuperAdminAccessToken = async () => {
       .then(async (response) => {
         if (!response.ok) throw new Error("Refresh failed");
         const data = await response.json();
-        superAdminTokenStorage.setTokens({ accessToken: data.accessToken });
+        superAdminTokenStorage.setTokens({
+          accessToken: data.accessToken,
+          refreshToken: data.refreshToken,
+        });
         return data.accessToken;
       })
       .finally(() => {
@@ -248,6 +271,7 @@ export const apiRequest = async (path, options = {}) => {
 };
 
 export const adminApiRequest = async (path, options = {}) => {
+  const scopedPath = resolveAdminScopedPath(path);
   const headers = {
     ...(options.headers || {}),
   };
@@ -262,11 +286,11 @@ export const adminApiRequest = async (path, options = {}) => {
 
   const makeRequest = () =>
     performRequestWithDedupe({
-      path: `admin:${path}`,
+      path: `admin:${scopedPath}`,
       options,
       headers,
       requestFactory: () =>
-        fetch(`${API_BASE}${path}`, {
+        fetch(`${API_BASE}${scopedPath}`, {
           ...options,
           credentials: "include",
           headers,
@@ -275,7 +299,7 @@ export const adminApiRequest = async (path, options = {}) => {
 
   let response = await makeRequest();
 
-  if (response.status === 401 && !isLoginPath(path)) {
+  if (response.status === 401 && !isLoginPath(scopedPath)) {
     try {
       const newAccessToken = await refreshAdminAccessToken();
       headers.Authorization = `Bearer ${newAccessToken}`;
@@ -296,6 +320,7 @@ export const adminApiRequest = async (path, options = {}) => {
 };
 
 export const adminApiTextRequest = async (path, options = {}) => {
+  const scopedPath = resolveAdminScopedPath(path);
   const headers = {
     ...(options.headers || {}),
   };
@@ -306,7 +331,7 @@ export const adminApiTextRequest = async (path, options = {}) => {
   }
 
   const makeRequest = () =>
-    fetch(`${API_BASE}${path}`, {
+    fetch(`${API_BASE}${scopedPath}`, {
       ...options,
       credentials: "include",
       headers,
@@ -341,6 +366,7 @@ export const adminApiTextRequest = async (path, options = {}) => {
 };
 
 export const adminApiBlobRequest = async (path, options = {}) => {
+  const scopedPath = resolveAdminScopedPath(path);
   const headers = {
     ...(options.headers || {}),
   };
@@ -351,7 +377,7 @@ export const adminApiBlobRequest = async (path, options = {}) => {
   }
 
   const makeRequest = () =>
-    fetch(`${API_BASE}${path}`, {
+    fetch(`${API_BASE}${scopedPath}`, {
       ...options,
       credentials: "include",
       headers,
@@ -382,6 +408,100 @@ export const adminApiBlobRequest = async (path, options = {}) => {
   }
 
   return response.blob();
+};
+
+const parseBlobOrJsonResponse = async (response) => {
+  const contentType = response.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) {
+    return { kind: "json", data: await response.json().catch(() => ({})) };
+  }
+
+  const disposition = response.headers.get("content-disposition") || "";
+  const fileNameMatch = disposition.match(/filename="?([^"]+)"?/i);
+  return {
+    kind: "blob",
+    blob: await response.blob(),
+    fileName: fileNameMatch?.[1] || "resource",
+    contentType,
+  };
+};
+
+const throwFetchApiError = async (response) => {
+  const payloadText = await response.text();
+  let payload = {};
+  try {
+    payload = payloadText ? JSON.parse(payloadText) : {};
+  } catch {
+    payload = { message: payloadText || "API request failed" };
+  }
+  throw toApiError(payload, response.status, response.headers.get("retry-after"));
+};
+
+export const apiBlobOrJsonRequest = async (path, options = {}) => {
+  const headers = { ...(options.headers || {}) };
+  const accessToken = tokenStorage.getAccess();
+  if (accessToken) {
+    headers.Authorization = `Bearer ${accessToken}`;
+  }
+
+  const makeRequest = () =>
+    fetch(`${API_BASE}${path}`, {
+      ...options,
+      credentials: "include",
+      headers,
+    });
+
+  let response = await makeRequest();
+  if (response.status === 401) {
+    try {
+      const newAccessToken = await refreshAccessToken();
+      headers.Authorization = `Bearer ${newAccessToken}`;
+      response = await makeRequest();
+    } catch {
+      tokenStorage.clear();
+      throw new Error("Session expired. Please login again.");
+    }
+  }
+
+  if (!response.ok) {
+    await throwFetchApiError(response);
+  }
+
+  return parseBlobOrJsonResponse(response);
+};
+
+export const adminApiBlobOrJsonRequest = async (path, options = {}) => {
+  const scopedPath = resolveAdminScopedPath(path);
+  const headers = { ...(options.headers || {}) };
+  const accessToken = adminTokenStorage.getAccess();
+  if (accessToken) {
+    headers.Authorization = `Bearer ${accessToken}`;
+  }
+
+  const makeRequest = () =>
+    fetch(`${API_BASE}${scopedPath}`, {
+      ...options,
+      credentials: "include",
+      headers,
+    });
+
+  let response = await makeRequest();
+  if (response.status === 401) {
+    try {
+      const newAccessToken = await refreshAdminAccessToken();
+      headers.Authorization = `Bearer ${newAccessToken}`;
+      response = await makeRequest();
+    } catch {
+      adminTokenStorage.clear();
+      throw new Error("Session expired. Please login again.");
+    }
+  }
+
+  if (!response.ok) {
+    await throwFetchApiError(response);
+  }
+
+  return parseBlobOrJsonResponse(response);
 };
 
 export const superAdminApiRequest = async (path, options = {}) => {
@@ -476,6 +596,39 @@ export const superAdminApiBlobRequest = async (path, options = {}) => {
   return response.blob();
 };
 
+export const superAdminApiBlobOrJsonRequest = async (path, options = {}) => {
+  const headers = { ...(options.headers || {}) };
+  const accessToken = superAdminTokenStorage.getAccess();
+  if (accessToken) {
+    headers.Authorization = `Bearer ${accessToken}`;
+  }
+
+  const makeRequest = () =>
+    fetch(`${API_BASE}${path}`, {
+      ...options,
+      credentials: "include",
+      headers,
+    });
+
+  let response = await makeRequest();
+  if (response.status === 401) {
+    try {
+      const newAccessToken = await refreshSuperAdminAccessToken();
+      headers.Authorization = `Bearer ${newAccessToken}`;
+      response = await makeRequest();
+    } catch {
+      superAdminTokenStorage.clear();
+      throw new Error("Session expired. Please login again.");
+    }
+  }
+
+  if (!response.ok) {
+    await throwFetchApiError(response);
+  }
+
+  return parseBlobOrJsonResponse(response);
+};
+
 export const api = {
   login: (body) => apiRequest("/auth/login", { method: "POST", body: JSON.stringify(body) }),
   me: () => apiRequest("/auth/me"),
@@ -508,6 +661,11 @@ export const api = {
   getLeaderboard: (params = "") => apiRequest(`/leaderboard${params}`),
   getEvents: (params = "") => apiRequest(`/events${params}`),
   getProfile: () => apiRequest("/profile"),
+  getLearningResourceSubjects: (params = "") => apiRequest(`/resources/subjects${params}`),
+  getLearningResources: (params = "") => apiRequest(`/resources${params}`),
+  getLearningResource: (resourceId) => apiRequest(`/resources/${resourceId}`),
+  getPopularLearningResources: (params = "") => apiRequest(`/resources/popular${params}`),
+  downloadLearningResource: (resourceId) => apiBlobOrJsonRequest(`/resources/download/${resourceId}`),
   updateProfile: (body) => apiRequest("/profile", { method: "PATCH", body: JSON.stringify(body) }),
   changePassword: (body) =>
     apiRequest("/profile/password", {
@@ -555,6 +713,15 @@ export const adminApi = {
   importQuestionBank: (body) => adminApiRequest("/admin/question-bank/import", { method: "POST", body: JSON.stringify(body) }),
   exportQuestionBank: () => adminApiRequest("/admin/question-bank/export"),
   getDepartments: () => adminApiRequest("/admin/departments"),
+  createDepartment: (body) => adminApiRequest("/admin/departments", { method: "POST", body: JSON.stringify(body) }),
+  updateDepartment: (departmentId, body) => adminApiRequest(`/admin/departments/${departmentId}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deleteDepartment: (departmentId, body) => adminApiRequest(`/admin/departments/${departmentId}`, { method: "DELETE", body: JSON.stringify(body || {}) }),
+  getManagedAdmins: (params = "") => adminApiRequest(`/admin/admins${params}`),
+  createManagedAdmin: (body) => adminApiRequest("/admin/admins", { method: "POST", body: JSON.stringify(body) }),
+  updateManagedAdmin: (adminId, body) => adminApiRequest(`/admin/admins/${adminId}`, { method: "PATCH", body: JSON.stringify(body) }),
+  resetManagedAdminPassword: (adminId, body) => adminApiRequest(`/admin/admins/${adminId}/reset-password`, { method: "PATCH", body: JSON.stringify(body) }),
+  deactivateManagedAdmin: (adminId, body) => adminApiRequest(`/admin/admins/${adminId}`, { method: "DELETE", body: JSON.stringify(body || {}) }),
+  getCollegeAnalytics: () => adminApiRequest("/admin/analytics"),
   getBatches: () => adminApiRequest("/admin/batches"),
   getBatchDetail: (batchId) => adminApiRequest(`/admin/batches/${batchId}`),
   createBatch: (body) => adminApiRequest("/admin/batches", { method: "POST", body: JSON.stringify(body) }),
@@ -569,6 +736,7 @@ export const adminApi = {
   createStudent: (body) => adminApiRequest("/admin/students", { method: "POST", body: JSON.stringify(body) }),
   getStudentProfile: (studentId) => adminApiRequest(`/admin/students/${studentId}`),
   bulkImportStudents: (body) => adminApiRequest("/admin/students/bulk-import", { method: "POST", body: JSON.stringify(body) }),
+  promoteStudentsYear: (body) => adminApiRequest("/admin/students/promote-year", { method: "PATCH", body: JSON.stringify(body) }),
   getStudentImportJobStatus: (jobId) => adminApiRequest(`/admin/students/import-jobs/${jobId}`),
   assignStudentBatch: (studentId, body) => adminApiRequest(`/admin/students/${studentId}/assign-batch`, { method: "PATCH", body: JSON.stringify(body) }),
   getStudentPerformance: (studentId) => adminApiRequest(`/admin/students/${studentId}/performance`),
@@ -604,6 +772,25 @@ export const adminApi = {
   getSettings: () => adminApiRequest("/admin/settings"),
   updateSettings: (body) => adminApiRequest("/admin/settings", { method: "PATCH", body: JSON.stringify(body) }),
   changePassword: (body) => adminApiRequest("/admin/settings/password", { method: "PATCH", body: JSON.stringify(body) }),
+  getLearningResourceSubjects: (params = "") => adminApiRequest(`/admin/resources/subjects${params}`),
+  createLearningResourceSubject: (body) => adminApiRequest("/admin/resources/subjects", { method: "POST", body: JSON.stringify(body) }),
+  deleteLearningResourceSubject: (id) => adminApiRequest(`/admin/resources/subjects/${id}`, { method: "DELETE" }),
+  getLearningResources: (params = "") => adminApiRequest(`/admin/resources${params}`),
+  getLearningResource: (resourceId) => adminApiRequest(`/admin/resources/${resourceId}`),
+  uploadLearningResource: (body) =>
+    adminApiRequest("/admin/resources/upload", {
+      method: "POST",
+      body: isFormDataBody(body) ? body : JSON.stringify(body),
+    }),
+  updateLearningResource: (resourceId, body) =>
+    adminApiRequest(`/admin/resources/${resourceId}`, {
+      method: "PUT",
+      body: isFormDataBody(body) ? body : JSON.stringify(body),
+    }),
+  deleteLearningResource: (resourceId) => adminApiRequest(`/admin/resources/${resourceId}`, { method: "DELETE" }),
+  getLearningResourceAnalytics: (params = "") => adminApiRequest(`/admin/resources/analytics${params}`),
+  getPopularLearningResources: (params = "") => adminApiRequest(`/admin/resources/popular${params}`),
+  downloadLearningResource: (resourceId) => adminApiBlobOrJsonRequest(`/admin/resources/download/${resourceId}`),
 };
 
 export const superAdminApi = {
@@ -631,6 +818,7 @@ export const superAdminApi = {
   createStudent: (body) => superAdminApiRequest("/super-admin/students", { method: "POST", body: JSON.stringify(body) }),
   bulkImportStudents: (body) => superAdminApiRequest("/super-admin/students/bulk-import", { method: "POST", body: JSON.stringify(body) }),
   getStudentImportJobStatus: (jobId) => superAdminApiRequest(`/super-admin/students/import-jobs/${jobId}`),
+  promoteStudentsYear: (body) => superAdminApiRequest(`/super-admin/students/promote-year`, { method: "PATCH", body: JSON.stringify(body) }),
   updateStudentStatus: (studentId, body) => superAdminApiRequest(`/super-admin/students/${studentId}/status`, { method: "PATCH", body: JSON.stringify(body) }),
   resetStudentPassword: (studentId) => superAdminApiRequest(`/super-admin/students/${studentId}/reset-password`, { method: "PATCH", body: JSON.stringify({}) }),
   updateStudent: (studentId, body) => superAdminApiRequest(`/super-admin/students/${studentId}`, { method: "PATCH", body: JSON.stringify(body) }),
@@ -688,4 +876,23 @@ export const superAdminApi = {
   deleteQuestionBankItem: (id) => superAdminApiRequest(`/super-admin/question-bank/${id}`, { method: "DELETE" }),
   importQuestionBank: (body) => superAdminApiRequest("/super-admin/question-bank/import", { method: "POST", body: JSON.stringify(body) }),
   exportQuestionBank: () => superAdminApiRequest("/super-admin/question-bank/export"),
+  getLearningResourceSubjects: (params = "") => superAdminApiRequest(`/super-admin/resources/subjects${params}`),
+  createLearningResourceSubject: (body) => superAdminApiRequest("/super-admin/resources/subjects", { method: "POST", body: JSON.stringify(body) }),
+  deleteLearningResourceSubject: (id) => superAdminApiRequest(`/super-admin/resources/subjects/${id}`, { method: "DELETE" }),
+  getLearningResources: (params = "") => superAdminApiRequest(`/super-admin/resources${params}`),
+  getLearningResource: (resourceId) => superAdminApiRequest(`/super-admin/resources/${resourceId}`),
+  uploadLearningResource: (body) =>
+    superAdminApiRequest("/super-admin/resources/upload", {
+      method: "POST",
+      body: isFormDataBody(body) ? body : JSON.stringify(body),
+    }),
+  updateLearningResource: (resourceId, body) =>
+    superAdminApiRequest(`/super-admin/resources/${resourceId}`, {
+      method: "PUT",
+      body: isFormDataBody(body) ? body : JSON.stringify(body),
+    }),
+  deleteLearningResource: (resourceId) => superAdminApiRequest(`/super-admin/resources/${resourceId}`, { method: "DELETE" }),
+  getLearningResourceAnalytics: (params = "") => superAdminApiRequest(`/super-admin/resources/analytics${params}`),
+  getPopularLearningResources: (params = "") => superAdminApiRequest(`/super-admin/resources/popular${params}`),
+  downloadLearningResource: (resourceId) => superAdminApiBlobOrJsonRequest(`/super-admin/resources/download/${resourceId}`),
 };

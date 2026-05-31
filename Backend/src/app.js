@@ -36,6 +36,8 @@ const adminReportsRoutes = require("./routes/Admin/reports.routes");
 const adminJobsRoutes = require("./routes/Admin/jobs.routes");
 const adminSearchRoutes = require("./routes/Admin/search.routes");
 const adminSettingsRoutes = require("./routes/Admin/settings.routes");
+const adminAdminsRoutes = require("./routes/Admin/admins.routes");
+const adminAnalyticsRoutes = require("./routes/Admin/analytics.routes");
 const superAdminAuthRoutes = require("./routes/SuperAdmin/auth.routes");
 const superAdminDashboardRoutes = require("./routes/SuperAdmin/dashboard.routes");
 const superAdminCollegesRoutes = require("./routes/SuperAdmin/colleges.routes");
@@ -51,27 +53,52 @@ const superAdminSettingsRoutes = require("./routes/SuperAdmin/settings.routes");
 const superAdminHealthRoutes = require("./routes/SuperAdmin/health.routes");
 const superAdminQuestionBankRoutes = require("./routes/SuperAdmin/question-bank.routes");
 const superAdminSubjectsRoutes = require("./routes/SuperAdmin/subjects.routes");
+const { createResourcesRouter } = require("./modules/resources/routes/resources.routes");
 const { recordApiMetric } = require("./services/api-metrics.service");
 const { createRateLimiter, authKeyByIp } = require("./middleware/rate-limit");
+const { requestIdMiddleware } = require("./middleware/request-id");
+const { metricsAuth } = require("./middleware/metrics-auth");
 const { createResponseCache, createResponseCacheInvalidationHook } = require("./middleware/response-cache");
 const { notFound, errorHandler } = require("./middleware/error-handler");
 const { setupCompleteValidationSystem } = require("./config/validation-integration.setup");
 const { getDb } = require("./utils/db");
+const { asyncHandler } = require("./utils/http");
+const { getPrometheusMetrics } = require("./services/prometheus-metrics.service");
+const {
+  authenticateCollegeAdmin,
+  authenticatePlatformAdmin,
+  authenticateStudent,
+  authenticateSuperAdmin,
+} = require("./middleware/auth");
 
 const app = express();
 app.set("trust proxy", 1);
 
-const authStrictLimiter = isRateLimitDisabled
-  ? createRateLimiter({ scope: "noop", windowMs: 1, max: 999999999, skip: () => true })
-  : createRateLimiter({
-      scope: "auth-login",
-      routeLabel: "/api/*/auth/login",
-      windowMs: env.rateLimit.authLoginWindowMs,
-      max: env.rateLimit.authLoginMax,
-      keySelector: authKeyByIp,
-      failOpen: false,
-      message: "Too many login attempts. Try again in a few minutes.",
-    });
+morgan.token("request-id", (req) => req.id || "-");
+
+const studentResourcesRoutes = createResourcesRouter();
+const adminResourcesRoutes = createResourcesRouter({ managementEnabled: true, analyticsEnabled: true });
+const collegeAdminResourcesRoutes = createResourcesRouter({ managementEnabled: true, analyticsEnabled: true });
+const superAdminResourcesRoutes = createResourcesRouter({ managementEnabled: true, analyticsEnabled: true });
+const superAdminResourcesAliasRoutes = createResourcesRouter({ managementEnabled: true, analyticsEnabled: true });
+
+const createAuthLoginLimiter = (scopeSuffix, routeLabel) =>
+  isRateLimitDisabled
+    ? createRateLimiter({ scope: "noop", windowMs: 1, max: 999999999, skip: () => true })
+    : createRateLimiter({
+        scope: `auth-login:${scopeSuffix}`,
+        routeLabel,
+        windowMs: env.rateLimit.authLoginWindowMs,
+        max: env.rateLimit.authLoginMax,
+        keySelector: authKeyByIp,
+        failOpen: false,
+        message: "Too many login attempts. Try again in a few minutes.",
+      });
+
+const authLoginLimiter = createAuthLoginLimiter("student", "/api/auth/login");
+const adminAuthLoginLimiter = createAuthLoginLimiter("admin", "/api/admin/auth/login");
+const collegeAdminAuthLoginLimiter = createAuthLoginLimiter("college-admin", "/api/college-admin/auth/login");
+const superAdminAuthLoginLimiter = createAuthLoginLimiter("super-admin", "/api/super-admin/auth/login");
 
 
 const authRefreshLimiter = isRateLimitDisabled
@@ -92,6 +119,20 @@ const authRefreshLimiter = isRateLimitDisabled
     });
 
 
+const getApiRelativePath = (req) =>
+  String(req.originalUrl || req.path || "")
+    .split("?")[0]
+    .replace(/^\/api(?=\/|$)/, "") || "/";
+
+const shouldSkipGeneralApiLimit = (req) => {
+  const path = getApiRelativePath(req);
+  return (
+    path === "/health" ||
+    /^\/(?:admin\/|college-admin\/|super-admin\/|superadmin\/)?auth\//.test(path) ||
+    path.startsWith("/super-admin/") ||
+    path.startsWith("/superadmin/")
+  );
+};
 
 const generalApiLimiter = isRateLimitDisabled
   ? createRateLimiter({
@@ -105,20 +146,101 @@ const generalApiLimiter = isRateLimitDisabled
       routeLabel: "/api/*",
       windowMs: env.rateLimit.generalApiWindowMs,
       max: env.rateLimit.generalApiMax,
-      skip: (req) => req.path === "/health",
+      skip: shouldSkipGeneralApiLimit,
       message: "Too many requests. Please slow down and try again.",
     });
 
+const collegeAdminApiLimiter = isRateLimitDisabled
+  ? createRateLimiter({
+      scope: "noop",
+      windowMs: 1,
+      max: 999999999,
+      skip: () => true,
+    })
+  : createRateLimiter({
+      scope: "college-admin-api",
+      routeLabel: "/api/college-admin/*",
+      windowMs: env.rateLimit.collegeAdminApiWindowMs,
+      max: env.rateLimit.collegeAdminApiMax,
+      skip: (req) =>
+        req.path.startsWith("/api/college-admin/auth/login") ||
+        req.path.startsWith("/api/college-admin/auth/refresh"),
+      message: "College admin API is rate limited. Please retry shortly.",
+    });
 
+const superAdminApiLimiter = isRateLimitDisabled
+  ? createRateLimiter({
+      scope: "noop",
+      windowMs: 1,
+      max: 999999999,
+      skip: () => true,
+    })
+  : createRateLimiter({
+      scope: "super-admin-api",
+      routeLabel: "/api/super-admin/*",
+      windowMs: env.rateLimit.superAdminApiWindowMs,
+      max: env.rateLimit.superAdminApiMax,
+      skip: (req) => {
+        const path = getApiRelativePath(req);
+        return /^\/(?:super-admin|superadmin)\/auth\/(?:login|refresh)$/.test(path);
+      },
+      message: "Super admin API is rate limited. Please retry shortly.",
+    });
 
-const adminReportsCache = createResponseCache({
+const normalizeQueryParams = (query = {}) =>
+  Object.keys(query)
+    .sort()
+    .reduce((accumulator, key) => {
+      accumulator[key] = query[key];
+      return accumulator;
+    }, {});
+
+const buildCollegeAdminCacheKey = (req) =>
+  JSON.stringify({
+    path: String(req.originalUrl || "").split("?")[0],
+    query: normalizeQueryParams(req.query || {}),
+    adminId: req.admin?.id || null,
+    collegeId: req.admin?.collegeId || req.collegeId || null,
+    departmentId: req.admin?.departmentId || null,
+    role: req.admin?.role || null,
+    permissions: Array.isArray(req.admin?.permissions) ? [...req.admin.permissions].sort() : [],
+    accessProfile: req.admin?.accessProfile || null,
+  });
+
+const createCollegeAdminCache = ({ scope, ttlSeconds, tagPrefix }) =>
+  createResponseCache({
+    scope,
+    enabled: env.responseCache.enabled,
+    ttlSeconds,
+    keyBuilder: buildCollegeAdminCacheKey,
+    tagsBuilder: (req) => [
+      `${tagPrefix}:all`,
+      req.admin?.collegeId ? `${tagPrefix}:college:${req.admin.collegeId}` : null,
+    ],
+  });
+
+const adminReportsCache = createCollegeAdminCache({
   scope: "admin-reports",
-  enabled: env.responseCache.enabled,
   ttlSeconds: env.responseCache.adminReportsTtlSeconds,
-  tagsBuilder: (req) => [
-    "admin-reports:all",
-    req.admin?.collegeId ? `admin-reports:college:${req.admin.collegeId}` : null,
-  ],
+  tagPrefix: "admin-reports",
+});
+
+const adminAnalyticsCache = createCollegeAdminCache({
+  scope: "admin-analytics",
+  ttlSeconds: env.responseCache.adminAnalyticsTtlSeconds,
+  tagPrefix: "admin-analytics",
+});
+
+const adminCollectionCache = createCollegeAdminCache({
+  scope: "admin-collections",
+  ttlSeconds: env.responseCache.adminCollectionsTtlSeconds,
+  tagPrefix: "admin-collections",
+});
+
+const adminSettingsCache = createCollegeAdminCache({
+  scope: "admin-settings",
+  ttlSeconds: env.responseCache.adminCollectionsTtlSeconds,
+  tagPrefix: "admin-settings",
 });
 
 const superAnalyticsCache = createResponseCache({
@@ -154,6 +276,7 @@ const adminDashboardCache = createResponseCache({
   scope: "admin-dashboard",
   enabled: env.responseCache.enabled,
   ttlSeconds: env.responseCache.adminDashboardTtlSeconds,
+  keyBuilder: buildCollegeAdminCacheKey,
   tagsBuilder: (req) => [
     "admin-dashboard:all",
     req.admin?.collegeId ? `admin-dashboard:college:${req.admin.collegeId}` : null,
@@ -167,7 +290,7 @@ const superDashboardCache = createResponseCache({
   tagsBuilder: () => ["super-dashboard:all"],
 });
 
-// Cache system health checks for 15s — prevents redundant DB/Redis/disk
+// Cache system health checks for 15s - prevents redundant DB/Redis/disk
 // probes when multiple super admins have the dashboard open.
 const systemHealthCache = createResponseCache({
   scope: "system-health",
@@ -176,8 +299,39 @@ const systemHealthCache = createResponseCache({
   tagsBuilder: () => ["system-health:all"],
 });
 
+const buildCoreHealthSnapshot = async () => {
+  const checks = {};
+  try {
+    const database = await getDb();
+    await database.college.count();
+    checks.mongodb = "ok";
+  } catch {
+    checks.mongodb = "down";
+  }
+
+  const redisHealth = await getRedisHealthSnapshot();
+  checks.redis = redisHealth.status;
+
+  const ready = checks.mongodb === "ok" && checks.redis !== "down";
+  return {
+    ready,
+    body: {
+      status: ready ? "ok" : "degraded",
+      checks,
+      redis: {
+        configured: redisHealth.configured,
+        available: redisHealth.available,
+        latencyMs: redisHealth.latencyMs,
+        error: redisHealth.error,
+      },
+      uptime: Math.floor(process.uptime()),
+    },
+  };
+};
+
 const allowedOrigins = env.frontendOrigins || [env.frontendOrigin].filter(Boolean);
 
+app.use(requestIdMiddleware);
 app.use(
   cors({
     origin(origin, callback) {
@@ -191,7 +345,16 @@ app.use(
 );
 app.use(helmet());
 app.use(compression());
-app.use(morgan("dev"));
+app.use(
+  morgan(
+    env.nodeEnv === "production"
+      ? ':remote-addr - :method :url :status :res[content-length] ":referrer" ":user-agent" :response-time ms request_id=:request-id'
+      : "dev",
+    {
+      skip: (req) => ["/api/live", "/api/ready", "/api/health"].includes(req.path),
+    }
+  )
+);
 app.use(express.json({ limit: env.requestBodyLimit }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
@@ -209,36 +372,87 @@ app.use((req, res, next) => {
   next();
 });
 
+app.get("/api/live", (_req, res) => {
+  res.status(200).json({
+    status: "ok",
+    uptime: Math.floor(process.uptime()),
+  });
+});
+
+app.get("/api/ready", asyncHandler(async (_req, res) => {
+  const snapshot = await buildCoreHealthSnapshot();
+  res.status(snapshot.ready ? 200 : 503).json(snapshot.body);
+}));
+
+app.get("/api/health", asyncHandler(async (_req, res) => {
+  const snapshot = await buildCoreHealthSnapshot();
+  res.status(snapshot.ready ? 200 : 503).json(snapshot.body);
+}));
+
+app.get("/api/metrics", metricsAuth, asyncHandler(async (_req, res) => {
+  const metrics = await getPrometheusMetrics();
+  res.setHeader("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
+  res.status(200).send(metrics);
+}));
+
 app.use("/api", generalApiLimiter);
 
-app.use("/api/auth/login", authStrictLimiter);
-app.use("/api/admin/auth/login", authStrictLimiter);
-app.use("/api/super-admin/auth/login", authStrictLimiter);
-app.use("/api/superadmin/auth/login", authStrictLimiter);
+app.use("/api/auth/login", authLoginLimiter);
+app.use("/api/admin/auth/login", adminAuthLoginLimiter);
+app.use("/api/college-admin/auth/login", collegeAdminAuthLoginLimiter);
+app.use("/api/super-admin/auth/login", superAdminAuthLoginLimiter);
+app.use("/api/superadmin/auth/login", superAdminAuthLoginLimiter);
 
 app.use("/api/auth/refresh", authRefreshLimiter);
 app.use("/api/admin/auth/refresh", authRefreshLimiter);
+app.use("/api/college-admin/auth/refresh", authRefreshLimiter);
 app.use("/api/super-admin/auth/refresh", authRefreshLimiter);
 app.use("/api/superadmin/auth/refresh", authRefreshLimiter);
+app.use("/api/college-admin", collegeAdminApiLimiter);
+app.use("/api/super-admin", superAdminApiLimiter);
+app.use("/api/superadmin", superAdminApiLimiter);
 
-app.use("/api/admin/reports/summary", adminReportsCache);
-app.use("/api/admin/reports/charts", adminReportsCache);
-app.use("/api/admin/reports/table", adminReportsCache);
-app.use("/api/admin/reports/analytics", adminReportsCache);
-app.use("/api/admin/reports/student/:studentId", adminReportsCache);
-app.use("/api/super-admin/analytics", superAnalyticsCache);
-app.use("/api/superadmin/analytics", superAnalyticsCache);
-app.use("/api/dashboard/summary", studentDashboardCache);
-app.use("/api/tests/ongoing", studentTestsCache);
-app.use("/api/tests/upcoming", studentTestsCache);
-app.use("/api/admin/dashboard/summary", adminDashboardCache);
-app.use("/api/super-admin/dashboard/summary", superDashboardCache);
-app.use("/api/superadmin/dashboard/summary", superDashboardCache);
-app.use("/api/super-admin/system/health", systemHealthCache);
-app.use("/api/superadmin/system/health", systemHealthCache);
+app.use("/api/admin/dashboard/summary", authenticatePlatformAdmin, adminDashboardCache);
+app.use("/api/admin/analytics", authenticatePlatformAdmin, adminAnalyticsCache);
+app.use("/api/admin/reports", authenticatePlatformAdmin, adminReportsCache);
+app.use("/api/admin/settings", authenticatePlatformAdmin, adminSettingsCache);
+app.use("/api/admin/tests", authenticatePlatformAdmin, adminCollectionCache);
+app.use("/api/admin/question-bank", authenticatePlatformAdmin, adminCollectionCache);
+app.use("/api/admin/questions", authenticatePlatformAdmin, adminCollectionCache);
+app.use("/api/admin/subjects", authenticatePlatformAdmin, adminCollectionCache);
+app.use("/api/admin/students", authenticatePlatformAdmin, adminCollectionCache);
+app.use("/api/admin/departments", authenticatePlatformAdmin, adminCollectionCache);
+app.use("/api/admin/batches", authenticatePlatformAdmin, adminCollectionCache);
+app.use("/api/admin/events", authenticatePlatformAdmin, adminCollectionCache);
+app.use("/api/admin/admins", authenticatePlatformAdmin, adminCollectionCache);
+
+app.use("/api/college-admin/dashboard/summary", authenticateCollegeAdmin, adminDashboardCache);
+app.use("/api/college-admin/analytics", authenticateCollegeAdmin, adminAnalyticsCache);
+app.use("/api/college-admin/reports", authenticateCollegeAdmin, adminReportsCache);
+app.use("/api/college-admin/settings", authenticateCollegeAdmin, adminSettingsCache);
+app.use("/api/college-admin/tests", authenticateCollegeAdmin, adminCollectionCache);
+app.use("/api/college-admin/question-bank", authenticateCollegeAdmin, adminCollectionCache);
+app.use("/api/college-admin/questions", authenticateCollegeAdmin, adminCollectionCache);
+app.use("/api/college-admin/subjects", authenticateCollegeAdmin, adminCollectionCache);
+app.use("/api/college-admin/students", authenticateCollegeAdmin, adminCollectionCache);
+app.use("/api/college-admin/departments", authenticateCollegeAdmin, adminCollectionCache);
+app.use("/api/college-admin/batches", authenticateCollegeAdmin, adminCollectionCache);
+app.use("/api/college-admin/events", authenticateCollegeAdmin, adminCollectionCache);
+app.use("/api/college-admin/admins", authenticateCollegeAdmin, adminCollectionCache);
+
+app.use("/api/super-admin/analytics", authenticateSuperAdmin, superAnalyticsCache);
+app.use("/api/superadmin/analytics", authenticateSuperAdmin, superAnalyticsCache);
+app.use("/api/dashboard/summary", authenticateStudent, studentDashboardCache);
+app.use("/api/tests/ongoing", authenticateStudent, studentTestsCache);
+app.use("/api/tests/upcoming", authenticateStudent, studentTestsCache);
+app.use("/api/super-admin/dashboard/summary", authenticateSuperAdmin, superDashboardCache);
+app.use("/api/superadmin/dashboard/summary", authenticateSuperAdmin, superDashboardCache);
+app.use("/api/super-admin/system/health", authenticateSuperAdmin, systemHealthCache);
+app.use("/api/superadmin/system/health", authenticateSuperAdmin, systemHealthCache);
 
 app.use("/api/auth", studentAuthRoutes);
 app.use("/api/admin/auth", adminAuthRoutes);
+app.use("/api/college-admin/auth", adminAuthRoutes);
 app.use("/api/super-admin/auth", superAdminAuthRoutes);
 app.use("/api/superadmin/auth", superAdminAuthRoutes);
 
@@ -264,6 +478,30 @@ app.use((req, res, next) => {
     "/api/reports",
     "/api/admin/dashboard",
     "/api/admin/reports",
+    "/api/admin/analytics",
+    "/api/admin/settings",
+    "/api/admin/tests",
+    "/api/admin/question-bank",
+    "/api/admin/questions",
+    "/api/admin/subjects",
+    "/api/admin/students",
+    "/api/admin/departments",
+    "/api/admin/batches",
+    "/api/admin/events",
+    "/api/admin/admins",
+    "/api/college-admin/dashboard",
+    "/api/college-admin/reports",
+    "/api/college-admin/analytics",
+    "/api/college-admin/settings",
+    "/api/college-admin/tests",
+    "/api/college-admin/question-bank",
+    "/api/college-admin/questions",
+    "/api/college-admin/subjects",
+    "/api/college-admin/students",
+    "/api/college-admin/departments",
+    "/api/college-admin/batches",
+    "/api/college-admin/events",
+    "/api/college-admin/admins",
     "/api/super-admin/dashboard",
     "/api/super-admin/analytics",
     "/api/superadmin/dashboard",
@@ -277,33 +515,6 @@ app.use((req, res, next) => {
   return next();
 });
 
-app.get("/api/health", async (_req, res) => {
-  const checks = {};
-  try {
-    const database = await getDb();
-    await database.college.count();
-    checks.mongodb = "ok";
-  } catch {
-    checks.mongodb = "down";
-  }
-
-  const redisHealth = await getRedisHealthSnapshot();
-  checks.redis = redisHealth.status;
-
-  const healthy = checks.mongodb === "ok" && checks.redis !== "down";
-  res.status(healthy ? 200 : 503).json({
-    status: healthy ? "ok" : "degraded",
-    checks,
-    redis: {
-      configured: redisHealth.configured,
-      available: redisHealth.available,
-      latencyMs: redisHealth.latencyMs,
-      error: redisHealth.error,
-    },
-    uptime: Math.floor(process.uptime()),
-  });
-});
-
 app.use("/api/dashboard", studentDashboardRoutes);
 app.use("/api/tests", studentTestsRoutes);
 app.use("/api", studentTestsCompatRoutes);
@@ -312,6 +523,7 @@ app.use("/api/reports", studentReportsRoutes);
 app.use("/api/leaderboard", studentLeaderboardRoutes);
 app.use("/api/profile", studentProfileRoutes);
 app.use("/api/students/me", studentMeRoutes);
+app.use("/api/resources", authenticateStudent, studentResourcesRoutes);
 
 app.use("/api/admin/dashboard", adminDashboardRoutes);
 app.use("/api/admin/tests", adminTestsRoutes);
@@ -326,6 +538,26 @@ app.use("/api/admin/reports", adminReportsRoutes);
 app.use("/api/admin/jobs", adminJobsRoutes);
 app.use("/api/admin/search", adminSearchRoutes);
 app.use("/api/admin/settings", adminSettingsRoutes);
+app.use("/api/admin/admins", adminAdminsRoutes);
+app.use("/api/admin/analytics", adminAnalyticsRoutes);
+app.use("/api/admin/resources", authenticatePlatformAdmin, adminResourcesRoutes);
+
+app.use("/api/college-admin/dashboard", authenticateCollegeAdmin, adminDashboardCache, adminDashboardRoutes);
+app.use("/api/college-admin/tests", authenticateCollegeAdmin, adminCollectionCache, adminTestsRoutes);
+app.use("/api/college-admin/question-bank", authenticateCollegeAdmin, adminCollectionCache, adminQuestionBankRoutes);
+app.use("/api/college-admin/questions", authenticateCollegeAdmin, adminCollectionCache, adminQuestionBankRoutes);
+app.use("/api/college-admin/subjects", authenticateCollegeAdmin, adminCollectionCache, adminSubjectsRoutes);
+app.use("/api/college-admin/students", authenticateCollegeAdmin, adminCollectionCache, adminStudentsRoutes);
+app.use("/api/college-admin/departments", authenticateCollegeAdmin, adminCollectionCache, adminDepartmentsRoutes);
+app.use("/api/college-admin/batches", authenticateCollegeAdmin, adminCollectionCache, adminBatchesRoutes);
+app.use("/api/college-admin/events", authenticateCollegeAdmin, adminCollectionCache, adminEventsRoutes);
+app.use("/api/college-admin/reports", authenticateCollegeAdmin, adminReportsCache, adminReportsRoutes);
+app.use("/api/college-admin/jobs", authenticateCollegeAdmin, adminCollectionCache, adminJobsRoutes);
+app.use("/api/college-admin/search", authenticateCollegeAdmin, adminCollectionCache, adminSearchRoutes);
+app.use("/api/college-admin/settings", authenticateCollegeAdmin, adminSettingsCache, adminSettingsRoutes);
+app.use("/api/college-admin/admins", authenticateCollegeAdmin, adminCollectionCache, adminAdminsRoutes);
+app.use("/api/college-admin/analytics", authenticateCollegeAdmin, adminAnalyticsCache, adminAnalyticsRoutes);
+app.use("/api/college-admin/resources", authenticateCollegeAdmin, collegeAdminResourcesRoutes);
 
 app.use("/api/super-admin/dashboard", superAdminDashboardRoutes);
 app.use("/api/super-admin/colleges", superAdminCollegesRoutes);
@@ -343,6 +575,7 @@ app.use("/api/super-admin/system", superAdminHealthRoutes);
 app.use("/api/super-admin/question-bank", superAdminQuestionBankRoutes);
 app.use("/api/super-admin/questions", superAdminQuestionBankRoutes);
 app.use("/api/super-admin/subjects", superAdminSubjectsRoutes);
+app.use("/api/super-admin/resources", authenticateSuperAdmin, superAdminResourcesRoutes);
 
 // Endpoint aliases for clients that use /superadmin instead of /super-admin.
 app.use("/api/superadmin/auth", superAdminAuthRoutes);
@@ -362,6 +595,7 @@ app.use("/api/superadmin/system", superAdminHealthRoutes);
 app.use("/api/superadmin/question-bank", superAdminQuestionBankRoutes);
 app.use("/api/superadmin/questions", superAdminQuestionBankRoutes);
 app.use("/api/superadmin/subjects", superAdminSubjectsRoutes);
+app.use("/api/superadmin/resources", authenticateSuperAdmin, superAdminResourcesAliasRoutes);
 
 setupCompleteValidationSystem(app);
 

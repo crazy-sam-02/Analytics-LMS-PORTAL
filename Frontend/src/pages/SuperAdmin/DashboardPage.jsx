@@ -10,6 +10,7 @@ const healthTone = {
   ok: "text-success bg-success/10 border-success/30",
   degraded: "text-warning bg-warning/10 border-warning/30",
   down: "text-danger bg-danger/10 border-danger/30",
+  disabled: "text-text-secondary bg-muted border-border",
 };
 
 export default function SuperAdminDashboardPage() {
@@ -42,7 +43,9 @@ export default function SuperAdminDashboardPage() {
     {
       label: "Redis",
       status: health?.redis?.status || "down",
-      detail: `Hit rate ${(Number(health?.redis?.hit_rate || 0) * 100).toFixed(0)}%`,
+      detail: health?.redis?.configured === false
+        ? "Not configured"
+        : `Hit rate ${(Number(health?.redis?.hit_rate || 0) * 100).toFixed(0)}%`,
     },
     {
       label: "Job Queue",
@@ -146,6 +149,7 @@ export default function SuperAdminDashboardPage() {
           <p className="text-xs text-text-secondary">Last checked: {health?.checked_at ? new Date(health.checked_at).toLocaleString() : "-"}</p>
         </CardContent>
       </Card>
+
     </div>
   );
 }

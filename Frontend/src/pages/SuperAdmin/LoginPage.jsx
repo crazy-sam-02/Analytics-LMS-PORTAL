@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Eye, EyeOff, Globe2, Lock, ShieldCheck, UserRound } from "lucide-react";
+import { Eye, EyeOff, Globe2, Lock, ShieldCheck, User } from "lucide-react";
 import { useDispatch, useSelector } from "react-redux";
 import { Navigate } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
@@ -96,7 +96,7 @@ export default function SuperAdminLoginPage() {
               <div>
                 <label className="mb-2.5 block text-xs font-bold tracking-wide text-slate-600 uppercase">Super Admin Email</label>
                 <div className="flex h-14 items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 shadow-[0_1px_2px_rgba(15,23,42,0.04),inset_0_1px_0_rgba(255,255,255,0.9)] transition focus-within:border-blue-500 focus-within:shadow-[0_0_0_4px_rgba(37,99,235,0.10)]">
-                  <UserRound className="size-5 text-slate-500" />
+                  <User className="size-5 text-slate-500" />
                   <Input
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}

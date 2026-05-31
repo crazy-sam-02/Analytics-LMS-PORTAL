@@ -5,13 +5,15 @@ const { getSubmissionScorePercent } = require("../../utils/score");
 const getSuperAdminDashboard = asyncHandler(async (_req, res) => {
   const db = await getDb();
   const now = new Date();
+  const activeWindowStart = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const chartWindowStart = new Date(now.getTime() - 13 * 24 * 60 * 60 * 1000);
 
   const [
     totalColleges,
     totalAdmins,
     totalStudents,
     totalTests,
-    activeUsers,
+    activeSessions,
     submissions,
     collegePerformance,
   ] = await Promise.all([
@@ -19,10 +21,14 @@ const getSuperAdminDashboard = asyncHandler(async (_req, res) => {
     db.admin.count({ where: { isActive: true } }),
     db.student.count({ where: { isActive: true } }),
     db.test.count(),
-    db.submission.count({
+    db.testSession.findMany({
       where: {
-        status: { in: ["IN_PROGRESS", "SUBMITTED", "AUTO_SUBMITTED"] },
-        updatedAt: { gte: new Date(now.getTime() - 24 * 60 * 60 * 1000) },
+        endedAt: null,
+        lastHeartbeatAt: { gte: chartWindowStart },
+      },
+      select: {
+        userId: true,
+        lastHeartbeatAt: true,
       },
     }),
     db.submission.findMany({
@@ -52,21 +58,42 @@ const getSuperAdminDashboard = asyncHandler(async (_req, res) => {
     }),
   ]);
 
-  const dailyMap = new Map();
+  const activeDailyMap = new Map();
+  const participationMap = new Map();
   for (let i = 13; i >= 0; i -= 1) {
     const d = new Date(now);
     d.setDate(now.getDate() - i);
     const key = d.toISOString().slice(0, 10);
-    dailyMap.set(key, 0);
+    activeDailyMap.set(key, new Set());
+    participationMap.set(key, 0);
   }
+
+  activeSessions.forEach((session) => {
+    if (!session.userId || !session.lastHeartbeatAt) return;
+
+    const heartbeatAt = new Date(session.lastHeartbeatAt);
+    if (Number.isNaN(heartbeatAt.getTime())) return;
+
+    const key = heartbeatAt.toISOString().slice(0, 10);
+    const dayUsers = activeDailyMap.get(key);
+    if (dayUsers) {
+      dayUsers.add(String(session.userId));
+    }
+  });
 
   submissions.forEach((item) => {
     if (!item.submittedAt) return;
     const key = item.submittedAt.toISOString().slice(0, 10);
-    if (dailyMap.has(key)) {
-      dailyMap.set(key, dailyMap.get(key) + 1);
+    if (participationMap.has(key)) {
+      participationMap.set(key, participationMap.get(key) + 1);
     }
   });
+
+  const activeUsers = new Set(
+    activeSessions
+      .filter((session) => session.userId && session.lastHeartbeatAt && new Date(session.lastHeartbeatAt) >= activeWindowStart)
+      .map((session) => String(session.userId))
+  ).size;
 
   const collegeWisePerformance = collegePerformance.map((college) => {
     const participantCount = college.submissions.length;
@@ -91,8 +118,8 @@ const getSuperAdminDashboard = asyncHandler(async (_req, res) => {
       activeUsers,
     },
     charts: {
-      dailyActiveUsers: Array.from(dailyMap.entries()).map(([day, users]) => ({ day, users })),
-      testParticipationTrend: Array.from(dailyMap.entries()).map(([day, count]) => ({ day, count })),
+      dailyActiveUsers: Array.from(activeDailyMap.entries()).map(([day, users]) => ({ day, users: users.size })),
+      testParticipationTrend: Array.from(participationMap.entries()).map(([day, count]) => ({ day, count })),
       collegeWisePerformance,
     },
   });

@@ -16,6 +16,8 @@ try {
 let superReportQueue = null;
 let superReportWorker = null;
 const queueConnection = getRedisQueueConnection();
+const DEFAULT_RECOVERY_LIMIT = 25;
+const STALE_PROCESSING_MS = 15 * 60 * 1000;
 
 const getDbClient = async () => {
   const m = await models.init();
@@ -25,6 +27,7 @@ const getDbClient = async () => {
 const toPercent = (value) => clampPercent(value);
 const getScorePercent = getSubmissionScorePercent;
 const getStudentNumber = (student = {}) => student.enrollNumber || student.enrollmentNumber || student.studentId || "-";
+const SUBMITTED_STATUSES = ["SUBMITTED", "AUTO_SUBMITTED"];
 
 const getSubjectStatus = (avgScore) => {
   if (avgScore < 50) return "Needs Attention";
@@ -48,6 +51,26 @@ const getDepartmentBatchIds = async (db, filters = {}) => {
     select: { id: true },
   });
   return batches.map((batch) => batch.id);
+};
+
+const buildSubmissionDateFilter = (filters = {}) => {
+  const range = {};
+  if (filters.dateFrom) {
+    range.gte = new Date(filters.dateFrom);
+  }
+  if (filters.dateTo) {
+    range.lte = new Date(filters.dateTo);
+  }
+  return Object.keys(range).length > 0 ? range : null;
+};
+
+const buildSubmittedSubmissionWhere = (filters = {}, extra = {}) => {
+  const dateFilter = buildSubmissionDateFilter(filters);
+  return {
+    status: { in: SUBMITTED_STATUSES },
+    ...(dateFilter ? { submittedAt: dateFilter } : {}),
+    ...extra,
+  };
 };
 
 const buildTestWhere = (filters = {}, departmentBatchIds = []) => ({
@@ -100,12 +123,11 @@ const buildDepartmentAcademicPayload = async (db, filters = {}) => {
       },
     }),
     db.submission.findMany({
-      where: {
+      where: buildSubmittedSubmissionWhere(filters, {
         ...(filters.collegeId ? { collegeId: filters.collegeId } : {}),
         ...(filters.testId ? { testId: filters.testId } : {}),
-        status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
         ...(filters.departmentId ? { user: { departmentId: filters.departmentId } } : {}),
-      },
+      }),
       include: {
         user: {
           select: {
@@ -235,12 +257,12 @@ const buildGlobalReportPayload = async (db, job) => {
 
   if (job.type === "STUDENT_WISE") {
     const rows = await db.submission.findMany({
-      where: {
+      where: buildSubmittedSubmissionWhere(filters, {
         ...(filters.collegeId ? { collegeId: filters.collegeId } : {}),
         ...scopedTestFilter,
         ...(filters.studentId ? { userId: filters.studentId } : {}),
         ...(filters.departmentId ? { user: { departmentId: filters.departmentId } } : {}),
-      },
+      }),
       include: {
         user: { select: { fullName: true, studentId: true, enrollNumber: true, enrollmentNumber: true, collegeId: true, department: { select: { name: true } } } },
         test: { select: { title: true, subject: true, totalMarks: true } },
@@ -268,10 +290,10 @@ const buildGlobalReportPayload = async (db, job) => {
       where: buildTestWhere(filters, departmentBatchIds),
       include: {
         submissions: {
-          where: {
+          where: buildSubmittedSubmissionWhere(filters, {
             ...(filters.studentId ? { userId: filters.studentId } : {}),
             ...(filters.departmentId ? { user: { departmentId: filters.departmentId } } : {}),
-          },
+          }),
         },
       },
       take: 500,
@@ -307,7 +329,7 @@ const buildGlobalReportPayload = async (db, job) => {
           },
           include: {
             submissions: {
-              where: scopedTestFilter,
+              where: buildSubmittedSubmissionWhere(filters, scopedTestFilter),
               include: {
                 test: { select: { totalMarks: true } },
               },
@@ -345,7 +367,7 @@ const buildGlobalReportPayload = async (db, job) => {
         },
         include: {
           submissions: {
-            where: scopedTestFilter,
+            where: buildSubmittedSubmissionWhere(filters, scopedTestFilter),
             include: {
               test: { select: { totalMarks: true } },
             },
@@ -431,13 +453,45 @@ const enqueueSuperReportJob = async (reportJobId) => {
   }
 
   try {
-    await superReportQueue.add("generate", { reportJobId }, { removeOnComplete: true, removeOnFail: false });
+    await superReportQueue.add("generate", { reportJobId }, { jobId: reportJobId, removeOnComplete: true, removeOnFail: false });
   } catch (_error) {
     await processSuperReportSynchronously(reportJobId);
   }
 };
 
+const recoverPendingSuperReportJobs = async ({ limit = DEFAULT_RECOVERY_LIMIT, staleAfterMs = STALE_PROCESSING_MS } = {}) => {
+  const db = await getDbClient();
+  const staleCutoff = new Date(Date.now() - staleAfterMs);
+  const reset = await db.superReportJob.updateMany({
+    where: {
+      status: "PROCESSING",
+      updatedAt: { lt: staleCutoff },
+    },
+    data: {
+      status: "QUEUED",
+      errorMessage: null,
+    },
+  });
+
+  const queuedJobs = await db.superReportJob.findMany({
+    where: { status: "QUEUED" },
+    orderBy: { createdAt: "asc" },
+    take: limit,
+  });
+
+  for (const job of queuedJobs) {
+    await enqueueSuperReportJob(job.id);
+  }
+
+  return {
+    resetProcessing: reset.count || 0,
+    requeued: queuedJobs.length,
+  };
+};
+
 module.exports = {
+  buildGlobalReportPayload,
   enqueueSuperReportJob,
   processSuperReportSynchronously,
+  recoverPendingSuperReportJobs,
 };

@@ -1,6 +1,8 @@
 const bcrypt = require("bcrypt");
 const models = require("../../models");
 const { createAuditLog } = require("../../services/audit.service");
+const { invalidateRefreshTokenRecord } = require("../../services/refresh-token-cache.service");
+const { bumpPrincipalTokenVersion } = require("../../services/auth-revocation.service");
 const {
   SYSTEM_DEFAULT_TEST_SETTINGS,
   normalizeTestType,
@@ -9,6 +11,21 @@ const {
 const { asyncHandler, ApiError } = require("../../utils/http");
 
 const settingsKey = (collegeId) => `college.${collegeId}.admin.defaults`;
+
+const revokeAdminRefreshTokens = async (db, adminId) => {
+  await bumpPrincipalTokenVersion(db, "admin", adminId);
+
+  const activeTokens = await db.adminRefreshToken.findMany({
+    where: { adminId, revokedAt: null },
+  });
+
+  await db.adminRefreshToken.updateMany({
+    where: { adminId, revokedAt: null },
+    data: { revokedAt: new Date() },
+  });
+
+  await Promise.all(activeTokens.map((record) => invalidateRefreshTokenRecord("admin", record)));
+};
 
 const defaultSettings = {
   defaultTestConfig: {
@@ -155,6 +172,7 @@ const changeAdminPassword = asyncHandler(async (req, res) => {
     where: { id: admin.id },
     data: { passwordHash: nextHash },
   });
+  await revokeAdminRefreshTokens(db, admin.id);
 
   await createAuditLog({
     action: "ADMIN_PASSWORD_CHANGED",

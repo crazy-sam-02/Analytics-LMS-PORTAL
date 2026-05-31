@@ -4,6 +4,9 @@ const { verifyAccessToken } = require("../utils/token");
 
 const memoryStore = new Map();
 const memoryTagIndex = new Map();
+const cacheLogThrottle = new Map();
+
+const CACHE_LOG_THROTTLE_MS = 60000;
 
 const hash = (value) => crypto.createHash("sha256").update(String(value || "")).digest("hex");
 
@@ -44,11 +47,98 @@ const getRequestActor = (req) => {
   }
 };
 
+const getTenantScope = (req) => {
+  if (req.admin?.collegeId) {
+    return `college:${req.admin.collegeId}`;
+  }
+
+  if (req.user?.collegeId) {
+    return `college:${req.user.collegeId}`;
+  }
+
+  if (req.student?.collegeId) {
+    return `college:${req.student.collegeId}`;
+  }
+
+  if (req.collegeId) {
+    return `college:${req.collegeId}`;
+  }
+
+  if (req.superAdmin?.id) {
+    return `super-admin:${req.superAdmin.id}`;
+  }
+
+  const authHeader = req.headers?.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return null;
+  }
+
+  try {
+    const payload = verifyAccessToken(authHeader.slice(7));
+    if (payload?.collegeId) {
+      return `college:${payload.collegeId}`;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+};
+
+const hasAuthenticatedContext = (req) =>
+  Boolean(req.authIdentity || req.admin?.id || req.superAdmin?.id || req.user?.id || req.student?.id);
+
+const shouldLogCacheEvent = (key) => {
+  const now = Date.now();
+  const last = cacheLogThrottle.get(key) || 0;
+  if (now - last < CACHE_LOG_THROTTLE_MS) return false;
+  cacheLogThrottle.set(key, now);
+  return true;
+};
+
+const logCacheEvent = (level, message, meta = {}) => {
+  const key = `${level}:${meta.scope || ""}:${meta.path || ""}`;
+  if (!shouldLogCacheEvent(key)) return;
+  const payload = {
+    scope: meta.scope,
+    path: meta.path,
+    actor: meta.actor,
+    reason: meta.reason,
+  };
+  if (level === "warn") {
+    console.warn(message, payload);
+    return;
+  }
+  console.info(message, payload);
+};
+
 const buildCacheKey = ({ req, scope, keyBuilder }) => {
-  const rawKey = keyBuilder
-    ? keyBuilder(req)
-    : `${req.method}:${getPathname(req.originalUrl)}:${JSON.stringify(req.query || {})}:${getRequestActor(req)}`;
-  return `resp_cache:${scope}:${hash(rawKey)}`;
+  try {
+    const rawKey = keyBuilder
+      ? keyBuilder(req)
+      : `${req.method}:${getPathname(req.originalUrl)}:${JSON.stringify(req.query || {})}:${getRequestActor(req)}`;
+
+    if (!rawKey) return null;
+    const tenantScope = getTenantScope(req);
+    const actorScope = tenantScope ? null : `actor:${getRequestActor(req)}`;
+    if (!tenantScope) {
+      logCacheEvent("info", "Response cache using actor scope (no tenant scope).", {
+        scope,
+        path: getPathname(req.originalUrl),
+        actor: actorScope,
+        reason: "tenant-scope-missing",
+      });
+    }
+    const namespace = tenantScope || actorScope;
+    return `resp_cache:${namespace}:${scope}:${hash(rawKey)}`;
+  } catch {
+    logCacheEvent("warn", "Response cache key build failed.", {
+      scope,
+      path: getPathname(req.originalUrl),
+      reason: "key-build-failed",
+    });
+    return null;
+  }
 };
 
 const setMemoryCache = (key, value, ttlSeconds, tags) => {
@@ -106,14 +196,32 @@ const createResponseCache = ({
   keyBuilder,
   tagsBuilder,
   shouldCache,
+  requireAuthenticated = true,
 }) => (req, res, next) => {
   if (!enabled || req.method !== "GET") {
     return next();
   }
 
-  const cacheKey = buildCacheKey({ req, scope, keyBuilder });
+  if (requireAuthenticated && !hasAuthenticatedContext(req)) {
+    return next();
+  }
+
+  // Compute cache key lazily to ensure authentication middleware has populated req
+  const computeCacheKey = () => {
+    try {
+      const key = buildCacheKey({ req, scope, keyBuilder });
+      // If keyBuilder intentionally returns null/undefined, treat as not cacheable
+      if (!key) return null;
+      return key;
+    } catch {
+      return null;
+    }
+  };
 
   const readFromCache = async () => {
+    const cacheKey = computeCacheKey();
+    if (!cacheKey) return null;
+
     if (!isRedisAvailable()) {
       return getMemoryCache(cacheKey);
     }
@@ -126,6 +234,9 @@ const createResponseCache = ({
   };
 
   const writeToCache = async (payload, tags) => {
+    const cacheKey = computeCacheKey();
+    if (!cacheKey) return; // skip storing if we can't compute a stable key
+
     if (!isRedisAvailable()) {
       setMemoryCache(cacheKey, payload, ttlSeconds, tags);
       return;
@@ -229,9 +340,23 @@ const createResponseCacheInvalidationHook = () => (req, res, next) => {
     const pathname = getPathname(req.originalUrl);
     const tags = [];
 
+    if ((pathname.startsWith("/api/admin/") || pathname.startsWith("/api/college-admin/")) && req.admin?.collegeId) {
+      const collegeTag = `college:${req.admin.collegeId}`;
+      tags.push(
+        `admin-collections:${collegeTag}`,
+        `admin-dashboard:${collegeTag}`,
+        `admin-reports:${collegeTag}`,
+        `admin-analytics:${collegeTag}`,
+        `admin-search:${collegeTag}`,
+        `admin-settings:${collegeTag}`
+      );
+    }
+
     if (
       pathname.startsWith("/api/admin/reports") ||
+      pathname.startsWith("/api/college-admin/reports") ||
       pathname.startsWith("/api/admin/tests") ||
+      pathname.startsWith("/api/college-admin/tests") ||
       pathname.startsWith("/api/tests") ||
       pathname.startsWith("/api/attempts")
     ) {
@@ -240,7 +365,7 @@ const createResponseCacheInvalidationHook = () => (req, res, next) => {
         tags.push(`admin-reports:college:${req.admin.collegeId}`);
       }
 
-      tags.push("student-tests:all", "student-dashboard:all");
+      tags.push("student-tests:all", "student-dashboard:all", "super-dashboard:all");
 
       if (req.user?.id) {
         tags.push(`student-tests:user:${req.user.id}`, `student-dashboard:user:${req.user.id}`);

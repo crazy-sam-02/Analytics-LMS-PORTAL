@@ -7,6 +7,7 @@ const { createAuditLog } = require("../../services/audit.service");
 const { emitToRole } = require("../../realtime/socket");
 const { ApiError, asyncHandler } = require("../../utils/http");
 const { clampPercent, getSubmissionScorePercent } = require("../../utils/score");
+const { getScopedDepartmentId } = require("../../utils/admin-scope");
 
 const MAX_ANALYTICS_SUBMISSIONS = 20000;
 const toPercent = (value) => clampPercent(value);
@@ -73,20 +74,16 @@ const buildEmptyAnalyticsPayload = (mode = "department") => ({
 
 const buildAdminReportScope = async ({ db, req, filters = {}, testSelect = { id: true } }) => {
   const collegeId = req.collegeId;
-  const adminDepartmentId = req.admin?.departmentId || null;
+  const adminDepartmentId = getScopedDepartmentId(req, { requiredForDepartmentAdmin: false });
   const requestedDepartmentId = filters.departmentId ? normalizeId(filters.departmentId) : null;
+  const departmentId = adminDepartmentId ? normalizeId(adminDepartmentId) : (requestedDepartmentId || null);
 
-  if (!adminDepartmentId) {
-    return { ok: false, reason: "MISSING_ADMIN_DEPARTMENT" };
-  }
-
-  if (requestedDepartmentId && normalizeId(adminDepartmentId) !== requestedDepartmentId) {
+  if (adminDepartmentId && requestedDepartmentId && normalizeId(adminDepartmentId) !== requestedDepartmentId) {
     return { ok: false, reason: "DEPARTMENT_OUT_OF_SCOPE" };
   }
 
-  const departmentId = normalizeId(adminDepartmentId);
   const departmentBatches = await db.batch.findMany({
-    where: { collegeId, departmentId },
+    where: { collegeId, ...(departmentId ? { departmentId } : {}) },
     select: { id: true },
   });
   const departmentBatchIds = normalizeIdList(departmentBatches.map((batch) => batch.id));
@@ -98,39 +95,27 @@ const buildAdminReportScope = async ({ db, req, filters = {}, testSelect = { id:
 
   const batchScopeIds = requestedBatchId ? [requestedBatchId] : departmentBatchIds;
 
-  const orFilters = [];
-
-  if (departmentId) {
-    orFilters.push({ assignmentMethod: "department_wise", departmentId });
-    orFilters.push({ assignmentMethod: "department_wise", assignedTo: { in: [departmentId] } });
-    orFilters.push({ assignmentMethod: null, departmentId });
-    orFilters.push({ assignmentMethod: null, assignedTo: { in: [departmentId] } });
-  }
-
-  if (batchScopeIds.length > 0) {
-    orFilters.push({ assignmentMethod: "batch_wise", batchId: { in: batchScopeIds } });
-    orFilters.push({ assignmentMethod: "batch_wise", batchAssignments: { some: { batchId: { in: batchScopeIds } } } });
-    orFilters.push({ assignmentMethod: "department_wise", departmentId: null, batchId: { in: batchScopeIds } });
-    orFilters.push({ assignmentMethod: "department_wise", departmentId: null, batchAssignments: { some: { batchId: { in: batchScopeIds } } } });
-    orFilters.push({ assignmentMethod: null, batchId: { in: batchScopeIds } });
-    orFilters.push({ assignmentMethod: null, batchAssignments: { some: { batchId: { in: batchScopeIds } } } });
-  }
-
-  if (orFilters.length === 0) {
-    return {
-      ok: true,
-      tests: [],
-      testIds: [],
-      departmentId,
-      batchId: requestedBatchId,
-      batchIds: batchScopeIds,
-    };
-  }
-
   const testWhere = {
     collegeId,
-    OR: orFilters,
     ...(filters.testId ? { id: filters.testId } : {}),
+    ...(departmentId ? { OR: [
+      { assignmentMethod: "department_wise", departmentId },
+      { assignmentMethod: "department_wise", assignedTo: { in: [departmentId] } },
+      { assignmentMethod: null, departmentId },
+      { assignmentMethod: null, assignedTo: { in: [departmentId] } },
+      { assignmentMethod: "batch_wise", batchId: { in: batchScopeIds } },
+      { assignmentMethod: "batch_wise", batchAssignments: { some: { batchId: { in: batchScopeIds } } } },
+      { assignmentMethod: "department_wise", departmentId: null, batchId: { in: batchScopeIds } },
+      { assignmentMethod: "department_wise", departmentId: null, batchAssignments: { some: { batchId: { in: batchScopeIds } } } },
+      { assignmentMethod: null, batchId: { in: batchScopeIds } },
+      { assignmentMethod: null, batchAssignments: { some: { batchId: { in: batchScopeIds } } } },
+    ] } : {}),
+    ...(!departmentId && requestedBatchId ? {
+      OR: [
+        { batchId: requestedBatchId },
+        { batchAssignments: { some: { batchId: requestedBatchId } } },
+      ],
+    } : {}),
   };
 
   const tests = await db.test.findMany({
@@ -1027,6 +1012,19 @@ const normalizeFilters = (filters = {}) => {
   return Object.fromEntries(Object.entries(normalized).filter(([, value]) => value != null));
 };
 
+const resolveReportDownloadBasePath = (req, jobFilters = {}) => {
+  const fromJob = typeof jobFilters.reportBasePath === "string" ? jobFilters.reportBasePath : "";
+  if (fromJob.startsWith("/api/college-admin/reports") || fromJob.startsWith("/api/admin/reports")) {
+    return fromJob;
+  }
+
+  if (String(req.baseUrl || "").startsWith("/api/college-admin/reports")) {
+    return "/api/college-admin/reports";
+  }
+
+  return "/api/admin/reports";
+};
+
 const validateScopedFilters = async ({ db, type, filters, collegeId }) => {
   const rule = ENTITY_SCOPED_CHECKS[type];
   if (rule && filters?.[rule.key]) {
@@ -1058,52 +1056,52 @@ const generateReport = asyncHandler(async (req, res) => {
   const m = await models.init();
   const db = m.dbClient;
   const filters = normalizeFilters(req.body.filters || {});
-  const adminDepartmentId = req.admin?.departmentId || null;
+  const reportBasePath = resolveReportDownloadBasePath(req, filters);
+  const adminDepartmentId = getScopedDepartmentId(req, { requiredForDepartmentAdmin: false });
 
-  if (!adminDepartmentId) {
-    return res.status(403).json({ message: "Admin must be assigned to a department" });
-  }
+  if (adminDepartmentId) {
+    if (filters.departmentId && String(filters.departmentId) !== String(adminDepartmentId)) {
+      return res.status(403).json({ message: "Cross-department report access denied" });
+    }
 
-  if (filters.departmentId && String(filters.departmentId) !== String(adminDepartmentId)) {
-    return res.status(403).json({ message: "Cross-department report access denied" });
-  }
+    filters.departmentId = adminDepartmentId;
 
-  filters.departmentId = adminDepartmentId;
+    if (filters.batchId) {
+      const batch = await db.batch.findFirst({
+        where: { id: filters.batchId, collegeId: req.collegeId, departmentId: adminDepartmentId },
+        select: { id: true },
+      });
 
-  if (filters.batchId) {
-    const batch = await db.batch.findFirst({
-      where: { id: filters.batchId, collegeId: req.collegeId, departmentId: adminDepartmentId },
-      select: { id: true },
-    });
+      if (!batch) {
+        return res.status(403).json({ message: "Batch is outside the admin department scope" });
+      }
+    }
 
-    if (!batch) {
-      return res.status(403).json({ message: "Batch is outside the admin department scope" });
+    if (filters.studentId) {
+      const student = await db.student.findFirst({
+        where: { id: filters.studentId, collegeId: req.collegeId, departmentId: adminDepartmentId },
+        select: { id: true },
+      });
+
+      if (!student) {
+        return res.status(403).json({ message: "Student is outside the admin department scope" });
+      }
+    }
+
+    if (filters.testId) {
+      const scope = await buildAdminReportScope({
+        db,
+        req,
+        filters: { testId: filters.testId, departmentId: adminDepartmentId, batchId: filters.batchId },
+        testSelect: { id: true },
+      });
+
+      if (!scope.ok || scope.testIds.length === 0) {
+        return res.status(403).json({ message: "Test is not accessible for this department" });
+      }
     }
   }
 
-  if (filters.studentId) {
-    const student = await db.student.findFirst({
-      where: { id: filters.studentId, collegeId: req.collegeId, departmentId: adminDepartmentId },
-      select: { id: true },
-    });
-
-    if (!student) {
-      return res.status(403).json({ message: "Student is outside the admin department scope" });
-    }
-  }
-
-  if (filters.testId) {
-    const scope = await buildAdminReportScope({
-      db,
-      req,
-      filters: { testId: filters.testId, departmentId: adminDepartmentId, batchId: filters.batchId },
-      testSelect: { id: true },
-    });
-
-    if (!scope.ok || scope.testIds.length === 0) {
-      return res.status(403).json({ message: "Test is not accessible for this department" });
-    }
-  }
   const validation = await validateScopedFilters({
     db,
     type: req.body.type,
@@ -1118,7 +1116,10 @@ const generateReport = asyncHandler(async (req, res) => {
   const job = await db.reportJob.create({
     data: {
       type: req.body.type,
-      filters,
+      filters: {
+        ...filters,
+        reportBasePath,
+      },
       collegeId: req.collegeId,
       adminId: req.admin.id,
     },
@@ -1211,6 +1212,7 @@ const downloadReport = asyncHandler(async (req, res) => {
 
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `attachment; filename="report-${reportJobId}.pdf"`);
+  res.setHeader("Cache-Control", "private, no-store");
   res.status(200).send(pdfBuffer);
 });
 
@@ -1235,7 +1237,8 @@ const regenerateReportLink = asyncHandler(async (req, res) => {
   }
 
   const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
-  const resultUrl = `/api/admin/reports/${reportJobId}/download?expires=${encodeURIComponent(expiresAt)}`;
+  const reportBasePath = resolveReportDownloadBasePath(req, job.filters || {});
+  const resultUrl = `${reportBasePath}/${reportJobId}/download?expires=${encodeURIComponent(expiresAt)}`;
 
   const updated = await db.reportJob.update({
     where: { id: reportJobId },

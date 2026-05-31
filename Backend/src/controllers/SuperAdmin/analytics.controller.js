@@ -1,288 +1,292 @@
 const mongoose = require("mongoose");
 const { asyncHandler } = require("../../utils/http");
-const { getSubmissionScorePercent } = require("../../utils/score");
+const { normalizeMongoId, withSubmissionScorePercent } = require("../../utils/analytics-aggregation");
 
+const SUBMITTED_STATUSES = ["SUBMITTED", "AUTO_SUBMITTED"];
+
+const violationWeightStage = () => ({
+  $addFields: {
+    violationWeight: {
+      $cond: [
+        { $gt: [{ $convert: { input: "$count", to: "double", onError: 0, onNull: 0 } }, 0] },
+        { $convert: { input: "$count", to: "double", onError: 0, onNull: 0 } },
+        1,
+      ],
+    },
+  },
+});
+
+/**
+ * Super-admin analytics — database-side aggregations.
+ * Produces per-college metrics without loading entire collections into memory.
+ */
 const getSuperAnalytics = asyncHandler(async (_req, res) => {
   const db = mongoose.connection.db;
 
-  // Fetch only necessary fields using MongoDB projections for memory efficiency
+  // Aggregate student counts per college
+  const studentsAgg = db
+    .collection("student")
+    .aggregate([
+      { $match: { isActive: true } },
+      { $group: { _id: "$collegeId", studentCount: { $sum: 1 } } },
+    ])
+    .toArray();
+
+  // Aggregate submissions with score percent (lookup test.totalMarks)
+  const submissionsAgg = db
+    .collection("submission")
+    .aggregate([
+      { $match: { status: { $in: SUBMITTED_STATUSES } } },
+      ...withSubmissionScorePercent(),
+      {
+        $group: {
+          _id: "$collegeId",
+          totalSubmissions: { $sum: 1 },
+          avgScorePercent: { $avg: "$scorePercent" },
+          passingSubmissions: { $sum: { $cond: [{ $gte: ["$scorePercent", 40] }, 1, 0] } },
+        },
+      },
+    ])
+    .toArray();
+
+  // New violation rows carry collegeId directly. Keep a lookup fallback for
+  // older records written before the production-readiness migration.
+  const violationsAgg = db
+    .collection("violation")
+    .aggregate([
+      violationWeightStage(),
+      {
+        $facet: {
+          direct: [
+            { $match: { collegeId: { $exists: true, $ne: null } } },
+            { $group: { _id: "$collegeId", totalViolations: { $sum: "$violationWeight" } } },
+          ],
+          legacy: [
+            {
+              $match: {
+                $or: [
+                  { collegeId: { $exists: false } },
+                  { collegeId: null },
+                ],
+              },
+            },
+            {
+              $lookup: {
+                from: "submission",
+                localField: "submissionId",
+                foreignField: "_id",
+                as: "submission",
+              },
+            },
+            { $unwind: { path: "$submission", preserveNullAndEmptyArrays: false } },
+            { $group: { _id: "$submission.collegeId", totalViolations: { $sum: "$violationWeight" } } },
+          ],
+        },
+      },
+      { $project: { rows: { $concatArrays: ["$direct", "$legacy"] } } },
+      { $unwind: "$rows" },
+      { $group: { _id: "$rows._id", totalViolations: { $sum: "$rows.totalViolations" } } },
+    ])
+    .toArray();
+
+  const topStudentsAgg = db
+    .collection("submission")
+    .aggregate([
+      { $match: { status: { $in: SUBMITTED_STATUSES } } },
+      ...withSubmissionScorePercent(),
+      {
+        $group: {
+          _id: "$userId",
+          avgScore: { $avg: "$scorePercent" },
+          attempts: { $sum: 1 },
+          collegeId: { $first: "$collegeId" },
+        },
+      },
+      { $sort: { avgScore: -1, attempts: -1 } },
+      { $limit: 10 },
+      {
+        $lookup: {
+          from: "student",
+          localField: "_id",
+          foreignField: "_id",
+          as: "student",
+        },
+      },
+      {
+        $lookup: {
+          from: "college",
+          localField: "collegeId",
+          foreignField: "_id",
+          as: "college",
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          studentId: "$_id",
+          studentName: { $ifNull: [{ $arrayElemAt: ["$student.fullName", 0] }, "-"] },
+          collegeName: { $ifNull: [{ $arrayElemAt: ["$college.name", 0] }, "-"] },
+          avgScore: { $round: ["$avgScore", 2] },
+          attempts: 1,
+        },
+      },
+    ])
+    .toArray();
+
+  const mostActiveTestsAgg = db
+    .collection("submission")
+    .aggregate([
+      { $match: { status: { $in: SUBMITTED_STATUSES } } },
+      {
+        $group: {
+          _id: "$testId",
+          submissions: { $sum: 1 },
+          collegeId: { $first: "$collegeId" },
+        },
+      },
+      { $sort: { submissions: -1 } },
+      { $limit: 10 },
+      {
+        $lookup: {
+          from: "test",
+          localField: "_id",
+          foreignField: "_id",
+          as: "test",
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          testId: "$_id",
+          testName: { $ifNull: [{ $arrayElemAt: ["$test.title", 0] }, "-"] },
+          collegeId: 1,
+          submissions: 1,
+        },
+      },
+    ])
+    .toArray();
+
+  const violationStatisticsAgg = db
+    .collection("violation")
+    .aggregate([
+      violationWeightStage(),
+      {
+        $group: {
+          _id: { $ifNull: ["$type", "UNKNOWN"] },
+          count: { $sum: "$violationWeight" },
+        },
+      },
+      { $sort: { count: -1 } },
+      {
+        $project: {
+          _id: 0,
+          type: "$_id",
+          count: 1,
+        },
+      },
+    ])
+    .toArray();
+
+  const platformTrendAgg = db
+    .collection("submission")
+    .aggregate([
+      { $match: { status: { $in: SUBMITTED_STATUSES } } },
+      ...withSubmissionScorePercent(),
+      { $addFields: { eventDate: { $ifNull: ["$submittedAt", "$createdAt"] } } },
+      { $match: { eventDate: { $type: "date" } } },
+      {
+        $group: {
+          _id: { $dateToString: { format: "%Y-%m", date: "$eventDate" } },
+          score: { $avg: "$scorePercent" },
+        },
+      },
+      { $sort: { _id: -1 } },
+      { $limit: 12 },
+      { $sort: { _id: 1 } },
+      {
+        $project: {
+          _id: 0,
+          month: "$_id",
+          score: { $round: ["$score", 2] },
+        },
+      },
+    ])
+    .toArray();
+
+  // Fetch active colleges for stable ordering
+  const collegesPromise = db.collection("college").find({ isActive: true }, { projection: { id: 1, name: 1, code: 1 } }).toArray();
+
   const [
+    studentsByCollege,
+    submissionsByCollege,
+    violationsByCollege,
+    topStudents,
+    mostActiveTests,
+    violationStatistics,
+    platformTrend,
     collegesRaw,
-    allStudentsRaw,
-    allTestsRaw,
-    allSubmissionsRaw,
-    allViolationsRaw,
-    departmentsRaw,
   ] = await Promise.all([
-    db.collection("college").find({ isActive: true }, { projection: { id: 1, name: 1, code: 1 } }).toArray(),
-    db.collection("student").find({ isActive: true }, { projection: { id: 1, fullName: 1, collegeId: 1, departmentId: 1 } }).toArray(),
-    db.collection("test").find({}, { projection: { id: 1, title: 1, collegeId: 1, departmentId: 1, totalMarks: 1 } }).toArray(),
-    db.collection("submission").find({ status: { $in: ["SUBMITTED", "AUTO_SUBMITTED"] } }, { projection: { id: 1, userId: 1, testId: 1, score: 1, status: 1, createdAt: 1, collegeId: 1 } }).toArray(),
-    db.collection("violation").find({}, { projection: { id: 1, type: 1, collegeId: 1, userId: 1 } }).toArray(),
-    db.collection("department").find({}, { projection: { id: 1, name: 1, collegeId: 1 } }).toArray(),
+    studentsAgg,
+    submissionsAgg,
+    violationsAgg,
+    topStudentsAgg,
+    mostActiveTestsAgg,
+    violationStatisticsAgg,
+    platformTrendAgg,
+    collegesPromise,
   ]);
 
-  // Build lookups for O(1) access
-  const studentMap = new Map();
-  allStudentsRaw.forEach((s) => studentMap.set(s.id, s));
+  const studentsMap = new Map((studentsByCollege || []).map((r) => [normalizeMongoId(r._id), r.studentCount || 0]));
+  const submissionsMap = new Map((submissionsByCollege || []).map((r) => [normalizeMongoId(r._id), r]));
+  const violationsMap = new Map((violationsByCollege || []).map((r) => [normalizeMongoId(r._id), r.totalViolations || 0]));
 
-  const testMap = new Map();
-  allTestsRaw.forEach((test) => testMap.set(test.id, test));
-  const getAnalyticsScorePercent = (submission) => getSubmissionScorePercent({
-    ...submission,
-    test: testMap.get(submission.testId),
+  const result = (collegesRaw || []).map((c) => {
+    const id = c.id || c._id || null;
+    const key = normalizeMongoId(id);
+    const subs = submissionsMap.get(key) || { totalSubmissions: 0, avgScorePercent: 0, passingSubmissions: 0 };
+    return {
+      collegeId: key || id,
+      collegeName: c.name || "-",
+      studentCount: studentsMap.get(key) || 0,
+      totalSubmissions: subs.totalSubmissions || 0,
+      averageScorePercent: Number(Number(subs.avgScorePercent || 0).toFixed(2)),
+      passingSubmissions: subs.passingSubmissions || 0,
+      totalViolations: violationsMap.get(key) || 0,
+    };
   });
 
-  const studentSubmissionsMap = new Map();
-  allSubmissionsRaw.forEach((s) => {
-    if (!studentSubmissionsMap.has(s.userId)) studentSubmissionsMap.set(s.userId, []);
-    studentSubmissionsMap.get(s.userId).push(s);
-  });
-
-  const userViolationsMap = new Map();
-  allViolationsRaw.forEach((v) => {
-    userViolationsMap.set(v.userId, (userViolationsMap.get(v.userId) || 0) + 1);
-  });
-
-  // Build college-wise metrics
-  const collegeMetricsMap = new Map();
-
-  collegesRaw.forEach((college) => {
-    collegeMetricsMap.set(college.id, {
-      collegeId: college.id,
-      collegeName: college.name || "-",
-      studentCount: 0,
-      totalSubmissions: 0,
-      totalScore: 0,
-      passingSubmissions: 0,
-      totalViolations: 0,
-      students: [],
-      submissions: [],
-      departments: new Map(),
-      trend: [],
-    });
-  });
-
-  // Add students to colleges
-  allStudentsRaw.forEach((student) => {
-    const metrics = collegeMetricsMap.get(student.collegeId);
-    if (metrics) {
-      metrics.students.push(student);
-      metrics.studentCount += 1;
-    }
-  });
-
-  // Add submissions to colleges and calculate metrics
-  allSubmissionsRaw.forEach((submission) => {
-    const metrics = collegeMetricsMap.get(submission.collegeId);
-    if (metrics) {
-      metrics.submissions.push(submission);
-      metrics.totalSubmissions += 1;
-      const score = getAnalyticsScorePercent(submission);
-      metrics.totalScore += score;
-      if (score >= 40) {
-        metrics.passingSubmissions += 1;
-      }
-    }
-  });
-
-  // Add violations to colleges
-  allViolationsRaw.forEach((violation) => {
-    const metrics = collegeMetricsMap.get(violation.collegeId);
-    if (metrics) {
-      metrics.totalViolations += 1;
-    }
-  });
-
-  // Add departments to colleges
-  departmentsRaw.forEach((dept) => {
-    const metrics = collegeMetricsMap.get(dept.collegeId);
-    if (metrics && !metrics.departments.has(dept.id)) {
-      metrics.departments.set(dept.id, {
-        departmentId: dept.id,
-        departmentName: dept.name || "-",
-        students: [],
-        submissions: [],
-        totalScore: 0,
-        passingSubmissions: 0,
-      });
-    }
-  });
-
-  // Associate students and submissions to departments
-  allStudentsRaw.forEach((student) => {
-    const collegeMetrics = collegeMetricsMap.get(student.collegeId);
-    if (collegeMetrics && student.departmentId) {
-      const deptMetrics = collegeMetrics.departments.get(student.departmentId);
-      if (deptMetrics) {
-        deptMetrics.students.push(student);
-      }
-    }
-  });
-
-  allSubmissionsRaw.forEach((submission) => {
-    const student = studentMap.get(submission.userId);
-    if (student) {
-      const collegeMetrics = collegeMetricsMap.get(student.collegeId);
-      if (collegeMetrics && student.departmentId) {
-        const deptMetrics = collegeMetrics.departments.get(student.departmentId);
-        if (deptMetrics) {
-          deptMetrics.submissions.push(submission);
-          const score = getAnalyticsScorePercent(submission);
-          deptMetrics.totalScore += score;
-          if (score >= 40) {
-            deptMetrics.passingSubmissions += 1;
-          }
-        }
-      }
-    }
-  });
-
-  // Build trend data (grouped by month) safely
-  const trendMap = new Map();
-  allSubmissionsRaw.forEach((submission) => {
-    if (!submission.createdAt) return;
-    const date = new Date(submission.createdAt);
-    if (isNaN(date.getTime())) return;
-
-    const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-    if (!trendMap.has(monthKey)) {
-      trendMap.set(monthKey, { scores: [], count: 0 });
-    }
-    const trend = trendMap.get(monthKey);
-    trend.scores.push(getAnalyticsScorePercent(submission));
-    trend.count += 1;
-  });
-
-  const platformTrend = Array.from(trendMap.entries())
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .slice(-12)
-    .map(([month, data]) => ({
-      month,
-      score: data.count > 0 ? Number((data.scores.reduce((a, b) => a + b, 0) / data.count).toFixed(2)) : 0,
-    }));
-
-  // Build final college comparative data
-  const collegeComparative = Array.from(collegeMetricsMap.values())
-    .map((metrics) => ({
-      collegeId: metrics.collegeId,
-      collegeName: metrics.collegeName,
-      students: metrics.studentCount,
-      avgScore:
-        metrics.totalSubmissions > 0
-          ? Number((metrics.totalScore / metrics.totalSubmissions).toFixed(2))
-          : 0,
-      passRate:
-        metrics.totalSubmissions > 0
-          ? Number(((metrics.passingSubmissions / metrics.totalSubmissions) * 100).toFixed(2))
-          : 0,
-      participation:
-        metrics.studentCount > 0
-          ? Number(((metrics.totalSubmissions / metrics.studentCount).toFixed(2)))
-          : 0,
-      violations: metrics.totalViolations,
-      departments: Array.from(metrics.departments.values()).map((dept) => {
-        let deptViolations = 0;
-        dept.students.forEach((s) => {
-          deptViolations += userViolationsMap.get(s.id) || 0;
-        });
-
-        return {
-          departmentName: dept.departmentName,
-          avgScore:
-            dept.submissions.length > 0
-              ? Number((dept.totalScore / dept.submissions.length).toFixed(2))
-              : 0,
-          passRate:
-            dept.submissions.length > 0
-              ? Number(((dept.passingSubmissions / dept.submissions.length) * 100).toFixed(2))
-              : 0,
-          participation:
-            dept.students.length > 0
-              ? Number((dept.submissions.length / dept.students.length).toFixed(2))
-              : 0,
-          violations: deptViolations,
-        };
-      }),
-      trend: platformTrend,
+  const collegeComparative = result
+    .map((college) => ({
+      collegeId: college.collegeId,
+      collegeName: college.collegeName,
+      students: college.studentCount,
+      avgScore: college.averageScorePercent,
+      passRate: college.totalSubmissions > 0
+        ? Number(((college.passingSubmissions / college.totalSubmissions) * 100).toFixed(2))
+        : 0,
+      participation: college.studentCount > 0
+        ? Number((college.totalSubmissions / college.studentCount).toFixed(2))
+        : 0,
+      violations: college.totalViolations,
+      departments: [],
+      trend: platformTrend || [],
     }))
     .sort((a, b) => b.avgScore - a.avgScore);
 
-  // Build college violations breakdown
-  const collegeViolations = collegeComparative.map((college) => ({
-    college: college.collegeName,
-    collegeName: college.collegeName,
-    violations: college.violations,
-  }));
-
-  // Legacy top colleges data
-  const topPerformingColleges = collegeComparative.slice(0, 10);
-
-  // Top students data handling 0 submissions edge case
-  const topStudents = allStudentsRaw
-    .map((student) => {
-      const studentSubmissions = studentSubmissionsMap.get(student.id) || [];
-      const avgScore =
-        studentSubmissions.length > 0
-          ? studentSubmissions.reduce((sum, s) => sum + getAnalyticsScorePercent(s), 0) / studentSubmissions.length
-          : 0;
-      return {
-        studentId: student.id,
-        studentName: student.fullName || "-",
-        collegeName: collegesRaw.find((c) => c.id === student.collegeId)?.name || "-",
-        avgScore: Number(avgScore.toFixed(2)),
-      };
-    })
-    .filter(s => s.avgScore > 0)
-    .sort((a, b) => b.avgScore - a.avgScore)
-    .slice(0, 10);
-
-  // Most active tests data
-  const testSubmissionMap = new Map();
-  allTestsRaw.forEach((test) => {
-    testSubmissionMap.set(test.id, {
-      testId: test.id,
-      testName: test.title || "-",
-      collegeId: test.collegeId,
-      submissions: 0,
-    });
-  });
-
-  allSubmissionsRaw.forEach((s) => {
-    const tStats = testSubmissionMap.get(s.testId);
-    if (tStats) {
-      tStats.submissions += 1;
-    }
-  });
-
-  const mostActiveTests = Array.from(testSubmissionMap.values())
-    .filter((t) => t.submissions > 0)
-    .sort((a, b) => b.submissions - a.submissions)
-    .slice(0, 10);
-
-  // Violation statistics by type
-  const violationsByType = new Map();
-  allViolationsRaw.forEach((violation) => {
-    const type = violation.type || "UNKNOWN";
-    violationsByType.set(type, (violationsByType.get(type) || 0) + 1);
-  });
-
-  const violationStatistics = Array.from(violationsByType.entries()).map(([type, count]) => ({
-    type,
-    count,
-  }));
-
-  res.status(200).json({
+  res.json({
+    colleges: result,
     collegeComparative,
-    topPerformingColleges,
-    topStudents,
-    mostActiveTests,
-    collegeViolations,
-    platformTrend,
-    violationStatistics,
+    topPerformingColleges: collegeComparative.slice(0, 10),
+    topStudents: topStudents || [],
+    mostActiveTests: mostActiveTests || [],
+    collegeViolations: result.map((college) => ({
+      college: college.collegeName,
+      collegeName: college.collegeName,
+      violations: college.totalViolations,
+    })),
+    platformTrend: platformTrend || [],
+    violationStatistics: violationStatistics || [],
   });
 });
 
-module.exports = {
-  getSuperAnalytics,
-};
+module.exports = { getSuperAnalytics };

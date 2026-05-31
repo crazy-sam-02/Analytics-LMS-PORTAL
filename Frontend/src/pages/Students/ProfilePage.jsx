@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { GraduationCap, Mail, UserRound, Upload } from "lucide-react";
+import { GraduationCap, Mail, User, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { ProfileSkeleton } from "@/components/common/page-skeletons";
 import { Button } from "@/components/ui/button";
@@ -97,7 +97,7 @@ export default function ProfilePage() {
           <Avatar size="lg" className="size-24 rounded-2xl">
             <AvatarImage src={avatarDisplayUrl} alt="Profile avatar" className="rounded-2xl object-cover" />
             <AvatarFallback className="rounded-2xl bg-primary/15 text-primary">
-              <UserRound className="size-8" />
+              <User className="size-8" />
             </AvatarFallback>
           </Avatar>
 

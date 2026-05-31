@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { toast } from "sonner";
 import { incrementViolationCounter, reportAttemptViolation } from "@/features/Students/testSlice";
@@ -125,8 +125,22 @@ export const useProctoringGuard = ({
   const thresholdTriggeredRef = useRef(false);
   const thresholdWarningShownForCountRef = useRef(-1);
   const hasEnteredFullscreenRef = useRef(false);
+  const onThresholdExceededRef = useRef(onThresholdExceeded);
 
   const socket = useMemo(() => connectTestSocket(), []);
+
+  useEffect(() => {
+    onThresholdExceededRef.current = onThresholdExceeded;
+  }, [onThresholdExceeded]);
+
+  const triggerThresholdExceeded = useCallback(() => {
+    if (thresholdTriggeredRef.current) {
+      return;
+    }
+
+    thresholdTriggeredRef.current = true;
+    onThresholdExceededRef.current?.();
+  }, []);
 
   useEffect(() => {
     if (!enabled || paused || !attemptId || !testId) {
@@ -183,7 +197,16 @@ export const useProctoringGuard = ({
           type: backendType,
           metadata,
         })
-      );
+      )
+        .unwrap()
+        .then((payload) => {
+          const serverCount = Number(payload?.violationCount);
+          const numericThreshold = Math.max(1, Number(threshold || 3));
+          if (payload?.autoSubmitted || (Number.isFinite(serverCount) && serverCount >= numericThreshold)) {
+            triggerThresholdExceeded();
+          }
+        })
+        .catch(() => null);
 
       socket?.emit("violation", {
         attempt_id: attemptId,
@@ -343,6 +366,8 @@ export const useProctoringGuard = ({
     socket,
     tabSwitchMode,
     testId,
+    threshold,
+    triggerThresholdExceeded,
     windowBlurEnabled,
   ]);
 
@@ -375,10 +400,9 @@ export const useProctoringGuard = ({
     }
 
     if (!thresholdTriggeredRef.current) {
-      thresholdTriggeredRef.current = true;
-      onThresholdExceeded?.();
+      triggerThresholdExceeded();
     }
-  }, [enabled, paused, threshold, violationsTotal]);
+  }, [enabled, paused, threshold, triggerThresholdExceeded, violationsTotal]);
 
   const reEnterFullscreen = async () => {
     if (!enabled || !fullscreenRequired) {

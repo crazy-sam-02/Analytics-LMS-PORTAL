@@ -88,8 +88,9 @@ async function validateTestStatusTransition(currentStatus, newStatus) {
  */
 async function validateSubmissionStatusTransition(currentStatus, newStatus) {
   const allowedTransitions = {
-    IN_PROGRESS: ["SUBMITTED", "GRADED", "ARCHIVED"],
+    IN_PROGRESS: ["SUBMITTED", "AUTO_SUBMITTED", "GRADED", "ARCHIVED"],
     SUBMITTED: ["GRADED", "ARCHIVED"],
+    AUTO_SUBMITTED: ["GRADED", "ARCHIVED"],
     GRADED: ["ARCHIVED"],
     ARCHIVED: [],
   };

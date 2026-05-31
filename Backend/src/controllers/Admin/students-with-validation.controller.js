@@ -16,6 +16,7 @@ const {
 } = require("../../services/student.service");
 const { getMetricsSnapshot } = require("../../services/validation-monitoring.service");
 const { getPagination } = require("../../utils/pagination");
+const { getScopedDepartmentId } = require("../../utils/admin-scope");
 
 const parseCsv = (csvText) => {
   const rows = String(csvText || "")
@@ -44,11 +45,13 @@ const getStudents = asyncHandler(async (req, res) => {
   const db = m.dbClient;
   const collegeId = req.collegeId;
   const { page, limit, skip } = getPagination(req.query);
+  const scopedDepartmentId = getScopedDepartmentId(req, { requiredForDepartmentAdmin: false });
 
   const where = {
     collegeId,
-    // Enforce admin department scoping: admins see only their department unless superAdmin
-    ...(req.superAdmin ? (req.query.departmentId ? { departmentId: req.query.departmentId } : {}) : { departmentId: req.admin?.departmentId }),
+    ...(scopedDepartmentId
+      ? { departmentId: scopedDepartmentId }
+      : (req.query.departmentId ? { departmentId: req.query.departmentId } : {})),
   };
 
   const filters = [];

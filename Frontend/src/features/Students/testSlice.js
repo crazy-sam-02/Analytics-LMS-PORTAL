@@ -502,7 +502,6 @@ const testSlice = createSlice({
       if (type === "fullscreen_exit") state.violations.fullscreen_exit += 1;
       if (type === "screenshot_attempt") state.violations.screenshot_attempt += 1;
       if (type === "devtools_open") state.violations.devtools_open += 1;
-      state.violations.total += 1;
     },
     setSaveStatus: (state, action) => {
       state.save_status = action.payload;
@@ -590,8 +589,8 @@ const testSlice = createSlice({
         state.submit_status = "error";
       })
       .addCase(reportAttemptViolation.fulfilled, (state, action) => {
-        const count = Number(action.payload?.violationCount || 0);
-        if (count > state.violations.total) {
+        const count = Number(action.payload?.violationCount);
+        if (Number.isFinite(count) && count >= 0) {
           state.violations.total = count;
         }
       })

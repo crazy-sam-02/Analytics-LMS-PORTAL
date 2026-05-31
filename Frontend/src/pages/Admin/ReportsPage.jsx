@@ -1,6 +1,6 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import usePermission from "@/hooks/usePermission";
 import PermissionDenied from "@/components/Admin/PermissionDenied";
@@ -98,8 +98,12 @@ const formatTopicLabel = (label, index) => {
   return TOPIC_LABEL_MAP[key] || raw;
 };
 
-export default function ReportsPage() {
+export default function ReportsPage({ basePathOverride = null, showStudentDepartmentFilter = false } = {}) {
   const navigate = useNavigate();
+  const location = useLocation();
+  const basePath = basePathOverride || (location.pathname.startsWith("/college-admin") ? "/college-admin" : "/admin");
+  const apiBasePath = `/api${basePath}`;
+  const queryKeyPrefix = basePath === "/college-admin" ? "college-admin-report" : "admin-report";
   const [searchParams, setSearchParams] = useSearchParams();
 
   const canViewReports = usePermission(ADMIN_PERMISSIONS.VIEW_REPORTS);
@@ -112,6 +116,7 @@ export default function ReportsPage() {
 
   const [studentSearch, setStudentSearch] = useState("");
   const [studentYear, setStudentYear] = useState("");
+  const [studentDepartmentId, setStudentDepartmentId] = useState("");
   const [sortState, setSortState] = useState(MODE_DEFAULT_SORT[mode]);
   const [exportState, setExportState] = useState({
     status: "idle",
@@ -148,32 +153,40 @@ export default function ReportsPage() {
   };
 
   const testsQuery = useQuery({
-    queryKey: ["admin-report-tests-v2"],
+    queryKey: [`${queryKeyPrefix}-tests-v2`],
     queryFn: () => adminApi.getTests("?page=1&limit=100"),
     staleTime: 120000,
   });
 
   const batchesQuery = useQuery({
-    queryKey: ["admin-report-batches-v2"],
+    queryKey: [`${queryKeyPrefix}-batches-v2`],
     queryFn: () => adminApi.getBatches(),
     staleTime: 120000,
   });
 
+  const departmentsQuery = useQuery({
+    queryKey: [`${queryKeyPrefix}-departments-v2`],
+    queryFn: () => adminApi.getDepartments(),
+    enabled: canViewReports && mode === "student" && showStudentDepartmentFilter,
+    staleTime: 120000,
+  });
+
   const studentsDirectoryQuery = useQuery({
-    queryKey: ["admin-report-students-directory-v2", studentYear],
+    queryKey: [`${queryKeyPrefix}-students-directory-v2`, studentYear, studentDepartmentId],
     queryFn: () =>
       adminApi.getStudents(
         toQueryString({
           page: 1,
           limit: 100,
           year: studentYear || undefined,
+          departmentId: studentDepartmentId || undefined,
         })
       ),
     staleTime: 120000,
   });
   const studentSearchTerm = studentSearch.trim();
   const studentSearchQuery = useQuery({
-    queryKey: ["admin-report-student-search-v2", studentSearchTerm, studentYear],
+    queryKey: [`${queryKeyPrefix}-student-search-v2`, studentSearchTerm, studentYear, studentDepartmentId],
     queryFn: () =>
       adminApi.getStudents(
         toQueryString({
@@ -181,6 +194,7 @@ export default function ReportsPage() {
           limit: 8,
           search: studentSearchTerm,
           year: studentYear || undefined,
+          departmentId: studentDepartmentId || undefined,
         })
       ),
     enabled: canViewReports && mode === "student" && studentSearchTerm.length >= 2,
@@ -188,7 +202,7 @@ export default function ReportsPage() {
   });
 
   const analyticsQuery = useQuery({
-    queryKey: ["admin-report-analytics-v2", mode, testId, batchId, studentId],
+    queryKey: [`${queryKeyPrefix}-analytics-v2`, mode, testId, batchId, studentId],
     queryFn: () =>
       adminApi.getReportAnalytics(
         toQueryString({
@@ -202,7 +216,7 @@ export default function ReportsPage() {
     staleTime: 45000,
   });
   const studentDetailQuery = useQuery({
-    queryKey: ["admin-report-student-detail-all-tests-v2", studentId],
+    queryKey: [`${queryKeyPrefix}-student-detail-all-tests-v2`, studentId],
     queryFn: () => adminApi.getReportStudentDetail(studentId),
     enabled: canViewReports && mode === "student" && Boolean(studentId),
     staleTime: 45000,
@@ -210,6 +224,7 @@ export default function ReportsPage() {
 
   const tests = testsQuery.data?.data || [];
   const batches = batchesQuery.data || [];
+  const departments = Array.isArray(departmentsQuery.data) ? departmentsQuery.data : [];
   const studentsDirectory = studentsDirectoryQuery.data?.data || [];
   const studentSearchResults = studentSearchQuery.data?.data || [];
   const analytics = analyticsQuery.data || {};
@@ -368,10 +383,17 @@ export default function ReportsPage() {
     setStudentSearch("");
   };
 
+  const handleDepartmentChange = (nextDepartmentId) => {
+    setStudentDepartmentId(nextDepartmentId || "");
+    updateParams({ student_id: "" });
+    setStudentSearch("");
+  };
+
   useEffect(() => {
     setSortState(MODE_DEFAULT_SORT[mode]);
     if (mode !== "student") {
       setStudentSearch("");
+      setStudentDepartmentId("");
     }
   }, [mode]);
 
@@ -396,7 +418,7 @@ export default function ReportsPage() {
           ...prev,
           status: status.status === "completed" ? "complete" : status.status === "failed" ? "failed" : "polling",
           progress: Number(status.progress || 0),
-          downloadUrl: status.download_url || prev.downloadUrl || `/api/admin/reports/${jobId}/download`,
+          downloadUrl: status.download_url || prev.downloadUrl || `${apiBasePath}/reports/${jobId}/download`,
           expiresAt: status.expires_at || prev.expiresAt,
           jobId,
         }));
@@ -436,7 +458,7 @@ export default function ReportsPage() {
         return;
       }
 
-      setExportState({ status: "polling", progress: 5, downloadUrl: `/api/admin/reports/${jobId}/download`, expiresAt: null, jobId });
+      setExportState({ status: "polling", progress: 5, downloadUrl: `${apiBasePath}/reports/${jobId}/download`, expiresAt: null, jobId });
       startPollingJob(jobId);
     } catch (_error) {
       setExportState({ status: "failed", progress: 0, downloadUrl: "", expiresAt: null, jobId: "" });
@@ -471,6 +493,9 @@ export default function ReportsPage() {
 
   const handleModeSwitch = (nextMode) => {
     updateParams({ mode: nextMode, batch: "", student_id: "" });
+    setStudentSearch("");
+    setStudentYear("");
+    setStudentDepartmentId("");
   };
 
   const handleSort = (key) => {
@@ -606,6 +631,24 @@ export default function ReportsPage() {
                     </select>
                   </label>
                 </div>
+
+                {showStudentDepartmentFilter ? (
+                  <div className="mb-3 max-w-xs">
+                    <label className="space-y-1 text-xs text-text-secondary">
+                      <span>Department</span>
+                      <select
+                        value={studentDepartmentId}
+                        onChange={(event) => handleDepartmentChange(event.target.value)}
+                        className="h-10 w-full rounded-xl border border-border bg-card px-3 text-sm"
+                      >
+                        <option value="">All departments</option>
+                        {departments.map((department) => (
+                          <option key={department.id} value={department.id}>{department.name}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                ) : null}
 
                 <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
                   <select
@@ -845,7 +888,7 @@ export default function ReportsPage() {
                           <EmptyState
                             title="No students in this batch"
                             description="Add students to this batch to see report rows."
-                            action={{ label: "Go to Batch Management", onClick: () => navigate("/admin/batches") }}
+                            action={{ label: "Go to Batch Management", onClick: () => navigate(`${basePath}/batches`) }}
                           />
                         </td>
                       </tr>
@@ -1004,35 +1047,8 @@ export default function ReportsPage() {
                     <pre className="mt-2 overflow-x-auto rounded-lg border border-border/70 bg-card p-2 text-[11px] text-text-secondary">{JSON.stringify(event.metadata, null, 2)}</pre>
                   ) : null}
                   <div className="mt-3 space-y-2">
-                    <textarea
-                      value={reviewState.eventKey === (event.anomalyId || event.id) ? reviewState.reason : ""}
-                      onChange={(e) => setReviewState((prev) => ({
-                        ...prev,
-                        eventKey: event.anomalyId || event.id || "",
-                        reason: e.target.value,
-                        error: "",
-                      }))}
-                      placeholder="Reason required for escalate or dismiss"
-                      className="min-h-20 w-full rounded-lg border border-border bg-card px-3 py-2 text-sm"
-                    />
-                    <div className="flex flex-wrap items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => handleViolationReview(event, "ESCALATE")}
-                        disabled={reviewState.submitting}
-                        className="rounded-lg bg-red-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-60"
-                      >
-                        Escalate
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleViolationReview(event, "DISMISS")}
-                        disabled={reviewState.submitting}
-                        className="rounded-lg border border-border px-3 py-2 text-sm font-medium disabled:opacity-60"
-                      >
-                        Dismiss
-                      </button>
-                    </div>
+                    
+                    
                     {reviewState.eventKey === (event.anomalyId || event.id) && reviewState.error ? (
                       <p className="text-xs text-red-500">{reviewState.error}</p>
                     ) : null}
@@ -1048,4 +1064,7 @@ export default function ReportsPage() {
     </div>
   );
 }
+
+
+
 

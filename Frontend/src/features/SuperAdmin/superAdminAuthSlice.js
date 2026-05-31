@@ -18,6 +18,10 @@ export const loginSuperAdmin = createAsyncThunk("superAdminAuth/login", async (p
 });
 
 export const fetchCurrentSuperAdmin = createAsyncThunk("superAdminAuth/me", async () => {
+  if (!superAdminTokenStorage.getAccess() && !superAdminTokenStorage.getRefresh()) {
+    throw new Error("No saved super admin session");
+  }
+
   return superAdminApi.me();
 });
 

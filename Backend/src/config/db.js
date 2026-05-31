@@ -23,6 +23,9 @@ const MODEL_TO_COLLECTION = {
   question: "question",
   questionBank: "questionBank",
   subject: "subject",
+  resource: "resource",
+  resourceView: "resourceView",
+  resourceDownload: "resourceDownload",
   cloneMapping: "cloneMapping",
   submission: "submission",
   answer: "answer",
@@ -50,6 +53,7 @@ const RELATIONS = {
     submissions: { model: "submission", type: "many", sourceField: "id", targetField: "collegeId" },
     questionBankItems: { model: "questionBank", type: "many", sourceField: "id", targetField: "collegeId" },
     subjects: { model: "subject", type: "many", sourceField: "id", targetField: "collegeId" },
+    resources: { model: "resource", type: "many", sourceField: "id", targetField: "collegeId" },
     batches: { model: "batch", type: "many", sourceField: "id", targetField: "collegeId" },
   },
   superAdmin: {
@@ -122,6 +126,21 @@ const RELATIONS = {
     college: { model: "college", type: "one", sourceField: "collegeId", targetField: "id" },
     createdByAdmin: { model: "admin", type: "one", sourceField: "createdByAdminId", targetField: "id" },
     createdBySuperAdmin: { model: "superAdmin", type: "one", sourceField: "createdBySuperAdminId", targetField: "id" },
+    resources: { model: "resource", type: "many", sourceField: "id", targetField: "subjectId" },
+  },
+  resource: {
+    college: { model: "college", type: "one", sourceField: "collegeId", targetField: "id" },
+    subjectRef: { model: "subject", type: "one", sourceField: "subjectId", targetField: "id" },
+    views: { model: "resourceView", type: "many", sourceField: "id", targetField: "resourceId" },
+    downloads: { model: "resourceDownload", type: "many", sourceField: "id", targetField: "resourceId" },
+  },
+  resourceView: {
+    resource: { model: "resource", type: "one", sourceField: "resourceId", targetField: "id" },
+    user: { model: "student", type: "one", sourceField: "userId", targetField: "id" },
+  },
+  resourceDownload: {
+    resource: { model: "resource", type: "one", sourceField: "resourceId", targetField: "id" },
+    user: { model: "student", type: "one", sourceField: "userId", targetField: "id" },
   },
   submission: {
     user: { model: "student", type: "one", sourceField: "userId", targetField: "id" },
@@ -205,6 +224,17 @@ const DEFAULTS = {
   question: { options: [], marks: 1 },
   questionBank: { options: [], marks: 1, difficulty: "MEDIUM" },
   subject: {},
+  resource: {
+    departmentIds: [],
+    batchIds: [],
+    studentIds: [],
+    downloadCount: 0,
+    viewCount: 0,
+    tags: [],
+    isActive: true,
+  },
+  resourceView: { viewedAt: () => new Date(), batchIds: [] },
+  resourceDownload: { downloadedAt: () => new Date(), batchIds: [] },
   submission: {
     attemptNumber: 1,
     score: 0,
@@ -241,6 +271,9 @@ const OBJECT_ID_FIELDS = new Set([
   "createdByAdminId",
   "createdBySuperAdminId",
   "subjectId",
+  "resourceId",
+  "uploadedBy",
+  "studentIds",
   "sourceTestId",
   "clonedTestId",
   "targetCollegeId",
@@ -1264,12 +1297,87 @@ function modelClient(modelName) {
     },
 
     async upsert(args = {}) {
+      await ensureConnected();
+      const collection = getCollection(modelName);
       const normalizedWhere = normalizeCompoundWhere(modelName, args.where || {});
-      const existing = await this.findFirst({ where: normalizedWhere });
-      if (existing) {
-        return this.update({ where: { id: existing.id }, data: args.update || {}, select: args.select, include: args.include });
+
+      const mongoFilter = toMongoFilter(modelName, normalizedWhere);
+      const resolvedFilter = await resolveRelationFilters(modelName, mongoFilter);
+      const { cleanFilter, relations } = extractRelationFilters(resolvedFilter);
+
+      if (Object.keys(relations).length > 0) {
+        const existing = await this.findFirst({ where: normalizedWhere });
+        if (existing) {
+          return this.update({ where: { id: existing.id }, data: args.update || {}, select: args.select, include: args.include });
+        }
+        return this.create({ data: args.create || {}, select: args.select, include: args.include });
       }
-      return this.create({ data: args.create || {}, select: args.select, include: args.include });
+
+      const now = new Date();
+      const createData = normalizeDocumentForWrite(args.create || {});
+      const updateData = normalizeDocumentForWrite(args.update || {});
+
+      const insertDoc = {
+        ...materializeDefaults(modelName),
+        ...createData,
+      };
+
+      if (!Object.prototype.hasOwnProperty.call(insertDoc, "_id")) {
+        insertDoc._id = new mongoose.Types.ObjectId();
+      }
+      delete insertDoc.id;
+
+      if (!Object.prototype.hasOwnProperty.call(insertDoc, "createdAt")) {
+        insertDoc.createdAt = now;
+      }
+
+      const setData = {
+        ...updateData,
+        updatedAt: now,
+      };
+
+      const setOnInsertData = Object.fromEntries(
+        Object.entries(insertDoc).filter(([key]) => !Object.prototype.hasOwnProperty.call(setData, key))
+      );
+
+      try {
+        const result = await collection.findOneAndUpdate(
+          cleanFilter,
+          {
+            $set: setData,
+            $setOnInsert: setOnInsertData,
+          },
+          {
+            upsert: true,
+            returnDocument: "after",
+          }
+        );
+
+        const updatedDoc = result && typeof result === "object" && "value" in result
+          ? result.value
+          : result;
+
+        return resolveSelectAndInclude(modelName, cleanDoc(updatedDoc), args);
+      } catch (error) {
+        if (error?.code !== 11000) {
+          throw error;
+        }
+
+        const existing = await collection.findOne(cleanFilter);
+        if (!existing) {
+          throw error;
+        }
+
+        const updated = await collection.findOneAndUpdate(
+          { _id: existing._id },
+          { $set: setData },
+          { returnDocument: "after" }
+        );
+        const updatedDoc = updated && typeof updated === "object" && "value" in updated
+          ? updated.value
+          : updated;
+        return resolveSelectAndInclude(modelName, cleanDoc(updatedDoc), args);
+      }
     },
 
     async count(args = {}) {
@@ -1380,6 +1488,9 @@ dbClient.$transaction = async (payload) => {
         error.message?.includes("Transaction numbers") ||
         error.message?.includes("replica set")
       ) {
+        if (env.nodeEnv === "production") {
+          throw error;
+        }
         return payload(dbClient);
       }
       throw error;

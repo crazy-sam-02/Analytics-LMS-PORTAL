@@ -3,9 +3,31 @@ const crypto = require("crypto");
 const mongoose = require("mongoose");
 const models = require("../../models");
 const { createAuditLog } = require("../../services/audit.service");
+const { invalidateRefreshTokenRecord } = require("../../services/refresh-token-cache.service");
+const { bumpPrincipalTokenVersion, invalidatePrincipalAuthCache } = require("../../services/auth-revocation.service");
 const { ApiError, asyncHandler } = require("../../utils/http");
-const { ADMIN_ACCESS_PROFILES, resolvePermissionsFromProfile } = require("../../constants/admin-access-profiles");
+const {
+  ADMIN_ACCESS_PROFILES,
+  resolvePermissionsFromProfile,
+  resolvePermissionsForRole,
+} = require("../../constants/admin-access-profiles");
+const { ROLES, normalizeRole } = require("../../constants/roles");
 const { getPagination } = require("../../utils/pagination");
+
+const revokeAdminRefreshTokens = async (db, adminId) => {
+  await bumpPrincipalTokenVersion(db, "admin", adminId);
+
+  const activeTokens = await db.adminRefreshToken.findMany({
+    where: { adminId, revokedAt: null },
+  });
+
+  await db.adminRefreshToken.updateMany({
+    where: { adminId, revokedAt: null },
+    data: { revokedAt: new Date() },
+  });
+
+  await Promise.all(activeTokens.map((record) => invalidateRefreshTokenRecord("admin", record)));
+};
 
 const resolveAdminById = async (Admin, adminId) => {
   const byId = await Admin.findUnique({ where: { id: adminId } });
@@ -104,6 +126,7 @@ const getAdmins = asyncHandler(async (req, res) => {
   const search = (req.query.search || "").trim();
   const collegeId = req.query.collegeId;
   const status = String(req.query.status || "").trim().toLowerCase();
+  const role = req.query.role ? normalizeRole(req.query.role) : null;
 
   const statusFilter =
     status === "active"
@@ -115,6 +138,7 @@ const getAdmins = asyncHandler(async (req, res) => {
   const where = {
     ...statusFilter,
     ...(collegeId ? { collegeId } : {}),
+    ...(role ? { role } : {}),
     ...(search
       ? {
           OR: [
@@ -154,7 +178,17 @@ const getAdmins = asyncHandler(async (req, res) => {
 });
 
 const createAdmin = asyncHandler(async (req, res) => {
-  const { fullName, email, employeeId, password, collegeId, departmentId, accessProfile = ADMIN_ACCESS_PROFILES.EDITOR } = req.body;
+  const {
+    fullName,
+    email,
+    employeeId,
+    password,
+    role = ROLES.ADMIN,
+    collegeId,
+    departmentId,
+    accessProfile = ADMIN_ACCESS_PROFILES.EDITOR,
+  } = req.body;
+  const normalizedRole = normalizeRole(role);
 
   const m = await models.init();
   const College = m.dbClient.college;
@@ -166,15 +200,35 @@ const createAdmin = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Admin cannot be created for inactive or missing college");
   }
 
-  if (!departmentId) {
+  if (normalizedRole !== ROLES.ADMIN && normalizedRole !== ROLES.COLLEGE_ADMIN) {
+    throw new ApiError(422, "Invalid role for admin creation");
+  }
+
+  if (normalizedRole === ROLES.ADMIN && !departmentId) {
     throw new ApiError(422, "Department is required for admin", null, "MISSING_DEPARTMENT_ID");
   }
 
-  const department = await Department.findFirst({
-    where: { id: departmentId, collegeId },
-  });
-  if (!department) {
-    throw new ApiError(400, "Department not found for selected college");
+  if (normalizedRole === ROLES.ADMIN) {
+    const department = await Department.findFirst({
+      where: { id: departmentId, collegeId },
+    });
+    if (!department) {
+      throw new ApiError(400, "Department not found for selected college");
+    }
+  }
+
+  if (normalizedRole === ROLES.COLLEGE_ADMIN) {
+    const existingCollegeAdmin = await Admin.findFirst({
+      where: {
+        collegeId,
+        role: ROLES.COLLEGE_ADMIN,
+        isActive: true,
+      },
+    });
+
+    if (existingCollegeAdmin) {
+      throw new ApiError(409, "An active college admin already exists for this college", null, "DUPLICATE_COLLEGE_ADMIN");
+    }
   }
 
   const existing = await Admin.findFirst({
@@ -198,17 +252,17 @@ const createAdmin = asyncHandler(async (req, res) => {
       email,
       employeeId,
       passwordHash,
-      role: "ADMIN",
+      role: normalizedRole,
       collegeId,
-      departmentId,
+      departmentId: normalizedRole === ROLES.ADMIN ? departmentId : null,
       accessProfile,
-      permissions: resolvePermissionsFromProfile(accessProfile),
+      permissions: resolvePermissionsForRole(normalizedRole, accessProfile),
       isActive: true,
     },
   });
 
   await createAuditLog({
-    action: "SUPER_ADMIN_CREATE_ADMIN",
+    action: normalizedRole === ROLES.COLLEGE_ADMIN ? "SUPER_ADMIN_CREATE_COLLEGE_ADMIN" : "SUPER_ADMIN_CREATE_ADMIN",
     targetType: "ADMIN",
     targetId: admin.id,
     collegeId: admin.collegeId,
@@ -217,6 +271,7 @@ const createAdmin = asyncHandler(async (req, res) => {
       id: admin.id,
       email: admin.email,
       employeeId: admin.employeeId,
+      role: admin.role,
       accessProfile: admin.accessProfile,
       isActive: admin.isActive,
     },
@@ -237,15 +292,22 @@ const updateAdmin = asyncHandler(async (req, res) => {
     throw new ApiError(404, "Admin not found");
   }
 
+  const nextRole = normalizeRole(req.body.role || existing.role || ROLES.ADMIN);
   const nextCollegeId = req.body.collegeId ?? existing.collegeId;
-  const nextDepartmentId = req.body.departmentId ?? existing.departmentId;
+  const hasDepartmentUpdate = Object.prototype.hasOwnProperty.call(req.body || {}, "departmentId");
+  const requestedDepartmentId = hasDepartmentUpdate ? req.body.departmentId : existing.departmentId;
+  const nextDepartmentId = nextRole === ROLES.COLLEGE_ADMIN ? null : requestedDepartmentId;
 
-  if (!nextCollegeId || !nextDepartmentId) {
-    throw new ApiError(422, "Admin must belong to a college and department", null, "ADMIN_SCOPE_REQUIRED");
+  if (!nextCollegeId) {
+    throw new ApiError(422, "Admin must belong to a college", null, "COLLEGE_SCOPE_REQUIRED");
   }
 
-  if (req.body.collegeId && !req.body.departmentId) {
-    throw new ApiError(422, "Department is required when changing college", null, "MISSING_DEPARTMENT_ID");
+  if (nextRole !== ROLES.ADMIN && nextRole !== ROLES.COLLEGE_ADMIN) {
+    throw new ApiError(422, "Unsupported admin role");
+  }
+
+  if (nextRole === ROLES.ADMIN && !nextDepartmentId) {
+    throw new ApiError(422, "Department is required for admin", null, "MISSING_DEPARTMENT_ID");
   }
 
   const college = await College.findUnique({ where: { id: nextCollegeId } });
@@ -253,22 +315,41 @@ const updateAdmin = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Admin cannot be assigned to inactive or missing college");
   }
 
-  const department = await Department.findFirst({
-    where: { id: nextDepartmentId, collegeId: nextCollegeId },
-  });
-  if (!department) {
-    throw new ApiError(400, "Department not found for selected college");
+  if (nextRole === ROLES.ADMIN) {
+    const department = await Department.findFirst({
+      where: { id: nextDepartmentId, collegeId: nextCollegeId },
+    });
+    if (!department) {
+      throw new ApiError(400, "Department not found for selected college");
+    }
   }
 
+  if (nextRole === ROLES.COLLEGE_ADMIN) {
+    const existingCollegeAdmin = await Admin.findFirst({
+      where: {
+        collegeId: nextCollegeId,
+        role: ROLES.COLLEGE_ADMIN,
+        isActive: true,
+        id: { not: existing.id },
+      },
+    });
+
+    if (existingCollegeAdmin) {
+      throw new ApiError(409, "An active college admin already exists for this college", null, "DUPLICATE_COLLEGE_ADMIN");
+    }
+  }
+
+  const nextAccessProfile = req.body.accessProfile ?? existing.accessProfile ?? ADMIN_ACCESS_PROFILES.EDITOR;
   const data = {
     ...(req.body.fullName !== undefined ? { fullName: req.body.fullName } : {}),
+    ...(req.body.role !== undefined ? { role: nextRole } : {}),
     ...(req.body.collegeId !== undefined ? { collegeId: req.body.collegeId } : {}),
-    ...(req.body.departmentId !== undefined ? { departmentId: req.body.departmentId } : {}),
+    ...(hasDepartmentUpdate || nextRole === ROLES.COLLEGE_ADMIN ? { departmentId: nextDepartmentId } : {}),
     ...(req.body.isActive !== undefined ? { isActive: req.body.isActive } : {}),
-    ...(req.body.accessProfile !== undefined
+    ...((req.body.accessProfile !== undefined || req.body.role !== undefined)
       ? {
-          accessProfile: req.body.accessProfile,
-          permissions: resolvePermissionsFromProfile(req.body.accessProfile),
+          accessProfile: nextAccessProfile,
+          permissions: resolvePermissionsForRole(nextRole, nextAccessProfile),
         }
       : {}),
   };
@@ -280,6 +361,12 @@ const updateAdmin = asyncHandler(async (req, res) => {
 
   if (!updated) {
     throw new ApiError(404, "Admin not found");
+  }
+
+  if (data.isActive === false) {
+    await bumpPrincipalTokenVersion(db, "admin", existing.id);
+  } else {
+    await invalidatePrincipalAuthCache("admin", existing.id);
   }
 
   await createAuditLog({
@@ -298,7 +385,8 @@ const updateAdmin = asyncHandler(async (req, res) => {
 const resetAdminPassword = asyncHandler(async (req, res) => {
   const { adminId } = req.params;
   const m = await models.init();
-  const Admin = m.dbClient.admin;
+  const db = m.dbClient;
+  const Admin = db.admin;
   const existing = await resolveAdminById(Admin, adminId);
 
   if (!existing) {
@@ -315,6 +403,7 @@ const resetAdminPassword = asyncHandler(async (req, res) => {
     where: resolveAdminUpdateWhere(adminId, existing),
     data: { passwordHash },
   });
+  await revokeAdminRefreshTokens(db, existing.id);
 
   await createAuditLog({
     action: "SUPER_ADMIN_RESET_ADMIN_PASSWORD",
@@ -333,7 +422,8 @@ const deleteAdmin = asyncHandler(async (req, res) => {
   const { adminId } = req.params;
 
   const m = await models.init();
-  const Admin = m.dbClient.admin;
+  const db = m.dbClient;
+  const Admin = db.admin;
 
   const existing = await resolveAdminById(Admin, adminId);
   const existingWithCount = await Admin.findUnique({
@@ -354,6 +444,7 @@ const deleteAdmin = asyncHandler(async (req, res) => {
     where: resolveAdminUpdateWhere(adminId, existing),
     data: { isActive: false },
   });
+  await revokeAdminRefreshTokens(db, existing.id);
 
   await createAuditLog({
     action: "SUPER_ADMIN_DEACTIVATE_ADMIN",

@@ -4,6 +4,7 @@ const { validateDocument, validateDocuments } = require("./model-validation.serv
 const { validateUniqueEmail } = require("./cross-field-validators.service");
 const { UserValidation } = require("../models/validation");
 const { ApiError } = require("../utils/http");
+const { bumpPrincipalTokenVersion, invalidatePrincipalAuthCache } = require("./auth-revocation.service");
 
 const resolveStudentId = (enrollmentNumber) => String(enrollmentNumber || "").trim();
 
@@ -171,6 +172,12 @@ async function updateStudent(studentId, payload, collegeId, adminId) {
     },
   });
 
+  if (payload.isActive === false) {
+    await bumpPrincipalTokenVersion(db, "student", studentId);
+  } else {
+    await invalidatePrincipalAuthCache("student", studentId);
+  }
+
   await db.auditLog.create({
     data: {
       action: "STUDENT_UPDATED",
@@ -321,6 +328,12 @@ async function toggleStudentStatus(studentId, collegeId, adminId, isActive) {
     where: { id: studentId },
     data: { isActive: validated.isActive },
   });
+
+  if (!validated.isActive) {
+    await bumpPrincipalTokenVersion(db, "student", studentId);
+  } else {
+    await invalidatePrincipalAuthCache("student", studentId);
+  }
 
   await db.auditLog.create({
     data: {

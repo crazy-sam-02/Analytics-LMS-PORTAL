@@ -1,7 +1,7 @@
 const mongoose = require("mongoose");
 const { referenceValidator, optionalReferenceValidator } = require("./shared");
 
-const SUBMISSION_STATUSES = ["IN_PROGRESS", "SUBMITTED", "GRADED", "ARCHIVED"];
+const SUBMISSION_STATUSES = ["IN_PROGRESS", "SUBMITTED", "AUTO_SUBMITTED", "GRADED", "ARCHIVED"];
 
 const SubmissionValidationSchema = new mongoose.Schema(
   {
@@ -33,5 +33,6 @@ const SubmissionValidationSchema = new mongoose.Schema(
 
 // Compound index for user's submissions on a test
 SubmissionValidationSchema.index({ userId: 1, testId: 1 });
+SubmissionValidationSchema.index({ userId: 1, testId: 1, attemptNumber: 1 }, { unique: true });
 
 module.exports = mongoose.models.SubmissionValidation || mongoose.model("SubmissionValidation", SubmissionValidationSchema);

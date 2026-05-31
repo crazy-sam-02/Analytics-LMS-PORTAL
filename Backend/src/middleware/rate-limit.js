@@ -121,10 +121,19 @@ const hitRedisCounter = async (key, windowMs) => {
     await redisClient.pexpire(key, windowMs);
   }
 
-  const ttl = await redisClient.pttl(key);
+  let ttl = await redisClient.pttl(key);
+  if (ttl < 0) {
+    await redisClient.set(key, "1", "PX", windowMs);
+    ttl = windowMs;
+    return {
+      count: 1,
+      remainingMs: ttl,
+    };
+  }
+
   return {
     count,
-    remainingMs: ttl > 0 ? ttl : windowMs,
+    remainingMs: ttl,
   };
 };
 
@@ -144,6 +153,10 @@ const createRateLimiter = (options = {}) => {
 
   return async (req, res, next) => {
     if (isRateLimitDisabled()) {
+      return next();
+    }
+
+    if (req.method === "OPTIONS") {
       return next();
     }
 
@@ -172,7 +185,7 @@ const createRateLimiter = (options = {}) => {
         return res.status(429).json({
           message: options.message || "Too many requests. Please slow down and try again shortly.",
           code: "RATE_LIMIT_EXCEEDED",
-          requestId: req.headers["x-request-id"] || null,
+          requestId: req.id || req.headers["x-request-id"] || null,
           details: {
             scope: options.scope || "global",
             retryAfterSeconds: Math.ceil(hit.remainingMs / 1000),

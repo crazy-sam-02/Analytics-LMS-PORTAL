@@ -48,6 +48,7 @@ const updateCollegeSchema = z.object({
   body: createCollegeSchema.shape.body.partial().extend({
     isActive: z.boolean().optional(),
     confirmationText: z.string().trim().optional(),
+    collegeAdminId: optionalNullableIdSchema,
   }),
   params: z.object({ collegeId: idSchema }),
   query: z.object({}).optional().default({}),
@@ -97,24 +98,40 @@ const createAdminSchema = z.object({
     email: z.string().trim().email(),
     employeeId: z.string().trim().min(3),
     password: z.string().min(8),
+    role: z.enum(["ADMIN", "COLLEGE_ADMIN"]).default("ADMIN"),
     collegeId: idSchema,
-    departmentId: idSchema,
+    departmentId: optionalNullableIdSchema,
     accessProfile: z.enum(["VIEW_ONLY", "EDITOR"]).default("EDITOR"),
   }),
   params: z.object({}).optional().default({}),
   query: z.object({}).optional().default({}),
+}).superRefine((input, ctx) => {
+  if (input.body.role === "ADMIN" && !input.body.departmentId) {
+    ctx.addIssue({
+      code: "custom",
+      message: "departmentId is required for ADMIN",
+    });
+  }
 });
 
 const updateAdminSchema = z.object({
   body: z.object({
     fullName: z.string().trim().min(2).optional(),
+    role: z.enum(["ADMIN", "COLLEGE_ADMIN"]).optional(),
     collegeId: idSchema.optional(),
-    departmentId: idSchema.optional(),
+    departmentId: optionalNullableIdSchema,
     isActive: z.boolean().optional(),
     accessProfile: z.enum(["VIEW_ONLY", "EDITOR"]).optional(),
   }),
   params: z.object({ adminId: idSchema }),
   query: z.object({}).optional().default({}),
+}).superRefine((input, ctx) => {
+  if (input.body.role === "ADMIN" && input.body.departmentId === null) {
+    ctx.addIssue({
+      code: "custom",
+      message: "departmentId cannot be null for ADMIN",
+    });
+  }
 });
 
 const resetAdminPasswordSchema = z.object({
@@ -256,6 +273,15 @@ const toggleStudentStatusSchema = z.object({
     confirmationText: z.string().trim().optional(),
   }),
   params: z.object({ studentId: idSchema }),
+  query: z.object({}).optional().default({}),
+});
+
+const promoteStudentsYearGlobalSchema = z.object({
+  body: z.object({
+    collegeId: idSchema,
+    confirmationText: z.string().trim().min(1),
+  }),
+  params: z.object({}).optional().default({}),
   query: z.object({}).optional().default({}),
 });
 

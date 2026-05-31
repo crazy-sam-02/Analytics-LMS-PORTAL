@@ -1,14 +1,29 @@
+const requiredEnv = (name) => {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`${name} is required`);
+  }
+  return value;
+};
+
 (async () => {
   try {
-    const res = await fetch('http://localhost:5001/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier: 'sivasambath16@gmail.com', password: 'Sam@873' }),
+    const baseUrl = process.env.BASE_URL || "http://localhost:5000";
+    const identifier = requiredEnv("STUDENT_IDENTIFIER");
+    const password = requiredEnv("STUDENT_PASSWORD");
+
+    const response = await fetch(`${baseUrl}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ identifier, password }),
     });
-    const text = await res.text();
-    console.log('STATUS', res.status);
+
+    const text = await response.text();
+    console.log("STATUS", response.status);
     console.log(text);
-  } catch (e) {
-    console.error('ERR', e);
+    process.exitCode = response.ok ? 0 : 2;
+  } catch (error) {
+    console.error("ERR", error);
+    process.exitCode = 1;
   }
 })();

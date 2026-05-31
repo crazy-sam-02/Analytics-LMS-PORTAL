@@ -2,6 +2,7 @@ const models = require("../../models");
 const { createAuditLog } = require("../../services/audit.service");
 const { ApiError, asyncHandler } = require("../../utils/http");
 const { getPagination } = require("../../utils/pagination");
+const { invalidatePrincipalAuthCache } = require("../../services/auth-revocation.service");
 
 const normalizeIdList = (ids = []) => [...new Set((Array.isArray(ids) ? ids : []).map((id) => String(id || "").trim()).filter(Boolean))];
 
@@ -44,6 +45,7 @@ const assignStudentsToBatchRecord = async ({ db, batch, studentIds }) => {
         },
       });
     }));
+    await Promise.all(students.map((student) => invalidatePrincipalAuthCache("student", student.id)));
   }
 
   return {
@@ -446,10 +448,15 @@ const deleteBatchGlobal = asyncHandler(async (req, res) => {
     data: { batchId: null },
   });
 
+  const studentsWithLegacyBatch = await db.student.findMany({
+    where: { collegeId: existing.collegeId, batchId },
+    select: { id: true },
+  });
   const detachedStudents = await db.student.updateMany({
     where: { batchId },
     data: { batchId: null },
   });
+  await Promise.all(studentsWithLegacyBatch.map((student) => invalidatePrincipalAuthCache("student", student.id)));
 
   const studentsWithBatchArray = await db.student.findMany({
     where: {
@@ -473,6 +480,7 @@ const deleteBatchGlobal = asyncHandler(async (req, res) => {
         batchId: nextBatchId,
       },
     });
+    await invalidatePrincipalAuthCache("student", student.id);
   }
 
   await db.batch.delete({ where: { id: batchId } });

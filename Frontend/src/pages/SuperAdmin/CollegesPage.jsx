@@ -21,6 +21,8 @@ export default function CollegesPage() {
   const [collegeForm, setCollegeForm] = useState({ name: "", code: "", location: "" });
   const [modalLoading, setModalLoading] = useState(false);
   const [modalSaving, setModalSaving] = useState(false);
+  const [collegeAdminCandidates, setCollegeAdminCandidates] = useState([]);
+  const [selectedCollegeAdminId, setSelectedCollegeAdminId] = useState("");
 
   useEffect(() => {
     dispatch(fetchSuperColleges());
@@ -75,8 +77,14 @@ export default function CollegesPage() {
 
     try {
       setError(null);
-      const details = await superAdminApi.getCollege(college.id);
+      const [details, adminsPayload] = await Promise.all([
+        superAdminApi.getCollege(college.id),
+        superAdminApi.getAdmins(`?page=1&limit=100&collegeId=${encodeURIComponent(college.id)}&status=active`),
+      ]);
+      const candidates = (adminsPayload?.data || []).filter((admin) => admin.role === "ADMIN" || admin.role === "COLLEGE_ADMIN");
       setSelectedCollege(details);
+      setCollegeAdminCandidates(candidates);
+      setSelectedCollegeAdminId(details.assignedCollegeAdmin?.id || details.collegeAdminId || "");
       setCollegeForm({
         name: details.name || "",
         code: details.code || "",
@@ -94,6 +102,8 @@ export default function CollegesPage() {
     setModalMode(null);
     setSelectedCollege(null);
     setCollegeForm({ name: "", code: "", location: "" });
+    setCollegeAdminCandidates([]);
+    setSelectedCollegeAdminId("");
   };
 
   const saveCollegeChanges = async () => {
@@ -124,7 +134,30 @@ export default function CollegesPage() {
     }
   };
 
+  const assignCollegeAdmin = async () => {
+    if (!selectedCollege?.id) return;
+
+    try {
+      setModalSaving(true);
+      setError(null);
+      await superAdminApi.updateCollege(selectedCollege.id, {
+        collegeAdminId: selectedCollegeAdminId || null,
+      });
+
+      await dispatch(fetchSuperColleges());
+      const refreshed = await superAdminApi.getCollege(selectedCollege.id);
+      setSelectedCollege(refreshed);
+      setSelectedCollegeAdminId(refreshed.assignedCollegeAdmin?.id || refreshed.collegeAdminId || "");
+    } catch (err) {
+      setError(err?.response?.data?.message || err?.message || "Failed to assign college admin");
+    } finally {
+      setModalSaving(false);
+    }
+  };
+
   const selectedStats = selectedCollege?._count || {};
+  const getCollegeAdminCount = (college) => (college?.totalAdmins ?? college?._count?.admins ?? 0);
+  const getCollegeStudentCount = (college) => (college?._count?.students ?? 0);
 
   return (
     <div className="space-y-6">
@@ -160,7 +193,7 @@ export default function CollegesPage() {
                     )}
                   </p>
                   <p className="text-xs text-text-secondary">
-                    {college.location || "-"} • Admins: {college._count?.admins || 0} • Students: {college._count?.students || 0}
+                    {college.location || "-"} | Admins: {getCollegeAdminCount(college)} | Students: {getCollegeStudentCount(college)} | College Admin: {college.assignedCollegeAdmin?.fullName || "Unassigned"}
                   </p>
                 </div>
                 <div className="flex justify-center items-center gap-2">
@@ -272,7 +305,7 @@ export default function CollegesPage() {
                           </div>
                           <div className="rounded-lg bg-muted/40 p-3">
                             <p className="text-xs text-text-secondary">Admins</p>
-                            <p className="text-lg font-semibold text-text-primary">{selectedStats.admins || 0}</p>
+                            <p className="text-lg font-semibold text-text-primary">{selectedCollege.totalAdmins ?? selectedStats.admins ?? 0}</p>
                           </div>
                           <div className="rounded-lg bg-muted/40 p-3">
                             <p className="text-xs text-text-secondary">Students</p>
@@ -291,6 +324,35 @@ export default function CollegesPage() {
                             <p className="text-lg font-semibold text-text-primary">{selectedStats.questionBankItems || 0}</p>
                           </div>
                         </div>
+                      </div>
+
+                      <div className="rounded-xl border border-border p-4">
+                        <p className="text-sm font-semibold text-text-primary">Assigned College Admin</p>
+                        <p className="mt-1 text-sm text-text-secondary">
+                          {selectedCollege.assignedCollegeAdmin?.fullName
+                            ? `${selectedCollege.assignedCollegeAdmin.fullName} (${selectedCollege.assignedCollegeAdmin.email})`
+                            : "No college admin assigned"}
+                        </p>
+                        <div className="mt-3 flex flex-wrap items-center gap-2">
+                          <select
+                            className="h-10 min-w-64 rounded-lg border border-border px-2"
+                            value={selectedCollegeAdminId}
+                            onChange={(event) => setSelectedCollegeAdminId(event.target.value)}
+                          >
+                            <option value="">Unassign college admin</option>
+                            {collegeAdminCandidates.map((admin) => (
+                              <option key={admin.id} value={admin.id}>
+                                {admin.fullName} ({admin.role === "COLLEGE_ADMIN" ? "College Admin" : "Admin"})
+                              </option>
+                            ))}
+                          </select>
+                          <Button onClick={assignCollegeAdmin} disabled={modalSaving}>
+                            {modalSaving ? "Saving..." : "Assign / Update"}
+                          </Button>
+                        </div>
+                        <p className="mt-2 text-xs text-text-secondary">
+                          Assigning an active admin here promotes them to College Admin if needed and deactivates previous active college admin accounts for this college.
+                        </p>
                       </div>
                     </>
                   )}

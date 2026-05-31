@@ -85,6 +85,8 @@ const rateLimit = {
   studentReportMax: toPositiveInt(process.env.RATE_LIMIT_STUDENT_REPORT_MAX, 10),
   generalApiWindowMs: toPositiveInt(process.env.RATE_LIMIT_GENERAL_API_WINDOW_MS, 60 * 1000),
   generalApiMax: toPositiveInt(process.env.RATE_LIMIT_GENERAL_API_MAX, 240),
+  superAdminApiWindowMs: toPositiveInt(process.env.RATE_LIMIT_SUPER_ADMIN_API_WINDOW_MS, 60 * 1000),
+  superAdminApiMax: toPositiveInt(process.env.RATE_LIMIT_SUPER_ADMIN_API_MAX, 600),
   reportGenerationWindowMs: toPositiveInt(process.env.RATE_LIMIT_REPORT_GENERATION_WINDOW_MS, 60 * 1000),
   reportGenerationMax: toPositiveInt(process.env.RATE_LIMIT_REPORT_GENERATION_MAX, 10),
   adminReportReadWindowMs: toPositiveInt(process.env.RATE_LIMIT_ADMIN_REPORT_READ_WINDOW_MS, 30 * 1000),
@@ -95,10 +97,28 @@ const rateLimit = {
   adminBatchGuardMax: toPositiveInt(process.env.RATE_LIMIT_ADMIN_BATCH_GUARD_MAX, 12),
   superReportWindowMs: toPositiveInt(process.env.RATE_LIMIT_SUPER_REPORT_WINDOW_MS, 60 * 1000),
   superReportMax: toPositiveInt(process.env.RATE_LIMIT_SUPER_REPORT_MAX, 20),
+  superReportReadWindowMs: toPositiveInt(process.env.RATE_LIMIT_SUPER_REPORT_READ_WINDOW_MS, 60 * 1000),
+  superReportReadMax: toPositiveInt(process.env.RATE_LIMIT_SUPER_REPORT_READ_MAX, 180),
   leaderboardWindowMs: toPositiveInt(process.env.RATE_LIMIT_LEADERBOARD_WINDOW_MS, 30 * 1000),
   leaderboardMax: toPositiveInt(process.env.RATE_LIMIT_LEADERBOARD_MAX, 20),
   searchWindowMs: toPositiveInt(process.env.RATE_LIMIT_SEARCH_WINDOW_MS, 30 * 1000),
   searchMax: toPositiveInt(process.env.RATE_LIMIT_SEARCH_MAX, 30),
+  collegeAdminApiWindowMs: toPositiveInt(process.env.RATE_LIMIT_COLLEGE_ADMIN_API_WINDOW_MS, 60 * 1000),
+  collegeAdminApiMax: toPositiveInt(process.env.RATE_LIMIT_COLLEGE_ADMIN_API_MAX, 180),
+  adminEntityReadWindowMs: toPositiveInt(process.env.RATE_LIMIT_ADMIN_ENTITY_READ_WINDOW_MS, 30 * 1000),
+  adminEntityReadMax: toPositiveInt(process.env.RATE_LIMIT_ADMIN_ENTITY_READ_MAX, 40),
+  adminEntityWriteWindowMs: toPositiveInt(process.env.RATE_LIMIT_ADMIN_ENTITY_WRITE_WINDOW_MS, 60 * 1000),
+  adminEntityWriteMax: toPositiveInt(process.env.RATE_LIMIT_ADMIN_ENTITY_WRITE_MAX, 20),
+  adminAnalyticsReadWindowMs: toPositiveInt(process.env.RATE_LIMIT_ADMIN_ANALYTICS_READ_WINDOW_MS, 30 * 1000),
+  adminAnalyticsReadMax: toPositiveInt(process.env.RATE_LIMIT_ADMIN_ANALYTICS_READ_MAX, 20),
+  adminSettingsWindowMs: toPositiveInt(process.env.RATE_LIMIT_ADMIN_SETTINGS_WINDOW_MS, 60 * 1000),
+  adminSettingsMax: toPositiveInt(process.env.RATE_LIMIT_ADMIN_SETTINGS_MAX, 12),
+  resourceDownloadWindowMs: toPositiveInt(process.env.RATE_LIMIT_RESOURCE_DOWNLOAD_WINDOW_MS, 60 * 1000),
+  resourceDownloadMax: toPositiveInt(process.env.RATE_LIMIT_RESOURCE_DOWNLOAD_MAX, 20),
+  resourceSearchWindowMs: toPositiveInt(process.env.RATE_LIMIT_RESOURCE_SEARCH_WINDOW_MS, 60 * 1000),
+  resourceSearchMax: toPositiveInt(process.env.RATE_LIMIT_RESOURCE_SEARCH_MAX, 60),
+  resourceUploadWindowMs: toPositiveInt(process.env.RATE_LIMIT_RESOURCE_UPLOAD_WINDOW_MS, 60 * 1000),
+  resourceUploadMax: toPositiveInt(process.env.RATE_LIMIT_RESOURCE_UPLOAD_MAX, 10),
   metricsTopNDefault: toPositiveInt(process.env.RATE_LIMIT_METRICS_TOP_N_DEFAULT, 10),
 };
 
@@ -106,6 +126,8 @@ const responseCache = {
   enabled: toBoolean(process.env.RESPONSE_CACHE_ENABLED, true),
   adminReportsTtlSeconds: toPositiveInt(process.env.RESPONSE_CACHE_ADMIN_REPORTS_TTL_SECONDS, 30),
   adminSearchTtlSeconds: toPositiveInt(process.env.RESPONSE_CACHE_ADMIN_SEARCH_TTL_SECONDS, 10),
+  adminCollectionsTtlSeconds: toPositiveInt(process.env.RESPONSE_CACHE_ADMIN_COLLECTIONS_TTL_SECONDS, 20),
+  adminAnalyticsTtlSeconds: toPositiveInt(process.env.RESPONSE_CACHE_ADMIN_ANALYTICS_TTL_SECONDS, 30),
   superAnalyticsTtlSeconds: toPositiveInt(process.env.RESPONSE_CACHE_SUPER_ANALYTICS_TTL_SECONDS, 30),
   studentDashboardTtlSeconds: toPositiveInt(process.env.RESPONSE_CACHE_STUDENT_DASHBOARD_TTL_SECONDS, 15),
   studentTestsTtlSeconds: toPositiveInt(process.env.RESPONSE_CACHE_STUDENT_TESTS_TTL_SECONDS, 20),
@@ -118,7 +140,38 @@ const redis = {
   connectTimeoutMs: toPositiveInt(process.env.REDIS_CONNECT_TIMEOUT_MS, 10_000),
   keepAliveMs: toPositiveInt(process.env.REDIS_KEEP_ALIVE_MS, 30_000),
   maxRetryDelayMs: toPositiveInt(process.env.REDIS_MAX_RETRY_DELAY_MS, 2_000),
+  maxMemory: process.env.REDIS_MAXMEMORY || "",
+  maxMemoryPolicy: process.env.REDIS_MAXMEMORY_POLICY || "",
   queueEnabled: toBoolean(process.env.REDIS_QUEUE_ENABLED, nodeEnv !== "development" && nodeEnv !== "test"),
+};
+
+const metrics = {
+  enabled: toBoolean(process.env.METRICS_ENABLED, nodeEnv === "production"),
+  token: process.env.METRICS_TOKEN || "",
+};
+
+const resourceUpload = {
+  root: process.env.RESOURCE_UPLOAD_ROOT || "uploads/resources",
+  maxFileSizeBytes: toPositiveInt(process.env.RESOURCE_MAX_FILE_SIZE_BYTES, 50 * 1024 * 1024),
+};
+
+const backupRoot = process.env.BACKUP_ROOT || "/var/backups/lms-portal";
+
+const operations = {
+  backupRoot,
+  uploadsBackupRoot: process.env.UPLOADS_BACKUP_ROOT || `${backupRoot}/uploads`,
+  backupMaxAgeHours: toPositiveInt(process.env.BACKUP_MAX_AGE_HOURS, 26),
+  uploadDiskWarningPercent: toPositiveInt(process.env.UPLOAD_DISK_WARNING_PERCENT, 80),
+  uploadDiskCriticalPercent: toPositiveInt(process.env.UPLOAD_DISK_CRITICAL_PERCENT, 90),
+  uploadTmpMaxAgeHours: toPositiveInt(process.env.UPLOAD_TMP_MAX_AGE_HOURS, 24),
+};
+
+const uploadScan = {
+  enabled: toBoolean(process.env.UPLOAD_AV_SCAN_ENABLED, false),
+  required: toBoolean(process.env.UPLOAD_AV_SCAN_REQUIRED, nodeEnv === "production"),
+  host: process.env.CLAMAV_HOST || "clamav",
+  port: toPositiveInt(process.env.CLAMAV_PORT, 3310),
+  timeoutMs: toPositiveInt(process.env.CLAMAV_TIMEOUT_MS, 15_000),
 };
 
 module.exports = {
@@ -138,6 +191,10 @@ module.exports = {
   frontendOrigins,
   redisUrl: process.env.REDIS_URL || "",
   redis,
+  metrics,
+  resourceUpload,
+  operations,
+  uploadScan,
   cloudinaryCloudName: process.env.CLOUDINARY_CLOUD_NAME || "",
   cloudinaryApiKey: process.env.CLOUDINARY_API_KEY || "",
   cloudinaryApiSecret: process.env.CLOUDINARY_API_SECRET || "",

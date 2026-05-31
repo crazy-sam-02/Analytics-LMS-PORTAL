@@ -32,7 +32,7 @@ function persistRecentSearch(query) {
   localStorage.setItem(RECENT_KEY, JSON.stringify(next));
 }
 
-export default function AdminCommandPalette({ open, onOpenChange }) {
+export default function AdminCommandPalette({ open, onOpenChange, basePath = "/admin" }) {
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
@@ -97,7 +97,12 @@ export default function AdminCommandPalette({ open, onOpenChange }) {
   const navigateToResult = (item) => {
     persistRecentSearch(query.trim());
     onOpenChange(false);
-    navigate(item.path || "/admin/dashboard");
+    const defaultPath = `${basePath}/dashboard`;
+    const candidatePath = String(item.path || defaultPath);
+    const resolvedPath = candidatePath.startsWith("/admin/") && basePath !== "/admin"
+      ? candidatePath.replace("/admin", basePath)
+      : candidatePath;
+    navigate(resolvedPath || defaultPath);
   };
 
   const rerunRecent = (value) => {

@@ -8,29 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import TypedConfirmDialog from "@/components/SuperAdmin/TypedConfirmDialog";
-
-const loadXlsxBrowserLib = () =>
-  new Promise((resolve, reject) => {
-    if (typeof window !== "undefined" && window.XLSX) {
-      resolve(window.XLSX);
-      return;
-    }
-
-    const existing = document.querySelector('script[data-xlsx-loader="true"]');
-    if (existing) {
-      existing.addEventListener("load", () => resolve(window.XLSX));
-      existing.addEventListener("error", () => reject(new Error("Unable to load spreadsheet parser")));
-      return;
-    }
-
-    const script = document.createElement("script");
-    script.src = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
-    script.async = true;
-    script.dataset.xlsxLoader = "true";
-    script.onload = () => resolve(window.XLSX);
-    script.onerror = () => reject(new Error("Unable to load spreadsheet parser"));
-    document.head.appendChild(script);
-  });
+import { parseSpreadsheetRows } from "@/lib/spreadsheet";
 
 const normalizeColumnKey = (value) => String(value || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 
@@ -194,17 +172,7 @@ export default function DepartmentsPage() {
       if (name.endsWith(".csv")) {
         parsedCsv = await file.text();
       } else {
-        const XLSX = await loadXlsxBrowserLib();
-        const buffer = await file.arrayBuffer();
-        const workbook = XLSX.read(buffer, { type: "array" });
-        const firstSheetName = workbook.SheetNames[0];
-        const firstSheet = workbook.Sheets[firstSheetName];
-        const rows = XLSX.utils.sheet_to_json(firstSheet, { defval: "" });
-
-        if (!Array.isArray(rows) || rows.length === 0) {
-          throw new Error("Selected file has no rows");
-        }
-
+        const rows = await parseSpreadsheetRows(file);
         parsedCsv = rowsToCsv(rows);
       }
 
@@ -402,7 +370,7 @@ export default function DepartmentsPage() {
                 <option key={college.id} value={college.id}>{college.name}</option>
               ))}
             </select>
-            <Input type="file" accept=".xlsx,.xls,.csv" onChange={handleImportFile} />
+            <Input type="file" accept=".xlsx,.csv" onChange={handleImportFile} />
           </div>
 
           {importFileName ? <p className="text-xs text-text-secondary">Loaded: {importFileName}</p> : null}

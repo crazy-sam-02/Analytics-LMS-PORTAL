@@ -34,7 +34,8 @@ const departmentMatch = (resourceFetchFn) =>
   asyncHandler(async (req, res, next) => {
     if (req.superAdmin) return next();
 
-    const resourceId = req.params?.id || req.body?.id || req.query?.id;
+    const paramValues = Object.values(req.params || {}).filter(Boolean);
+    const resourceId = req.params?.id || req.body?.id || req.query?.id || paramValues[0];
     if (!resourceId) return next();
 
     const resource = await resourceFetchFn(resourceId);

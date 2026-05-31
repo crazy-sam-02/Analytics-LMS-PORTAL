@@ -1,6 +1,8 @@
 const models = require("../../models");
 const { ApiError, asyncHandler } = require("../../utils/http");
 const { createAuditLog } = require("../../services/audit.service");
+const { getScopedDepartmentId } = require("../../utils/admin-scope");
+const { invalidatePrincipalAuthCache } = require("../../services/auth-revocation.service");
 
 const parseCsv = (csvText) => {
   const rows = String(csvText || "")
@@ -21,17 +23,9 @@ const parseCsv = (csvText) => {
   });
 };
 
-const getAdminDepartmentId = (req) => {
-  const departmentId = req.admin?.departmentId || null;
-  if (!departmentId) {
-    throw new ApiError(403, "Admin is not linked to a department", null, "ADMIN_DEPARTMENT_REQUIRED");
-  }
-  return departmentId;
-};
-
 const assertAdminDepartmentScope = (req, departmentId, message = "Cross-department access denied") => {
-  const adminDepartmentId = getAdminDepartmentId(req);
-  if (departmentId && String(departmentId) !== String(adminDepartmentId)) {
+  const adminDepartmentId = getScopedDepartmentId(req, { requiredForDepartmentAdmin: false });
+  if (adminDepartmentId && departmentId && String(departmentId) !== String(adminDepartmentId)) {
     throw new ApiError(403, message, null, "CROSS_DEPARTMENT_ACCESS_DENIED");
   }
   return adminDepartmentId;
@@ -81,6 +75,7 @@ const assignBatchToStudents = async ({ db, collegeId, studentIds, batchId, depar
   }
 
   await db.$transaction(updates);
+  await Promise.all(students.map((student) => invalidatePrincipalAuthCache("student", student.id)));
   return { updated: updates.length };
 };
 
@@ -158,13 +153,19 @@ const createBatch = asyncHandler(async (req, res) => {
   const m = await models.init();
   const db = m.dbClient;
   const collegeId = req.collegeId;
-  const { name, year, departmentId, studentIds } = req.body;
-  assertAdminDepartmentScope(req, departmentId, "Admins can create batches only in their own department");
+  const scopedDepartmentId = getScopedDepartmentId(req, { requiredForDepartmentAdmin: false });
+  const requestedDepartmentId = req.body.departmentId || scopedDepartmentId;
+  const { name, year, studentIds } = req.body;
+  assertAdminDepartmentScope(req, requestedDepartmentId, "Admins can create batches only in their own department");
+
+  if (!requestedDepartmentId) {
+    throw new ApiError(422, "departmentId is required for batch creation");
+  }
 
   const duplicate = await db.batch.findFirst({
     where: {
       collegeId,
-      departmentId,
+      departmentId: requestedDepartmentId,
       year,
       name: {
         equals: name,
@@ -178,7 +179,7 @@ const createBatch = asyncHandler(async (req, res) => {
   }
 
   const department = await db.department.findFirst({
-    where: { id: departmentId, collegeId },
+    where: { id: requestedDepartmentId, collegeId },
   });
 
   if (!department) {
@@ -189,7 +190,7 @@ const createBatch = asyncHandler(async (req, res) => {
     data: {
       name,
       year,
-      departmentId,
+      departmentId: requestedDepartmentId,
       collegeId,
     },
   });
@@ -200,7 +201,7 @@ const createBatch = asyncHandler(async (req, res) => {
       collegeId,
       studentIds,
       batchId: batch.id,
-      departmentId,
+      departmentId: requestedDepartmentId,
       isGlobalBatch: Boolean(batch.isGlobal),
     });
   }
@@ -392,6 +393,7 @@ const removeStudentFromBatch = asyncHandler(async (req, res) => {
     where: { id: studentId },
     data: { batchIds: nextBatchIds, batchId: nextBatchId },
   });
+  await invalidatePrincipalAuthCache("student", studentId);
 
   await createAuditLog({
     action: "ADMIN_BATCH_STUDENT_REMOVED",

@@ -125,7 +125,7 @@ export default function TestsPage() {
 
   const loadDepartmentDirectory = async () => {
     let pageCursor = 1;
-    const limit = 200;
+    const limit = 100;
     const byId = {};
 
     while (true) {

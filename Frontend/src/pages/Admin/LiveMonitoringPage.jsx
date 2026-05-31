@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { toast } from "sonner";
@@ -39,6 +39,8 @@ const formatMetricTimestamp = (value) => (value ? new Date(value).toLocaleString
 export default function LiveMonitoringPage() {
   const { testId } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  const basePath = location.pathname.startsWith("/college-admin") ? "/college-admin" : "/admin";
   const parentRef = useRef(null);
   const [socketHealthy, setSocketHealthy] = useState(true);
   const [studentRows, setStudentRows] = useState([]);
@@ -192,7 +194,7 @@ export default function LiveMonitoringPage() {
           <span className={`text-xs font-semibold ${socketHealthy ? "text-success" : "text-warning"}`}>
             {socketHealthy ? "Socket Connected" : "Fallback Polling"}
           </span>
-          <Button variant="outline" onClick={() => navigate("/admin/tests")}>Back to Tests</Button>
+          <Button variant="outline" onClick={() => navigate(`${basePath}/tests`)}>Back to Tests</Button>
         </div>
       </section>
 

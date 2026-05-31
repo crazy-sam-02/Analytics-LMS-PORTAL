@@ -5,6 +5,7 @@ const { ApiError } = require("../utils/http");
 const { validateSubmissionStatusTransition } = require("./cross-field-validators.service");
 const { logValidationSuccess, logValidationFailure } = require("./validation-monitoring.service");
 const { isStudentAssignedToTest } = require("./student-test-assignment.service");
+const { recordExamViolation } = require("./exam-violation.service");
 
 /**
  * Create a new submission with validation
@@ -164,9 +165,18 @@ async function recordViolation(submissionId, collegeId, violationType, metadata 
     throw new ApiError(403, "Submission not found");
   }
 
-  const newViolationCount = (existing.violationCount || 0) + 1;
+  const { violationCount: newViolationCount } = await recordExamViolation({
+    db,
+    submission: existing,
+    user: {
+      id: existing.userId,
+      collegeId: existing.collegeId,
+      departmentId: existing.departmentId || null,
+    },
+    type: violationType,
+    metadata,
+  });
 
-  // Update violation count
   const updated = await db.submission.update({
     where: { id: submissionId },
     data: {
@@ -174,19 +184,9 @@ async function recordViolation(submissionId, collegeId, violationType, metadata 
     },
   });
 
-  // Log violation
-  await db.violation.create({
-    data: {
-      submissionId,
-      violationType,
-      metadata,
-      detectedAt: new Date(),
-    },
-  });
-
   // Auto-submit if limit exceeded
   if (newViolationCount >= (existing.violationLimit || 20) && existing.status === "IN_PROGRESS") {
-    await updateSubmissionStatus(submissionId, "SUBMITTED", collegeId, `Auto-submitted: violation limit (${newViolationCount}/${existing.violationLimit}) reached`);
+    await updateSubmissionStatus(submissionId, "AUTO_SUBMITTED", collegeId, `Auto-submitted: violation limit (${newViolationCount}/${existing.violationLimit}) reached`);
   }
 
   return updated;

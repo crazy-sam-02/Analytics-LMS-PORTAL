@@ -1,5 +1,6 @@
 const models = require("../../models");
 const { asyncHandler } = require("../../utils/http");
+const { getScopedDepartmentId } = require("../../utils/admin-scope");
 
 const mapResults = (type, items) =>
   items.map((item) => ({
@@ -34,12 +35,42 @@ const adminSearch = asyncHandler(async (req, res) => {
   }
 
   const whereCollege = req.collegeFilter || { collegeId: req.collegeId };
+  const departmentId = getScopedDepartmentId(req, { requiredForDepartmentAdmin: false });
+  const departmentBatchIds = departmentId
+    ? (await db.batch.findMany({
+        where: { ...whereCollege, departmentId },
+        select: { id: true },
+      })).map((batch) => batch.id)
+    : [];
+  const studentScope = departmentId ? { ...whereCollege, departmentId } : whereCollege;
+  const batchScope = departmentId ? { ...whereCollege, departmentId } : whereCollege;
+  const testScope = departmentId
+    ? {
+        AND: [
+          whereCollege,
+          {
+            OR: [
+              { departmentId },
+              { assignedTo: { in: [departmentId] } },
+              ...(departmentBatchIds.length > 0
+                ? [
+                    { batchId: { in: departmentBatchIds } },
+                    { batchAssignments: { some: { batchId: { in: departmentBatchIds } } } },
+                  ]
+                : []),
+            ],
+          },
+        ],
+      }
+    : whereCollege;
 
   const [tests, students, batches, events] = await Promise.all([
     db.test.findMany({
       where: {
-        ...whereCollege,
-        OR: [{ title: { contains: q, mode: "insensitive" } }, { subject: { contains: q, mode: "insensitive" } }],
+        AND: [
+          testScope,
+          { OR: [{ title: { contains: q, mode: "insensitive" } }, { subject: { contains: q, mode: "insensitive" } }] },
+        ],
       },
       select: { id: true, title: true, subject: true, status: true },
       take: 8,
@@ -47,11 +78,15 @@ const adminSearch = asyncHandler(async (req, res) => {
     }),
     db.student.findMany({
       where: {
-        ...whereCollege,
-        OR: [
-          { fullName: { contains: q, mode: "insensitive" } },
-          { studentId: { contains: q, mode: "insensitive" } },
-          { email: { contains: q, mode: "insensitive" } },
+        AND: [
+          studentScope,
+          {
+            OR: [
+              { fullName: { contains: q, mode: "insensitive" } },
+              { studentId: { contains: q, mode: "insensitive" } },
+              { email: { contains: q, mode: "insensitive" } },
+            ],
+          },
         ],
       },
       select: { id: true, fullName: true, studentId: true, email: true },
@@ -60,8 +95,10 @@ const adminSearch = asyncHandler(async (req, res) => {
     }),
     db.batch.findMany({
       where: {
-        ...whereCollege,
-        name: { contains: q, mode: "insensitive" },
+        AND: [
+          batchScope,
+          { name: { contains: q, mode: "insensitive" } },
+        ],
       },
       select: { id: true, name: true, academicYear: true },
       take: 8,

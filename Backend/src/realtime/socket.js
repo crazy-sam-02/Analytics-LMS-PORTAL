@@ -1,12 +1,149 @@
 const { Server } = require("socket.io");
 const { createAdapter } = require("@socket.io/redis-adapter");
 const Redis = require("ioredis");
+const db = require("../config/db");
+const { ROLES, isAdminLikeRole, isCollegeAdminRole, isDepartmentAdminRole, normalizeRole } = require("../constants/roles");
 const { verifyAccessToken } = require("../utils/token");
 const env = require("../config/env");
 
 let io = null;
 let socketRedisPubClient = null;
 let socketRedisSubClient = null;
+
+const normalizeIdList = (values = []) =>
+  [...new Set(values.filter(Boolean).map((value) => String(value)))];
+
+const assertTokenClaimScope = ({ payload, principal }) => {
+  if (payload.collegeId && principal.collegeId && String(payload.collegeId) !== String(principal.collegeId)) {
+    throw new Error("Invalid token scope");
+  }
+  if (payload.departmentId && principal.departmentId && String(payload.departmentId) !== String(principal.departmentId)) {
+    throw new Error("Invalid token scope");
+  }
+};
+
+const loadSocketPrincipal = async (payload) => {
+  const role = normalizeRole(payload.role || ROLES.STUDENT);
+
+  if (role === ROLES.STUDENT) {
+    const student = await db.student.findUnique({
+      where: { id: payload.sub },
+      include: { batches: true },
+    });
+    if (!student?.isActive) {
+      throw new Error("Inactive student");
+    }
+    assertTokenClaimScope({ payload, principal: student });
+    const batchIds = normalizeIdList([...(Array.isArray(student.batchIds) ? student.batchIds : []), student.batchId]);
+    return {
+      sub: student.id,
+      id: student.id,
+      role,
+      collegeId: student.collegeId || null,
+      departmentId: student.departmentId || null,
+      batchId: student.batchId || null,
+      batchIds,
+    };
+  }
+
+  if (isAdminLikeRole(role)) {
+    const admin = await db.admin.findUnique({ where: { id: payload.sub } });
+    if (!admin?.isActive || normalizeRole(admin.role) !== role) {
+      throw new Error("Inactive admin");
+    }
+    assertTokenClaimScope({ payload, principal: admin });
+    return {
+      sub: admin.id,
+      id: admin.id,
+      role,
+      collegeId: admin.collegeId || null,
+      departmentId: admin.departmentId || null,
+    };
+  }
+
+  if (role === ROLES.SUPER_ADMIN) {
+    const superAdmin = await db.superAdmin.findUnique({ where: { id: payload.sub } });
+    if (!superAdmin?.isActive) {
+      throw new Error("Inactive super admin");
+    }
+    return {
+      sub: superAdmin.id,
+      id: superAdmin.id,
+      role,
+      collegeId: null,
+      departmentId: null,
+    };
+  }
+
+  throw new Error("Unsupported role");
+};
+
+const adminCanMonitorTest = async (user, test) => {
+  if (!test || String(test.collegeId || "") !== String(user.collegeId || "")) {
+    return false;
+  }
+
+  if (isCollegeAdminRole(user.role)) {
+    return true;
+  }
+
+  if (!isDepartmentAdminRole(user.role) || !user.departmentId) {
+    return false;
+  }
+
+  if (String(test.departmentId || "") === String(user.departmentId)) {
+    return true;
+  }
+
+  if (Array.isArray(test.assignedTo) && test.assignedTo.some((id) => String(id) === String(user.departmentId))) {
+    return true;
+  }
+
+  const batchIds = normalizeIdList([
+    test.batchId,
+    ...(Array.isArray(test.batchAssignments) ? test.batchAssignments.map((item) => item?.batchId) : []),
+  ]);
+  if (batchIds.length === 0) {
+    return false;
+  }
+
+  const matchingBatch = await db.batch.findFirst({
+    where: {
+      id: { in: batchIds },
+      collegeId: user.collegeId,
+      departmentId: user.departmentId,
+    },
+    select: { id: true },
+  });
+
+  return Boolean(matchingBatch);
+};
+
+const canJoinTestRoom = async (user, testId) => {
+  const role = normalizeRole(user?.role);
+  const test = await db.test.findUnique({
+    where: { id: testId },
+    include: {
+      batchAssignments: {
+        select: { batchId: true },
+      },
+    },
+  });
+
+  if (!test) {
+    return false;
+  }
+
+  if (role === ROLES.SUPER_ADMIN) {
+    return true;
+  }
+
+  if (isAdminLikeRole(role)) {
+    return adminCanMonitorTest(user, test);
+  }
+
+  return false;
+};
 
 const attachRedisAdapterIfAvailable = async () => {
   if (!io || env.nodeEnv === "test" || !env.redis?.enabled || !env.redisUrl) {
@@ -72,7 +209,7 @@ const initSocket = (httpServer, frontendOrigins) => {
     console.warn("Socket.IO Redis adapter bootstrap error, using in-memory adapter:", error?.message || "unknown error");
   });
 
-  io.use((socket, next) => {
+  io.use(async (socket, next) => {
     try {
       const authHeader = socket.handshake.auth?.token || socket.handshake.headers?.authorization || "";
       const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : authHeader;
@@ -82,7 +219,7 @@ const initSocket = (httpServer, frontendOrigins) => {
       }
 
       const principal = verifyAccessToken(token);
-      socket.data.user = principal;
+      socket.data.user = await loadSocketPrincipal(principal);
       return next();
     } catch (_error) {
       return next(new Error("Unauthorized"));
@@ -97,14 +234,28 @@ const initSocket = (httpServer, frontendOrigins) => {
       socket.join(`college:${user.collegeId}`);
     }
 
-    socket.on("join_test_room", ({ testId } = {}) => {
-      if (!testId) return;
-      socket.join(`test_${testId}`);
+    socket.on("join_test_room", async ({ testId } = {}) => {
+      const normalizedTestId = String(testId || "").trim();
+      if (!normalizedTestId) return;
+
+      try {
+        const allowed = await canJoinTestRoom(user, normalizedTestId);
+        if (!allowed) {
+          socket.emit("test_room_denied", { testId: normalizedTestId, code: "TEST_ROOM_FORBIDDEN" });
+          return;
+        }
+
+        socket.join(`test_${normalizedTestId}`);
+        socket.emit("test_room_joined", { testId: normalizedTestId });
+      } catch {
+        socket.emit("test_room_denied", { testId: normalizedTestId, code: "TEST_ROOM_AUTH_FAILED" });
+      }
     });
 
     socket.on("leave_test_room", ({ testId } = {}) => {
-      if (!testId) return;
-      socket.leave(`test_${testId}`);
+      const normalizedTestId = String(testId || "").trim();
+      if (!normalizedTestId) return;
+      socket.leave(`test_${normalizedTestId}`);
     });
   });
 

@@ -1,12 +1,16 @@
 const bcrypt = require("bcrypt");
 const models = require("../../models");
-const { createAccessToken, createRefreshToken, verifyRefreshToken } = require("../../utils/token");
+const { createAccessToken } = require("../../utils/token");
 const { ApiError, asyncHandler } = require("../../utils/http");
 const {
-  cacheRefreshToken,
-  getCachedRefreshToken,
-  invalidateRefreshToken,
-} = require("../../services/refresh-token-cache.service");
+  assertRefreshTokenRecordUsable,
+  createRefreshTokenRecord,
+  findRefreshTokenRecord,
+  revokeRefreshTokenValue,
+  rotateRefreshTokenRecord,
+  verifyRefreshPayloadOrThrow,
+} = require("../../services/refresh-token-session.service");
+const { revokeAccessTokenFromRequest } = require("../../services/access-token-revocation.service");
 
 const STUDENT_REFRESH_COOKIE = "student_refresh_token";
 const getEnrollmentDisplay = (user = {}) => user.enrollNumber || user.enrollmentNumber || user.studentId;
@@ -25,14 +29,6 @@ const buildStudentProfilePayload = (user = {}) => ({
   college: user.college,
   preferences: user.preferences,
 });
-
-const verifyRefreshPayloadOrThrow = (refreshToken) => {
-  try {
-    return verifyRefreshToken(refreshToken);
-  } catch {
-    throw new ApiError(401, "Invalid refresh token");
-  }
-};
 
 const getRefreshCookieOptions = ({ keepLoggedIn = true } = {}) => ({
   httpOnly: true,
@@ -88,12 +84,15 @@ const login = asyncHandler(async (req, res) => {
   }
 
   const accessToken = createAccessToken(user);
-  const refreshToken = createRefreshToken(user);
-
-  const refreshPayload = verifyRefreshPayloadOrThrow(refreshToken);
-  const StudentRefreshToken = (await models.init()).StudentRefreshToken;
-  const refreshRecord = await StudentRefreshToken.create({ token: refreshToken, userId: user.id, type: "STUDENT", expiresAt: new Date(refreshPayload.exp * 1000) });
-  await cacheRefreshToken("student", refreshToken, refreshRecord);
+  const { refreshToken, refreshRecord } = await createRefreshTokenRecord({
+    db: m.dbClient,
+    modelName: "studentRefreshToken",
+    scope: "student",
+    principal: user,
+    ownerField: "userId",
+    type: "STUDENT",
+    metadata: { keepLoggedIn: Boolean(keepLoggedIn) },
+  });
 
   res.cookie(STUDENT_REFRESH_COOKIE, refreshToken, getRefreshCookieOptions({ keepLoggedIn }));
 
@@ -112,27 +111,30 @@ const refresh = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Refresh token required");
   }
 
-  let dbToken = await getCachedRefreshToken("student", refreshToken);
-  if (!dbToken) {
-    const StudentRefreshToken2 = (await models.init()).StudentRefreshToken;
-    dbToken = await StudentRefreshToken2.findOne({ token: refreshToken }).lean();
-    if (dbToken && !dbToken.revokedAt && new Date(dbToken.expiresAt) >= new Date()) {
-      await cacheRefreshToken("student", refreshToken, dbToken);
-    }
-  }
-
-  if (!dbToken || dbToken.revokedAt || new Date(dbToken.expiresAt) < new Date()) {
-    throw new ApiError(401, "Invalid refresh token");
-  }
   const payload = verifyRefreshPayloadOrThrow(refreshToken);
-  const Student2 = (await models.init()).Student;
-  const User2 = (await models.init()).User;
-  let userRecord = await Student2.findOne({ id: payload.sub }).lean();
+  const m = await models.init();
+  const db = m.dbClient;
+  const dbToken = await findRefreshTokenRecord({
+    db,
+    modelName: "studentRefreshToken",
+    scope: "student",
+    refreshToken,
+  });
+  await assertRefreshTokenRecordUsable({
+    db,
+    modelName: "studentRefreshToken",
+    scope: "student",
+    ownerField: "userId",
+    record: dbToken,
+    ownerId: payload.sub,
+  });
+
+  let userRecord = await db.student.findOne({ id: payload.sub }).lean();
   if (!userRecord) {
     // maybe payload.sub refers to User id
-    userRecord = await User2.findOne({ id: payload.sub }).lean();
+    userRecord = await db.user.findOne({ id: payload.sub }).lean();
   } else {
-    const usr = await User2.findOne({ id: userRecord.userId }).lean();
+    const usr = await db.user.findOne({ id: userRecord.userId }).lean();
     userRecord = { ...usr, ...userRecord };
   }
 
@@ -145,21 +147,41 @@ const refresh = asyncHandler(async (req, res) => {
   }
 
   const newAccessToken = createAccessToken(userRecord);
+  const keepLoggedIn = dbToken.keepLoggedIn !== false;
+  const { refreshToken: newRefreshToken, refreshRecord } = await rotateRefreshTokenRecord({
+    db,
+    modelName: "studentRefreshToken",
+    scope: "student",
+    ownerField: "userId",
+    oldRefreshToken: refreshToken,
+    oldRecord: dbToken,
+    principal: userRecord,
+    type: "STUDENT",
+    metadata: { keepLoggedIn },
+  });
+
+  res.cookie(STUDENT_REFRESH_COOKIE, newRefreshToken, getRefreshCookieOptions({ keepLoggedIn }));
   res.status(200).json({
     accessToken: newAccessToken,
-    refreshToken,
-    sessionId: dbToken.id,
+    refreshToken: newRefreshToken,
+    sessionId: refreshRecord.id,
     user: buildStudentProfilePayload(userRecord),
   });
 });
 
 const logout = asyncHandler(async (req, res) => {
   const refreshToken = req.cookies?.[STUDENT_REFRESH_COOKIE] || req.body?.refreshToken;
+  await revokeAccessTokenFromRequest(req);
 
   if (refreshToken) {
-    const StudentRefreshToken3 = (await models.init()).StudentRefreshToken;
-    await StudentRefreshToken3.updateMany({ token: refreshToken, revokedAt: null }, { $set: { revokedAt: new Date() } });
-    await invalidateRefreshToken("student", refreshToken);
+    const db = (await models.init()).dbClient;
+    await revokeRefreshTokenValue({
+      db,
+      modelName: "studentRefreshToken",
+      scope: "student",
+      refreshToken,
+      reason: "logout",
+    });
   }
 
   res.clearCookie(STUDENT_REFRESH_COOKIE, {
