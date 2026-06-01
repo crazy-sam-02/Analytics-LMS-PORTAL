@@ -2,6 +2,8 @@ const bcrypt = require("bcrypt");
 const models = require("../../models");
 const { createAccessToken } = require("../../utils/token");
 const { ApiError, asyncHandler } = require("../../utils/http");
+const { ROLES, normalizeRole } = require("../../constants/roles");
+const { performSuperAdminLogin } = require("../SuperAdmin/auth.controller");
 const {
   assertRefreshTokenRecordUsable,
   createRefreshTokenRecord,
@@ -11,6 +13,7 @@ const {
   verifyRefreshPayloadOrThrow,
 } = require("../../services/refresh-token-session.service");
 const { revokeAccessTokenFromRequest } = require("../../services/access-token-revocation.service");
+const { requestPasswordReset, resetPasswordWithToken } = require("../../services/password-reset.service");
 
 const STUDENT_REFRESH_COOKIE = "student_refresh_token";
 const getEnrollmentDisplay = (user = {}) => user.enrollNumber || user.enrollmentNumber || user.studentId;
@@ -39,6 +42,10 @@ const getRefreshCookieOptions = ({ keepLoggedIn = true } = {}) => ({
 });
 
 const login = asyncHandler(async (req, res) => {
+  if (normalizeRole(req.body?.role) === ROLES.SUPER_ADMIN) {
+    return performSuperAdminLogin(req, res);
+  }
+
   const { identifier, password, keepLoggedIn = true } = req.body;
 
   const m = await models.init();
@@ -197,9 +204,30 @@ const me = asyncHandler(async (req, res) => {
   res.status(200).json(buildStudentProfilePayload(user));
 });
 
+const forgotPassword = asyncHandler(async (req, res) => {
+  const result = await requestPasswordReset({
+    scope: "student",
+    portal: "student",
+    identifier: req.body?.identifier || req.body?.email,
+    req,
+  });
+  res.status(202).json(result);
+});
+
+const resetPassword = asyncHandler(async (req, res) => {
+  const result = await resetPasswordWithToken({
+    scope: "student",
+    token: req.body?.token,
+    password: req.body?.password,
+  });
+  res.status(200).json(result);
+});
+
 module.exports = {
   login,
   refresh,
   logout,
   me,
+  forgotPassword,
+  resetPassword,
 };

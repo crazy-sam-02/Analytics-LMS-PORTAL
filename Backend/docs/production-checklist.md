@@ -21,21 +21,23 @@ This project is deployment-capable only after the production checks below pass a
 3. Set `METRICS_TOKEN` to a strong random value or explicitly set `METRICS_ENABLED=false`.
 4. Set `FRONTEND_ORIGIN` to the real HTTPS origin only.
 5. Confirm `MONGODB_URI` uses `MONGO_APP_USERNAME`, not `MONGO_INITDB_ROOT_USERNAME`, and includes `replicaSet=rs0`.
-6. Keep `REDIS_MAXMEMORY_POLICY=noeviction`; tune `REDIS_MAXMEMORY` after the 500 and 1000 user load tests.
-7. Keep `SUPERADMIN_PASSWORD` only for the first bootstrap, then remove it and restart.
-8. Create the host backup directory from `HOST_BACKUP_ROOT` and restrict it to the deployment user.
-9. Run `docker compose --env-file Backend/.env.production -f docker-compose.production.yml build`.
-10. Run `docker compose --env-file Backend/.env.production -f docker-compose.production.yml up -d`.
-11. Run migrations and indexes:
+6. Set `RESEND_API_KEY`, keep `RESEND_FROM_EMAIL=noreply@analyticsedify.com`, set `PASSWORD_RESET_DELIVERY_MODE=resend`, and confirm all password-reset frontend URLs use `https://analyticsedify.com`; never enable `PASSWORD_RESET_RETURN_TOKEN` in production.
+7. Keep `REDIS_MAXMEMORY_POLICY=noeviction`; tune `REDIS_MAXMEMORY` after the 500 and 1000 user load tests.
+8. Create the initial SuperAdmin with `npm run create -- --name="Prionex Owner" --email="owner@prionex.com" --password="StrongPassword123!"`; do not store SuperAdmin credentials in environment files.
+9. Run `npm run verify` and confirm at least one active SuperAdmin and no more than five total SuperAdmins.
+10. Create the host backup directory from `HOST_BACKUP_ROOT` and restrict it to the deployment user.
+11. Run `docker compose --env-file Backend/.env.production -f docker-compose.production.yml build`.
+12. Run `docker compose --env-file Backend/.env.production -f docker-compose.production.yml up -d`.
+13. Run migrations and indexes:
    - `docker compose --env-file Backend/.env.production -f docker-compose.production.yml exec api npm run db:migrate:refresh-token-hashes`
    - `docker compose --env-file Backend/.env.production -f docker-compose.production.yml exec api npm run db:migrate:violations`
    - `docker compose --env-file Backend/.env.production -f docker-compose.production.yml exec api npm run db:create-indexes`
-12. Run `docker compose --env-file Backend/.env.production -f docker-compose.production.yml exec api npm run prod:check`.
-13. Write the metrics token for Prometheus:
+14. Run `docker compose --env-file Backend/.env.production -f docker-compose.production.yml exec api npm run prod:check`.
+15. Write the metrics token for Prometheus:
    - `mkdir -p deploy/monitoring/secrets`
    - `printf "%s" "$METRICS_TOKEN" > deploy/monitoring/secrets/metrics_token`
    - `chmod 600 deploy/monitoring/secrets/metrics_token`
-14. Start monitoring after the production stack is healthy:
+16. Start monitoring after the production stack is healthy:
    - `docker compose --env-file Backend/.env.production -f docker-compose.monitoring.yml up -d`
 
 `deploy/mongo/init-app-user.sh` runs only when MongoDB initializes an empty `mongo_data` volume. `mongo-init` then initiates the single-node replica set before the API starts. For an already-existing production MongoDB, create the least-privilege user and initiate/verify the replica set manually before switching `MONGODB_URI`.
@@ -82,6 +84,14 @@ Every API response includes `X-Request-Id`; use it to correlate frontend errors,
 - Keep `UPLOAD_AV_SCAN_REQUIRED=true` for production; `npm run prod:check` fails if scanning is required but unavailable.
 - Upload disk thresholds are controlled by `UPLOAD_DISK_WARNING_PERCENT` and `UPLOAD_DISK_CRITICAL_PERCENT`.
 - Uploads are still permission-checked through the API; do not expose the upload volume directly through NGINX.
+
+**Password Reset**
+
+- Public reset endpoints exist for `/api/auth`, `/api/admin/auth`, `/api/college-admin/auth`, and `/api/super-admin/auth`.
+- Forgot-password responses are generic to avoid account enumeration.
+- Reset tokens are stored only as SHA-256 hashes, expire by TTL index, and revoke active refresh sessions after password reset.
+- Production delivers reset links directly through Resend using `RESEND_API_KEY` and `RESEND_FROM_EMAIL=noreply@analyticsedify.com`; development may use `PASSWORD_RESET_DELIVERY_MODE=response` only for local testing.
+- Configure portal-specific reset URLs when the frontend paths differ: `PASSWORD_RESET_FRONTEND_URL`, `PASSWORD_RESET_ADMIN_FRONTEND_URL`, `PASSWORD_RESET_COLLEGE_ADMIN_FRONTEND_URL`, and `PASSWORD_RESET_SUPER_ADMIN_FRONTEND_URL`.
 
 **Pre-Launch Gate**
 

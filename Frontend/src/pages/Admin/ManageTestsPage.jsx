@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
+import { useLocation, useNavigate } from "react-router-dom";
 import { fetchAdminTests, transitionAdminTestStatus, deleteAdminTest } from "@/features/Admin/adminPanelSlice";
 import { openTestEditDialog } from "@/features/Admin/testCreationSlice";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -95,6 +96,8 @@ const transitionConfirmationText = (testTitle, action) => {
 
 export default function ManageTestsPage() {
   const dispatch = useDispatch();
+  const location = useLocation();
+  const navigate = useNavigate();
   const tests = useSelector((state) => state.adminPanel.tests.data);
   const loading = useSelector((state) => state.adminPanel.tests.loading);
   const pagination = useSelector((state) => state.adminPanel.tests.pagination || {});
@@ -116,6 +119,7 @@ export default function ManageTestsPage() {
   const [deleteDialog, setDeleteDialog] = useState({ open: false, test: null });
   const [editingTestId, setEditingTestId] = useState("");
 
+  const basePath = location.pathname.startsWith("/college-admin") ? "/college-admin" : "/admin";
   const canTransition = canEdit || canPublish;
 
   const queryString = useMemo(() => {
@@ -353,6 +357,15 @@ export default function ManageTestsPage() {
                       <td className="px-3 py-2 text-text-secondary">{totalAttempts > 0 ? "Computed" : "-"}</td>
                       <td className="px-3 py-2 text-right">
                         <div className="flex justify-end gap-1">
+                          {canEdit && normalizeStatus(test.status) === "LIVE" ? (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => navigate(`${basePath}/tests/${test.id}/monitoring`)}
+                            >
+                              Monitor
+                            </Button>
+                          ) : null}
                           {canEdit && !adminReadOnly ? (
                             <Button
                               size="sm"

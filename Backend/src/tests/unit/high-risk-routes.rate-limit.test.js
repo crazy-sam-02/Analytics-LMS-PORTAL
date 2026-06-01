@@ -8,6 +8,18 @@ const mockEnv = {
     reportGenerationMax: 10,
     adminTestListWindowMs: 30_000,
     adminTestListMax: 30,
+    adminTestCreateWindowMs: 60_000,
+    adminTestCreateMax: 8,
+    adminTestUpdateWindowMs: 60_000,
+    adminTestUpdateMax: 20,
+    adminTestPublishWindowMs: 60_000,
+    adminTestPublishMax: 6,
+    adminTestCloneWindowMs: 60_000,
+    adminTestCloneMax: 5,
+    adminTestMonitoringWriteWindowMs: 60_000,
+    adminTestMonitoringWriteMax: 20,
+    adminQuestionBankBulkImportWindowMs: 300_000,
+    adminQuestionBankBulkImportMax: 5,
     adminEntityWriteWindowMs: 60_000,
     adminEntityWriteMax: 20,
     adminBatchGuardWindowMs: 60_000,
@@ -16,6 +28,10 @@ const mockEnv = {
     superReportMax: 20,
     leaderboardWindowMs: 30_000,
     leaderboardMax: 20,
+    authForgotPasswordWindowMs: 900_000,
+    authForgotPasswordMax: 5,
+    authResetPasswordWindowMs: 900_000,
+    authResetPasswordMax: 10,
   },
 };
 
@@ -25,7 +41,10 @@ const loadRouteWithLimiterSpy = (routeModulePath, extraMocks = {}) => {
   const createRateLimiter = jest.fn(() => mockMiddleware);
 
   jest.doMock("../../config/env", () => mockEnv);
-  jest.doMock("../../middleware/rate-limit", () => ({ createRateLimiter }));
+  jest.doMock("../../middleware/rate-limit", () => ({
+    authKeyByIp: jest.fn(() => "ip:test"),
+    createRateLimiter,
+  }));
   jest.doMock("../../middleware/validate", () => () => mockMiddleware);
   jest.doMock("../../middleware/auth", () => ({
     authenticate: mockMiddleware,
@@ -82,7 +101,57 @@ describe("high-risk route rate limit wiring", () => {
     ]);
   });
 
-  it("limits admin test list and guarded batch operations", () => {
+  it("limits auth forgot and reset password routes by IP", () => {
+    const studentAuthLimiters = loadRouteWithLimiterSpy("../../routes/Students/auth.routes", {
+      "../../controllers/Students/auth.controller": {
+        forgotPassword: mockMiddleware,
+        login: mockMiddleware,
+        refresh: mockMiddleware,
+        resetPassword: mockMiddleware,
+        logout: mockMiddleware,
+        me: mockMiddleware,
+      },
+      "../../schemas/Students/auth.schema": {},
+    });
+    expect(studentAuthLimiters.map((config) => config.scope)).toEqual([
+      "student-forgot-password",
+      "student-reset-password",
+    ]);
+
+    const adminAuthLimiters = loadRouteWithLimiterSpy("../../routes/Admin/auth.routes", {
+      "../../controllers/Admin/auth.controller": {
+        adminForgotPassword: mockMiddleware,
+        adminLogin: mockMiddleware,
+        adminRefresh: mockMiddleware,
+        adminResetPassword: mockMiddleware,
+        adminLogout: mockMiddleware,
+        adminMe: mockMiddleware,
+      },
+      "../../schemas/Admin/admin-auth.schema": {},
+    });
+    expect(adminAuthLimiters.map((config) => config.scope)).toEqual([
+      "admin-forgot-password",
+      "admin-reset-password",
+    ]);
+
+    const superAdminAuthLimiters = loadRouteWithLimiterSpy("../../routes/SuperAdmin/auth.routes", {
+      "../../controllers/SuperAdmin/auth.controller": {
+        superAdminForgotPassword: mockMiddleware,
+        superAdminLogin: mockMiddleware,
+        superAdminRefresh: mockMiddleware,
+        superAdminResetPassword: mockMiddleware,
+        superAdminLogout: mockMiddleware,
+        superAdminMe: mockMiddleware,
+      },
+      "../../schemas/SuperAdmin/super-admin-auth.schema": {},
+    });
+    expect(superAdminAuthLimiters.map((config) => config.scope)).toEqual([
+      "super-admin-forgot-password",
+      "super-admin-reset-password",
+    ]);
+  });
+
+  it("limits admin test list, route-specific writes, and guarded batch operations", () => {
     const testLimiters = loadRouteWithLimiterSpy("../../routes/Admin/tests.routes", {
       "../../controllers/Admin/tests.controller": {
         createTest: mockMiddleware,
@@ -106,7 +175,15 @@ describe("high-risk route rate limit wiring", () => {
       "../../schemas/Admin/admin-tests.schema": {},
       "../../schemas/Admin/admin-core.schema": {},
     });
-    expect(testLimiters.map((config) => config.scope)).toEqual(["admin-test-list", "admin-test-write"]);
+    expect(testLimiters.map((config) => config.scope)).toEqual([
+      "admin-test-list",
+      "admin-test-write",
+      "admin-test-create",
+      "admin-test-update",
+      "admin-test-publish",
+      "admin-test-clone",
+      "admin-test-monitoring-write",
+    ]);
 
     const batchLimiters = loadRouteWithLimiterSpy("../../routes/Admin/batches.routes", {
       "../../controllers/Admin/batches-with-validation.controller": {
@@ -124,6 +201,61 @@ describe("high-risk route rate limit wiring", () => {
       "../../schemas/Admin/admin-core.schema": {},
     });
     expect(batchLimiters.map((config) => config.scope)).toEqual(["admin-batch-guard"]);
+  });
+
+  it("limits question-bank bulk import separately from other writes", () => {
+    const limiterConfigs = loadRouteWithLimiterSpy("../../routes/Admin/question-bank.routes", {
+      "../../controllers/Admin/question-bank.controller": {
+        addQuestionBankItem: mockMiddleware,
+        getQuestionBank: mockMiddleware,
+        exportQuestionBankJson: mockMiddleware,
+        importQuestionBankJson: mockMiddleware,
+        updateQuestionBankItem: mockMiddleware,
+        deleteQuestionBankItem: mockMiddleware,
+      },
+      "../../schemas/Admin/admin-core.schema": {},
+    });
+
+    expect(limiterConfigs.map((config) => config.scope)).toEqual([
+      "admin-question-bank-write",
+      "admin-question-bank-bulk-import",
+    ]);
+  });
+
+  it("limits super-admin test and question-bank write operations", () => {
+    const testLimiters = loadRouteWithLimiterSpy("../../routes/SuperAdmin/tests.routes", {
+      "../../controllers/SuperAdmin/tests.controller": {
+        getTestsGlobal: mockMiddleware,
+        getGlobalTestById: mockMiddleware,
+        createGlobalTest: mockMiddleware,
+        cloneTestToCollege: mockMiddleware,
+        updateGlobalTest: mockMiddleware,
+        transitionGlobalTestStatus: mockMiddleware,
+        deactivateTest: mockMiddleware,
+      },
+      "../../schemas/SuperAdmin/super-admin-core.schema": {},
+    });
+    expect(testLimiters.map((config) => config.scope)).toEqual([
+      "super-admin-test-create",
+      "super-admin-test-update",
+      "super-admin-test-clone",
+    ]);
+
+    const questionBankLimiters = loadRouteWithLimiterSpy("../../routes/SuperAdmin/question-bank.routes", {
+      "../../controllers/SuperAdmin/question-bank.controller": {
+        addQuestionBankItem: mockMiddleware,
+        getQuestionBank: mockMiddleware,
+        exportQuestionBankJson: mockMiddleware,
+        importQuestionBankJson: mockMiddleware,
+        updateQuestionBankItem: mockMiddleware,
+        deleteQuestionBankItem: mockMiddleware,
+      },
+      "../../schemas/Admin/admin-core.schema": {},
+    });
+    expect(questionBankLimiters.map((config) => config.scope)).toEqual([
+      "super-admin-question-bank-write",
+      "super-admin-question-bank-bulk-import",
+    ]);
   });
 
   it("limits super-admin reports and student leaderboard", () => {

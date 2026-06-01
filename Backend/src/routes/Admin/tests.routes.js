@@ -51,6 +51,51 @@ const adminTestWriteLimiter = createRateLimiter({
 	message: "Test management actions are rate limited. Please wait a moment and retry.",
 });
 
+const adminTestCreateLimiter = createRateLimiter({
+	scope: "admin-test-create",
+	routeLabel: "/api/admin/tests",
+	windowMs: env.rateLimit.adminTestCreateWindowMs,
+	max: env.rateLimit.adminTestCreateMax,
+	failOpen: false,
+	message: "Test creation is rate limited. Please wait a moment and retry.",
+});
+
+const adminTestUpdateLimiter = createRateLimiter({
+	scope: "admin-test-update",
+	routeLabel: "/api/admin/tests/:testId",
+	windowMs: env.rateLimit.adminTestUpdateWindowMs,
+	max: env.rateLimit.adminTestUpdateMax,
+	failOpen: false,
+	message: "Test updates are rate limited. Please wait a moment and retry.",
+});
+
+const adminTestPublishLimiter = createRateLimiter({
+	scope: "admin-test-publish",
+	routeLabel: "/api/admin/tests/:testId/publish",
+	windowMs: env.rateLimit.adminTestPublishWindowMs,
+	max: env.rateLimit.adminTestPublishMax,
+	failOpen: false,
+	message: "Test publishing is rate limited. Please wait a moment and retry.",
+});
+
+const adminTestCloneLimiter = createRateLimiter({
+	scope: "admin-test-clone",
+	routeLabel: "/api/admin/tests/:testId/clone",
+	windowMs: env.rateLimit.adminTestCloneWindowMs,
+	max: env.rateLimit.adminTestCloneMax,
+	failOpen: false,
+	message: "Test cloning is rate limited. Please wait a moment and retry.",
+});
+
+const adminTestMonitoringWriteLimiter = createRateLimiter({
+	scope: "admin-test-monitoring-write",
+	routeLabel: "/api/admin/tests/:testId/monitoring/*",
+	windowMs: env.rateLimit.adminTestMonitoringWriteWindowMs,
+	max: env.rateLimit.adminTestMonitoringWriteMax,
+	failOpen: false,
+	message: "Live-monitoring actions are rate limited. Please wait a moment and retry.",
+});
+
 router.get(
 	"/",
 	authenticatePlatformAdmin,
@@ -70,6 +115,7 @@ router.get(
 router.post(
 	"/",
 	authenticatePlatformAdmin,
+	adminTestCreateLimiter,
 	adminTestWriteLimiter,
 	requirePermission("create_test", "manage_questions"),
 	requireSameDepartment("departmentId"),
@@ -79,6 +125,7 @@ router.post(
 router.post(
 	"/:testId/duplicate",
 	authenticatePlatformAdmin,
+	adminTestCloneLimiter,
 	adminTestWriteLimiter,
 	requirePermission("create_test", "edit_test"),
 	validate(testIdParamSchema),
@@ -89,6 +136,7 @@ const { cloneAdminTestSchema } = require("../../schemas/Admin/admin-tests.schema
 router.post(
 	"/:testId/clone",
 	authenticatePlatformAdmin,
+	adminTestCloneLimiter,
 	adminTestWriteLimiter,
 	requirePermission("create_test", "edit_test"),
 	validate(cloneAdminTestSchema),
@@ -98,6 +146,7 @@ router.post(
 router.patch(
 	"/:testId",
 	authenticatePlatformAdmin,
+	adminTestUpdateLimiter,
 	adminTestWriteLimiter,
 	requirePermission("edit_test"),
 	validate(updateAdminTestSchema),
@@ -107,6 +156,7 @@ router.patch(
 router.patch(
 	"/:testId/status",
 	authenticatePlatformAdmin,
+	adminTestUpdateLimiter,
 	adminTestWriteLimiter,
 	requirePermission("edit_test"),
 	validate(transitionTestStatusSchema),
@@ -116,6 +166,7 @@ router.patch(
 router.patch(
 	"/:testId/archive",
 	authenticatePlatformAdmin,
+	adminTestUpdateLimiter,
 	adminTestWriteLimiter,
 	requirePermission("edit_test"),
 	validate(testIdParamSchema),
@@ -125,6 +176,7 @@ router.patch(
 router.delete(
 	"/:testId",
 	authenticatePlatformAdmin,
+	adminTestUpdateLimiter,
 	adminTestWriteLimiter,
 	requirePermission("delete_test"),
 	validate(testIdParamSchema),
@@ -134,6 +186,7 @@ router.delete(
 router.post(
 	"/:testId/publish",
 	authenticatePlatformAdmin,
+	adminTestPublishLimiter,
 	adminTestWriteLimiter,
 	requirePermission("publish_test"),
 	validate(testIdParamSchema),
@@ -151,6 +204,7 @@ router.get(
 router.post(
 	"/:testId/monitoring/force-submit",
 	authenticatePlatformAdmin,
+	adminTestMonitoringWriteLimiter,
 	adminTestWriteLimiter,
 	requirePermission("edit_test"),
 	validate(forceSubmitAttemptSchema),
@@ -160,6 +214,7 @@ router.post(
 router.post(
 	"/:testId/monitoring/extend-time",
 	authenticatePlatformAdmin,
+	adminTestMonitoringWriteLimiter,
 	adminTestWriteLimiter,
 	requirePermission("edit_test"),
 	validate(extendAttemptTimeSchema),
@@ -169,6 +224,7 @@ router.post(
 router.post(
 	"/:testId/assign-batch",
 	authenticatePlatformAdmin,
+	adminTestUpdateLimiter,
 	adminTestWriteLimiter,
 	requirePermission("edit_test", "manage_batches"),
 	validate(testAssignBatchSchema),
@@ -178,6 +234,7 @@ router.post(
 router.post(
 	"/:testId/assign-department",
 	authenticatePlatformAdmin,
+	adminTestUpdateLimiter,
 	adminTestWriteLimiter,
 	requirePermission("edit_test", "manage_batches"),
 	validate(testAssignDepartmentSchema),

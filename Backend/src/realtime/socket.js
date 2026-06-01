@@ -63,7 +63,7 @@ const loadSocketPrincipal = async (payload) => {
 
   if (role === ROLES.SUPER_ADMIN) {
     const superAdmin = await db.superAdmin.findUnique({ where: { id: payload.sub } });
-    if (!superAdmin?.isActive) {
+    if (!superAdmin?.isActive || normalizeRole(superAdmin.role) !== ROLES.SUPER_ADMIN) {
       throw new Error("Inactive super admin");
     }
     return {

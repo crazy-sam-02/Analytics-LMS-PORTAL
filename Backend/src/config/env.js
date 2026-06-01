@@ -63,6 +63,14 @@ const rateLimit = {
   authLoginMax: toPositiveInt(process.env.RATE_LIMIT_AUTH_LOGIN_MAX, 15),
   authRefreshWindowMs: toPositiveInt(process.env.RATE_LIMIT_AUTH_REFRESH_WINDOW_MS, 5 * 60 * 1000),
   authRefreshMax: toPositiveInt(process.env.RATE_LIMIT_AUTH_REFRESH_MAX, 50),
+  authForgotPasswordWindowMs: toPositiveInt(process.env.RATE_LIMIT_AUTH_FORGOT_PASSWORD_WINDOW_MS, 15 * 60 * 1000),
+  authForgotPasswordMax: toPositiveInt(process.env.RATE_LIMIT_AUTH_FORGOT_PASSWORD_MAX, 5),
+  authResetPasswordWindowMs: toPositiveInt(process.env.RATE_LIMIT_AUTH_RESET_PASSWORD_WINDOW_MS, 15 * 60 * 1000),
+  authResetPasswordMax: toPositiveInt(process.env.RATE_LIMIT_AUTH_RESET_PASSWORD_MAX, 10),
+  superAdminAuthLoginWindowMs: toPositiveInt(process.env.RATE_LIMIT_SUPER_ADMIN_AUTH_LOGIN_WINDOW_MS, 15 * 60 * 1000),
+  superAdminAuthLoginMax: toPositiveInt(process.env.RATE_LIMIT_SUPER_ADMIN_AUTH_LOGIN_MAX, 5),
+  superAdminPasswordResetWindowMs: toPositiveInt(process.env.RATE_LIMIT_SUPER_ADMIN_PASSWORD_RESET_WINDOW_MS, 60 * 60 * 1000),
+  superAdminPasswordResetMax: toPositiveInt(process.env.RATE_LIMIT_SUPER_ADMIN_PASSWORD_RESET_MAX, 3),
   examWriteWindowMs: legacyExamWriteWindowMs,
   examWriteMax: legacyExamWriteMax,
   examAnswerWindowMs: toPositiveInt(process.env.RATE_LIMIT_EXAM_ANSWER_WINDOW_MS, legacyExamWriteWindowMs),
@@ -93,6 +101,18 @@ const rateLimit = {
   adminReportReadMax: toPositiveInt(process.env.RATE_LIMIT_ADMIN_REPORT_READ_MAX, 20),
   adminTestListWindowMs: toPositiveInt(process.env.RATE_LIMIT_ADMIN_TEST_LIST_WINDOW_MS, 30 * 1000),
   adminTestListMax: toPositiveInt(process.env.RATE_LIMIT_ADMIN_TEST_LIST_MAX, 30),
+  adminTestCreateWindowMs: toPositiveInt(process.env.RATE_LIMIT_ADMIN_TEST_CREATE_WINDOW_MS, 60 * 1000),
+  adminTestCreateMax: toPositiveInt(process.env.RATE_LIMIT_ADMIN_TEST_CREATE_MAX, 8),
+  adminTestUpdateWindowMs: toPositiveInt(process.env.RATE_LIMIT_ADMIN_TEST_UPDATE_WINDOW_MS, 60 * 1000),
+  adminTestUpdateMax: toPositiveInt(process.env.RATE_LIMIT_ADMIN_TEST_UPDATE_MAX, 20),
+  adminTestPublishWindowMs: toPositiveInt(process.env.RATE_LIMIT_ADMIN_TEST_PUBLISH_WINDOW_MS, 60 * 1000),
+  adminTestPublishMax: toPositiveInt(process.env.RATE_LIMIT_ADMIN_TEST_PUBLISH_MAX, 6),
+  adminTestCloneWindowMs: toPositiveInt(process.env.RATE_LIMIT_ADMIN_TEST_CLONE_WINDOW_MS, 60 * 1000),
+  adminTestCloneMax: toPositiveInt(process.env.RATE_LIMIT_ADMIN_TEST_CLONE_MAX, 5),
+  adminTestMonitoringWriteWindowMs: toPositiveInt(process.env.RATE_LIMIT_ADMIN_TEST_MONITORING_WRITE_WINDOW_MS, 60 * 1000),
+  adminTestMonitoringWriteMax: toPositiveInt(process.env.RATE_LIMIT_ADMIN_TEST_MONITORING_WRITE_MAX, 20),
+  adminQuestionBankBulkImportWindowMs: toPositiveInt(process.env.RATE_LIMIT_ADMIN_QUESTION_BANK_BULK_IMPORT_WINDOW_MS, 5 * 60 * 1000),
+  adminQuestionBankBulkImportMax: toPositiveInt(process.env.RATE_LIMIT_ADMIN_QUESTION_BANK_BULK_IMPORT_MAX, 5),
   adminBatchGuardWindowMs: toPositiveInt(process.env.RATE_LIMIT_ADMIN_BATCH_GUARD_WINDOW_MS, 60 * 1000),
   adminBatchGuardMax: toPositiveInt(process.env.RATE_LIMIT_ADMIN_BATCH_GUARD_MAX, 12),
   superReportWindowMs: toPositiveInt(process.env.RATE_LIMIT_SUPER_REPORT_WINDOW_MS, 60 * 1000),
@@ -150,6 +170,12 @@ const metrics = {
   token: process.env.METRICS_TOKEN || "",
 };
 
+const email = {
+  resendApiKey: process.env.RESEND_API_KEY || "",
+  resendFromEmail: process.env.RESEND_FROM_EMAIL || "noreply@analyticsedify.com",
+  resendFromName: process.env.RESEND_FROM_NAME || "Analytics Edify",
+};
+
 const resourceUpload = {
   root: process.env.RESOURCE_UPLOAD_ROOT || "uploads/resources",
   maxFileSizeBytes: toPositiveInt(process.env.RESOURCE_MAX_FILE_SIZE_BYTES, 50 * 1024 * 1024),
@@ -174,15 +200,47 @@ const uploadScan = {
   timeoutMs: toPositiveInt(process.env.CLAMAV_TIMEOUT_MS, 15_000),
 };
 
+const normalizeUrlBase = (value) => String(value || "").trim().replace(/\/+$/, "");
+const getUrlOrigin = (value) => {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return "";
+  }
+};
+
+const configuredPasswordResetMode = String(process.env.PASSWORD_RESET_DELIVERY_MODE || "").trim().toLowerCase();
+const normalizedPasswordResetMode =
+  configuredPasswordResetMode === "webhook" && email.resendApiKey
+    ? "resend"
+    : configuredPasswordResetMode;
+const legacyPasswordResetUrl = process.env.PASSWORD_RESET_FRONTEND_URL || "";
+const passwordResetBaseUrl = normalizeUrlBase(
+  process.env.PASSWORD_RESET_FRONTEND_BASE_URL ||
+  getUrlOrigin(legacyPasswordResetUrl) ||
+  frontendOrigins[0] ||
+  "http://localhost:5173"
+);
+
+const passwordReset = {
+  tokenTtlMinutes: toPositiveInt(process.env.PASSWORD_RESET_TOKEN_TTL_MINUTES, 30),
+  deliveryMode: normalizedPasswordResetMode || (email.resendApiKey ? "resend" : (nodeEnv === "production" ? "resend" : "response")),
+  frontendUrl: legacyPasswordResetUrl || `${passwordResetBaseUrl}/reset-password`,
+  resetUrls: {
+    student: process.env.PASSWORD_RESET_STUDENT_FRONTEND_URL || legacyPasswordResetUrl || `${passwordResetBaseUrl}/reset-password`,
+    admin: process.env.PASSWORD_RESET_ADMIN_FRONTEND_URL || `${passwordResetBaseUrl}/admin/reset-password`,
+    "college-admin": process.env.PASSWORD_RESET_COLLEGE_ADMIN_FRONTEND_URL || `${passwordResetBaseUrl}/college-admin/reset-password`,
+    "super-admin": process.env.PASSWORD_RESET_SUPER_ADMIN_FRONTEND_URL || `${passwordResetBaseUrl}/super-admin/reset-password`,
+  },
+  returnToken: toBoolean(process.env.PASSWORD_RESET_RETURN_TOKEN, nodeEnv !== "production"),
+};
+
 module.exports = {
   port: Number(process.env.PORT || 5000),
   nodeEnv,
   mongoUri: process.env.MONGODB_URI,
   mongoDbName: process.env.MONGODB_DB_NAME || "lms_portal",
   requestBodyLimit: process.env.REQUEST_BODY_LIMIT || "5mb",
-  superAdminEmail: process.env.SUPERADMIN_EMAIL || "",
-  superAdminPassword: process.env.SUPERADMIN_PASSWORD || "",
-  superAdminName: process.env.SUPERADMIN_NAME || "Super Admin",
   jwtAccessSecret,
   jwtRefreshSecret,
   jwtAccessExpiresIn: process.env.JWT_ACCESS_EXPIRES_IN || "15m",
@@ -192,9 +250,11 @@ module.exports = {
   redisUrl: process.env.REDIS_URL || "",
   redis,
   metrics,
+  email,
   resourceUpload,
   operations,
   uploadScan,
+  passwordReset,
   cloudinaryCloudName: process.env.CLOUDINARY_CLOUD_NAME || "",
   cloudinaryApiKey: process.env.CLOUDINARY_API_KEY || "",
   cloudinaryApiSecret: process.env.CLOUDINARY_API_SECRET || "",

@@ -30,11 +30,20 @@ const adminQuestionBankWriteLimiter = createRateLimiter({
 	message: "Question-bank write actions are rate limited. Please retry shortly.",
 });
 
+const adminQuestionBankBulkImportLimiter = createRateLimiter({
+	scope: "admin-question-bank-bulk-import",
+	routeLabel: "/api/admin/question-bank/import",
+	windowMs: env.rateLimit.adminQuestionBankBulkImportWindowMs,
+	max: env.rateLimit.adminQuestionBankBulkImportMax,
+	failOpen: false,
+	message: "Question-bank bulk import is rate limited. Please retry later.",
+});
+
 router.get("/", authenticatePlatformAdmin, requireAnyPermission("manage_questions", "view_question_bank"), validate(questionBankQuerySchema), getQuestionBank);
 router.post("/", authenticatePlatformAdmin, adminQuestionBankWriteLimiter, requirePermission("manage_questions"), validate(questionBankSchema), addQuestionBankItem);
 router.post("/add", authenticatePlatformAdmin, adminQuestionBankWriteLimiter, requirePermission("manage_questions"), validate(questionBankSchema), addQuestionBankItem);
-router.post("/bulk", authenticatePlatformAdmin, adminQuestionBankWriteLimiter, requirePermission("manage_questions", "bulk_import"), importQuestionBankJson);
-router.post("/import", authenticatePlatformAdmin, adminQuestionBankWriteLimiter, requirePermission("manage_questions", "bulk_import"), importQuestionBankJson);
+router.post("/bulk", authenticatePlatformAdmin, adminQuestionBankBulkImportLimiter, adminQuestionBankWriteLimiter, requirePermission("manage_questions", "bulk_import"), importQuestionBankJson);
+router.post("/import", authenticatePlatformAdmin, adminQuestionBankBulkImportLimiter, adminQuestionBankWriteLimiter, requirePermission("manage_questions", "bulk_import"), importQuestionBankJson);
 router.get("/export", authenticatePlatformAdmin, requireAnyPermission("manage_questions", "view_question_bank"), exportQuestionBankJson);
 router.put("/:id", authenticatePlatformAdmin, adminQuestionBankWriteLimiter, requirePermission("manage_questions"), validate(updateQuestionBankSchema), updateQuestionBankItem);
 router.delete("/:id", authenticatePlatformAdmin, adminQuestionBankWriteLimiter, requirePermission("manage_questions"), validate(questionBankParamSchema), deleteQuestionBankItem);

@@ -14,6 +14,7 @@ const MODEL_TO_COLLECTION = {
   college: "college",
   superAdmin: "superAdmin",
   superAdminRefreshToken: "superAdminRefreshToken",
+  passwordResetToken: "passwordResetToken",
   department: "department",
   batch: "batch",
   admin: "admin",
@@ -67,6 +68,7 @@ const RELATIONS = {
   superAdminRefreshToken: {
     superAdmin: { model: "superAdmin", type: "one", sourceField: "superAdminId", targetField: "id" },
   },
+  passwordResetToken: {},
   department: {
     college: { model: "college", type: "one", sourceField: "collegeId", targetField: "id" },
     batches: { model: "batch", type: "many", sourceField: "id", targetField: "departmentId" },
@@ -249,6 +251,7 @@ const DEFAULTS = {
   studentRefreshToken: {},
   adminRefreshToken: {},
   superAdminRefreshToken: {},
+  passwordResetToken: {},
   testSession: { startedAt: () => new Date() },
   testBatch: {},
   violation: { metadata: null },
@@ -284,6 +287,7 @@ const OBJECT_ID_FIELDS = new Set([
   "submissionId",
   "adminId",
   "superAdminId",
+  "principalId",
   "initiatedById",
   "updatedById",
 ]);

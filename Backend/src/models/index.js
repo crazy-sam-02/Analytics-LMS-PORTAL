@@ -44,6 +44,7 @@ function buildModelMap() {
     User: dbClient.user,
     StudentRefreshToken: dbClient.studentRefreshToken,
     SuperAdminRefreshToken: dbClient.superAdminRefreshToken,
+    PasswordResetToken: dbClient.passwordResetToken,
     Admin: dbClient.admin,
     College: dbClient.college,
     Department: dbClient.department,

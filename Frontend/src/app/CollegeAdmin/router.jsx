@@ -8,8 +8,10 @@ import { ADMIN_PERMISSIONS } from "@/features/Admin/adminPermissions";
 import { isAdminRole, isCollegeAdminRole } from "@/features/Admin/adminRole";
 import CollegeAdminPortalLayout from "@/components/CollegeAdmin/CollegeAdminPortalLayout";
 import CollegeAdminLoginPage from "@/pages/CollegeAdmin/LoginPage";
+import PasswordResetPage from "@/pages/Auth/PasswordResetPage";
 import CollegeAdminDashboardPage from "@/pages/CollegeAdmin/DashboardPage";
 import CollegeAdminTestsPage from "@/pages/CollegeAdmin/TestsPage";
+import LiveMonitoringPage from "@/pages/Admin/LiveMonitoringPage";
 import CollegeAdminQuestionBankPage from "@/pages/CollegeAdmin/QuestionBankPage";
 import CollegeAdminBatchesPage from "@/pages/CollegeAdmin/BatchesPage";
 import CollegeAdminStudentsPage from "@/pages/CollegeAdmin/StudentsPage";
@@ -21,6 +23,7 @@ import AdminManagementPage from "@/pages/CollegeAdmin/AdminManagementPage";
 import CollegeAnalyticsPage from "@/pages/CollegeAdmin/CollegeAnalyticsPage";
 import CollegeAdminLearningResourcesPage from "@/pages/CollegeAdmin/LearningResourcesPage";
 import HardRedirect from "@/components/common/HardRedirect";
+import { adminApi } from "@/services/api";
 
 function PermissionRoute({ permission, action }) {
   const allowed = usePermission(permission);
@@ -76,6 +79,32 @@ const router = createBrowserRouter([
         children: [{ path: "/college-admin/login", element: <CollegeAdminLoginPage /> }],
       },
       {
+        path: "/college-admin/forgot-password",
+        element: (
+          <PasswordResetPage
+            portalName="College Admin"
+            portalLabel="College admin workspace"
+            loginPath="/college-admin/login"
+            mainPath="/college-admin"
+            requestReset={adminApi.forgotCollegeAdminPassword}
+            completeReset={adminApi.resetCollegeAdminPassword}
+          />
+        ),
+      },
+      {
+        path: "/college-admin/reset-password",
+        element: (
+          <PasswordResetPage
+            portalName="College Admin"
+            portalLabel="College admin workspace"
+            loginPath="/college-admin/login"
+            mainPath="/college-admin"
+            requestReset={adminApi.forgotCollegeAdminPassword}
+            completeReset={adminApi.resetCollegeAdminPassword}
+          />
+        ),
+      },
+      {
         element: <CollegeAdminProtectedRoute />,
         children: [
           {
@@ -92,6 +121,10 @@ const router = createBrowserRouter([
                 children: [{ path: "/college-admin/admins", element: <AdminManagementPage /> }],
               },
               { path: "/college-admin/tests", element: <CollegeAdminTestsPage /> },
+              {
+                element: <PermissionRoute permission={ADMIN_PERMISSIONS.EDIT_TEST} action="monitor live tests" />,
+                children: [{ path: "/college-admin/tests/:testId/monitoring", element: <LiveMonitoringPage /> }],
+              },
               {
                 element: <PermissionRoute permission={ADMIN_PERMISSIONS.MANAGE_QUESTIONS} action="access question bank" />,
                 children: [{ path: "/college-admin/question-bank", element: <CollegeAdminQuestionBankPage /> }],

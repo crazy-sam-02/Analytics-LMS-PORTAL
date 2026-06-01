@@ -4,8 +4,10 @@ import { Navigate, Outlet, RouterProvider, createBrowserRouter } from "react-rou
 import { fetchCurrentSuperAdmin } from "@/features/SuperAdmin/superAdminAuthSlice";
 import SuperAdminPortalLayout from "@/components/SuperAdmin/SuperAdminPortalLayout";
 import SuperAdminLoginPage from "@/pages/SuperAdmin/LoginPage";
+import PasswordResetPage from "@/pages/Auth/PasswordResetPage";
 import SuperAdminDashboardPage from "@/pages/SuperAdmin/DashboardPage";
 import CollegesPage from "@/pages/SuperAdmin/CollegesPage";
+import SystemAdministratorsPage from "@/pages/SuperAdmin/SystemAdministratorsPage";
 import AdminsPage from "@/pages/SuperAdmin/AdminsPage";
 import StudentsPage from "@/pages/SuperAdmin/StudentsPage";
 import DepartmentsPage from "@/pages/SuperAdmin/DepartmentsPage";
@@ -17,6 +19,7 @@ import AnalyticsPage from "@/pages/SuperAdmin/AnalyticsPage";
 import SettingsPage from "@/pages/SuperAdmin/SettingsPage";
 import QuestionBankPage from "@/pages/SuperAdmin/QuestionBankPage";
 import LearningResourcesPage from "@/pages/SuperAdmin/LearningResourcesPage";
+import { superAdminApi } from "@/services/api";
 
 function SuperAdminBootstrap() {
   const dispatch = useDispatch();
@@ -52,6 +55,32 @@ const router = createBrowserRouter([
         children: [{ path: "/super-admin/login", element: <SuperAdminLoginPage /> }],
       },
       {
+        path: "/super-admin/forgot-password",
+        element: (
+          <PasswordResetPage
+            portalName="Super Admin"
+            portalLabel="Super admin workspace"
+            loginPath="/super-admin/login"
+            mainPath="/super-admin"
+            requestReset={superAdminApi.forgotPassword}
+            completeReset={superAdminApi.resetPassword}
+          />
+        ),
+      },
+      {
+        path: "/super-admin/reset-password",
+        element: (
+          <PasswordResetPage
+            portalName="Super Admin"
+            portalLabel="Super admin workspace"
+            loginPath="/super-admin/login"
+            mainPath="/super-admin"
+            requestReset={superAdminApi.forgotPassword}
+            completeReset={superAdminApi.resetPassword}
+          />
+        ),
+      },
+      {
         element: <SuperAdminProtectedRoute />,
         children: [
           {
@@ -60,6 +89,7 @@ const router = createBrowserRouter([
               { path: "/super-admin", element: <Navigate to="/super-admin/dashboard" replace /> },
               { path: "/super-admin/dashboard", element: <SuperAdminDashboardPage /> },
               { path: "/super-admin/colleges", element: <CollegesPage /> },
+              { path: "/super-admin/system-admins", element: <SystemAdministratorsPage /> },
               { path: "/super-admin/admins", element: <AdminsPage /> },
               { path: "/super-admin/students", element: <StudentsPage /> },
               { path: "/super-admin/departments", element: <DepartmentsPage /> },

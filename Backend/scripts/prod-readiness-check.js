@@ -57,6 +57,11 @@ const requiredIndexes = {
     { fields: ["token"], unique: true },
     ["superAdminId", "revokedAt", "expiresAt"],
   ],
+  passwordResetToken: [
+    { fields: ["tokenHash"], unique: true },
+    ["scope", "principalId", "usedAt", "revokedAt"],
+    ["expiresAt"],
+  ],
   student: [
     ["collegeId", "departmentId", "isActive"],
     ["isActive", "collegeId"],
@@ -70,6 +75,11 @@ const requiredIndexes = {
     ["collegeId", "role", "createdAt"],
     ["collegeId", "email"],
     ["collegeId", "employeeId"],
+  ],
+  superAdmin: [
+    { fields: ["email"], unique: true },
+    ["role", "isActive"],
+    ["createdAt"],
   ],
   event: [
     ["collegeId", "startsAt"],
@@ -156,6 +166,21 @@ const warnIfInvalidRedisMemory = (name, value) => {
   const text = String(value || "").trim();
   if (!text || !/^[1-9]\d*(b|k|kb|m|mb|g|gb)?$/i.test(text)) {
     return [`${name} must be set to a Redis memory value such as 2gb, 4096mb, or a positive byte count.`];
+  }
+  return [];
+};
+
+const warnIfInvalidEmail = (name, value) => {
+  const text = String(value || "").trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text)) {
+    return [`${name} must be a valid email address.`];
+  }
+  return [];
+};
+
+const warnIfNonHttpsUrl = (name, value) => {
+  if (!String(value || "").startsWith("https://")) {
+    return [`${name} must use HTTPS in production.`];
   }
   return [];
 };
@@ -397,13 +422,39 @@ const run = async () => {
     }
   }
 
-  if (env.nodeEnv === "production" && env.superAdminPassword) {
-    findings.push("Unset SUPERADMIN_PASSWORD after initial super-admin provisioning; do not keep bootstrap credentials in production env.");
+  const forbiddenSuperAdminEnv = ["SUPERADMIN_EMAIL", "SUPERADMIN_PASSWORD", "SUPERADMIN_NAME", "SUPER_ADMIN_EMAIL", "SUPER_ADMIN_PASSWORD"];
+  for (const key of forbiddenSuperAdminEnv) {
+    if (process.env[key]) {
+      findings.push(`${key} must not be set; create SuperAdmins with npm run create and store accounts in MongoDB.`);
+    }
   }
 
   if (env.nodeEnv === "production" && env.metrics?.enabled) {
     findings.push(...warnIfShortSecret("METRICS_TOKEN", env.metrics.token));
     findings.push(...warnIfPlaceholder("METRICS_TOKEN", env.metrics.token));
+  }
+
+  if (env.nodeEnv === "production" && !allowLocalProductionSmoke) {
+    if (env.passwordReset.returnToken) {
+      findings.push("PASSWORD_RESET_RETURN_TOKEN must be false in production.");
+    }
+    if (env.passwordReset.deliveryMode !== "resend") {
+      findings.push("PASSWORD_RESET_DELIVERY_MODE must be resend in production.");
+    }
+    if (!env.email.resendApiKey) {
+      findings.push("RESEND_API_KEY must be configured in production for password reset email delivery.");
+    }
+    findings.push(...warnIfInvalidEmail("RESEND_FROM_EMAIL", env.email.resendFromEmail));
+    if (String(env.email.resendFromEmail || "").toLowerCase() !== "noreply@analyticsedify.com") {
+      findings.push("RESEND_FROM_EMAIL must be noreply@analyticsedify.com for Analytics Edify production mail.");
+    }
+    findings.push(...warnIfNonHttpsUrl("PASSWORD_RESET_FRONTEND_URL", env.passwordReset.frontendUrl));
+    for (const [portal, resetUrl] of Object.entries(env.passwordReset.resetUrls || {})) {
+      if (portal === "student") {
+        continue;
+      }
+      findings.push(...warnIfNonHttpsUrl(`PASSWORD_RESET_${portal.toUpperCase().replace(/-/g, "_")}_FRONTEND_URL`, resetUrl));
+    }
   }
 
   if (env.nodeEnv === "production" && !path.isAbsolute(env.resourceUpload.root)) {
@@ -481,6 +532,18 @@ const run = async () => {
         `${collectionName} contains ${rawTokenCount} raw refresh token(s); run npm run db:migrate:refresh-token-hashes before production.`
       );
     }
+  }
+
+  const superAdminCollection = mongoose.connection.db.collection("superAdmin");
+  const [totalSuperAdmins, activeSuperAdmins] = await Promise.all([
+    superAdminCollection.countDocuments({ role: "SUPER_ADMIN" }),
+    superAdminCollection.countDocuments({ role: "SUPER_ADMIN", isActive: true }),
+  ]);
+  if (totalSuperAdmins > 5) {
+    findings.push(`superAdmin contains ${totalSuperAdmins} account(s); maximum allowed is 5.`);
+  }
+  if (activeSuperAdmins < 1) {
+    findings.push("At least one active MongoDB-backed SuperAdmin account is required; run npm run create before deployment.");
   }
 
   const incompleteViolationCount = await mongoose.connection.db.collection("violation").countDocuments({

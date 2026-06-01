@@ -13,6 +13,7 @@ import {
 import AppShell from "@/components/Studetns/AppShell";
 import OfflineBanner from "@/components/common/OfflineBanner";
 import LoginPage from "@/pages/Students/LoginPage";
+import PasswordResetPage from "@/pages/Auth/PasswordResetPage";
 import MyTestsPage from "@/pages/Students/MyTestsPage";
 import OngoingTestsPage from "@/pages/Students/OngoingTestsPage";
 import UpcomingTestsPage from "@/pages/Students/UpcomingTestsPage";
@@ -24,6 +25,7 @@ import ResumeAttemptPage from "@/pages/Students/ResumeAttemptPage";
 import { registerAuthInterceptorHandlers } from "@/services/httpClient";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { studentApi } from "@/services/studentApi";
 
 const STUDENT_ACCESS_TOKEN_KEY = "student_access_token";
 const STUDENT_REFRESH_TOKEN_KEY = "student_refresh_token";
@@ -207,6 +209,38 @@ const router = createBrowserRouter([
       {
         element: <PublicOnlyRoute />,
         children: [{ path: "/login", element: <LoginPage /> }],
+      },
+      {
+        path: "/forgot-password",
+        element: (
+          <PasswordResetPage
+            portalName="Student"
+            portalLabel="Student portal"
+            loginPath="/login"
+            mainPath="/"
+            requestReset={studentApi.forgotPassword}
+            completeReset={studentApi.resetPassword}
+            buildForgotPayload={(identifier) => ({ identifier })}
+            identifierLabel="Email or student ID"
+            identifierPlaceholder="student@example.edu or STU123"
+          />
+        ),
+      },
+      {
+        path: "/reset-password",
+        element: (
+          <PasswordResetPage
+            portalName="Student"
+            portalLabel="Student portal"
+            loginPath="/login"
+            mainPath="/"
+            requestReset={studentApi.forgotPassword}
+            completeReset={studentApi.resetPassword}
+            buildForgotPayload={(identifier) => ({ identifier })}
+            identifierLabel="Email or student ID"
+            identifierPlaceholder="student@example.edu or STU123"
+          />
+        ),
       },
       {
         element: <ProtectedRoute />,

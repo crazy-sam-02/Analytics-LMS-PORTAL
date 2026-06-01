@@ -4,7 +4,7 @@ const { redisClient, isRedisAvailable } = require("../config/redis");
  * Heartbeat Write Buffer
  *
  * Problem: During exams, each of 1000 students sends heartbeats every 5 seconds.
- * That's 12,000 DB writes/minute just for heartbeats — most of which are throwaway
+ * That's 12,000 DB writes/minute just for heartbeats - most of which are throwaway
  * timestamp updates.
  *
  * Solution: Buffer heartbeats in a Redis hash keyed by testId.
@@ -84,12 +84,25 @@ const drainTestHeartbeats = async (testId) => {
 
 /**
  * Get all test IDs that have buffered heartbeats.
+ * Uses incremental SSCAN instead of KEYS/SMEMBERS so the flush loop does not
+ * block Redis if many tests are active at the same time.
  */
 const getBufferedTestIds = async () => {
   if (!isRedisAvailable()) return [];
 
   try {
-    return redisClient.smembers(BUFFER_TESTS_KEY);
+    const ids = [];
+    let cursor = "0";
+
+    do {
+      const [nextCursor, batch] = await redisClient.sscan(BUFFER_TESTS_KEY, cursor, "COUNT", 100);
+      cursor = String(nextCursor || "0");
+      if (Array.isArray(batch)) {
+        ids.push(...batch.filter(Boolean));
+      }
+    } while (cursor !== "0");
+
+    return [...new Set(ids)];
   } catch {
     return [];
   }
@@ -140,6 +153,7 @@ const stopHeartbeatFlush = () => {
 module.exports = {
   bufferHeartbeat,
   drainTestHeartbeats,
+  getBufferedTestIds,
   startHeartbeatFlush,
   stopHeartbeatFlush,
 };

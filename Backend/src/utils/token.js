@@ -9,6 +9,7 @@ const createAccessToken = (principal) => {
   return jwt.sign(
     {
       sub: principal.id,
+      userId: principal.id,
       role,
       collegeId: principal.collegeId || null,
       departmentId: principal.departmentId || null,

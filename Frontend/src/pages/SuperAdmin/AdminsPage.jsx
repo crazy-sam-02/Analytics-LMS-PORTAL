@@ -338,7 +338,7 @@ export default function AdminsPage() {
             <option value="EDITOR">Can Edit</option>
             <option value="VIEW_ONLY">View Only</option>
           </select>
-          <Button className="sm:col-span-3 bg-primary/100 hover:bg-primary" onClick={save} disabled={isSubmitting}>
+          <Button className="sm:col-span-3 bg-primary hover:bg-primary" onClick={save} disabled={isSubmitting}>
             {isSubmitting ? "Creating..." : "Create Admin"}
           </Button>
         </CardContent>
@@ -378,7 +378,7 @@ export default function AdminsPage() {
             onChange={(event) => setImportCsv(event.target.value)}
           />
 
-          <Button className="bg-primary/100 hover:bg-primary" onClick={startBulkImport} disabled={isImporting}>
+          <Button className="bg-primary hover:bg-primary" onClick={startBulkImport} disabled={isImporting}>
             {isImporting ? "Importing..." : "Start Import"}
           </Button>
 
@@ -431,9 +431,9 @@ export default function AdminsPage() {
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <Button className="bg-primary/100 hover:bg-primary" onClick={loadAdmins}>Search</Button>
+            <Button className="bg-primary hover:bg-primary" onClick={loadAdmins}>Search</Button>
             <Button
-              className="bg-red-500/100 hover:bg-red-500 text-white"
+              className="bg-red-500 hover:bg-red-500 text-white"
               onClick={() => {
                 setFilters({ search: "", collegeId: "", status: "all" });
                 dispatch(fetchSuperAdmins("?page=1&limit=100"));
@@ -470,11 +470,11 @@ export default function AdminsPage() {
                   <option value="EDITOR">Can Edit</option>
                   <option value="VIEW_ONLY">View Only</option>
                 </select>
-                <Button size="sm" className="bg-primary/100 hover:bg-primary" onClick={() => openResetConfirm(admin)}>Reset Password</Button>
+                <Button size="sm" className="bg-primary hover:bg-primary" onClick={() => openResetConfirm(admin)}>Reset Password</Button>
                 {admin.isActive ? (
                   <Button size="sm" variant="destructive" onClick={() => openDeactivateConfirm(admin)}>Deactivate</Button>
                 ) : (
-                  <Button size="sm" className="bg-primary/100 hover:bg-primary" onClick={() => openReactivateConfirm(admin)}>Reactivate</Button>
+                  <Button size="sm" className="bg-primary hover:bg-primary" onClick={() => openReactivateConfirm(admin)}>Reactivate</Button>
                 )}
               </div>
             </div>

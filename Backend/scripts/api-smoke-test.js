@@ -19,13 +19,13 @@ const requiredEnv = (name) => {
   };
 
   try {
-    const loginRes = await fetch(`${baseUrl}/api/super-admin/auth/login`, {
+    const loginRes = await fetch(`${baseUrl}/api/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: superAdminEmail, password: superAdminPassword }),
+      body: JSON.stringify({ email: superAdminEmail, password: superAdminPassword, role: "SUPER_ADMIN" }),
     });
     const loginJson = await loginRes.json().catch(() => null);
-    log("POST /api/super-admin/auth/login", loginRes.ok, loginRes.status, loginJson);
+    log("POST /api/auth/login", loginRes.ok, loginRes.status, loginJson);
 
     const token = loginJson?.accessToken;
     const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};

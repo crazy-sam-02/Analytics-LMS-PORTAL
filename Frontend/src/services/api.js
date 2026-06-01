@@ -681,6 +681,14 @@ export const api = {
 
 export const adminApi = {
   login: (body) => adminApiRequest("/admin/auth/login", { method: "POST", body: JSON.stringify(body) }),
+  forgotPassword: (body) =>
+    adminApiRequest("/admin/auth/forgot-password", { method: "POST", body: JSON.stringify(body) }),
+  resetPassword: (body) =>
+    adminApiRequest("/admin/auth/reset-password", { method: "POST", body: JSON.stringify(body) }),
+  forgotCollegeAdminPassword: (body) =>
+    adminApiRequest("/college-admin/auth/forgot-password", { method: "POST", body: JSON.stringify(body) }),
+  resetCollegeAdminPassword: (body) =>
+    adminApiRequest("/college-admin/auth/reset-password", { method: "POST", body: JSON.stringify(body) }),
   me: () => adminApiRequest("/admin/auth/me"),
   logout: (refreshToken) =>
     adminApiRequest("/admin/auth/logout", {
@@ -794,7 +802,11 @@ export const adminApi = {
 };
 
 export const superAdminApi = {
-  login: (body) => superAdminApiRequest("/super-admin/auth/login", { method: "POST", body: JSON.stringify(body) }),
+  login: (body) => superAdminApiRequest("/auth/login", { method: "POST", body: JSON.stringify({ ...body, role: "SUPER_ADMIN" }) }),
+  forgotPassword: (body) =>
+    superAdminApiRequest("/super-admin/auth/forgot-password", { method: "POST", body: JSON.stringify(body) }),
+  resetPassword: (body) =>
+    superAdminApiRequest("/super-admin/auth/reset-password", { method: "POST", body: JSON.stringify(body) }),
   me: () => superAdminApiRequest("/super-admin/auth/me"),
   logout: (refreshToken) =>
     superAdminApiRequest("/super-admin/auth/logout", {
@@ -803,6 +815,10 @@ export const superAdminApi = {
     }),
   getDashboard: () => superAdminApiRequest("/super-admin/dashboard/summary"),
   getSystemHealth: () => superAdminApiRequest("/super-admin/system/health"),
+  getSystemAdmins: (params = "") => superAdminApiRequest(`/super-admin/system-admins${params}`),
+  createSystemAdmin: (body) => superAdminApiRequest("/super-admin/system-admins", { method: "POST", body: JSON.stringify(body) }),
+  updateSystemAdminStatus: (superAdminId, body) => superAdminApiRequest(`/super-admin/system-admins/${superAdminId}/status`, { method: "PATCH", body: JSON.stringify(body) }),
+  resetSystemAdminPassword: (superAdminId, body) => superAdminApiRequest(`/super-admin/system-admins/${superAdminId}/reset-password`, { method: "PATCH", body: JSON.stringify(body) }),
   getColleges: (params = "") => superAdminApiRequest(`/super-admin/colleges${params}`),
   getCollege: (collegeId) => superAdminApiRequest(`/super-admin/colleges/${collegeId}`),
   createCollege: (body) => superAdminApiRequest("/super-admin/colleges", { method: "POST", body: JSON.stringify(body) }),

@@ -201,7 +201,7 @@ const authenticateSuperAdmin = asyncHandler(async (req, _res, next) => {
     }
   }
 
-  if (!superAdmin || !superAdmin.isActive) {
+  if (!superAdmin || !superAdmin.isActive || normalizeRole(superAdmin.role) !== ROLES.SUPER_ADMIN) {
     throw new ApiError(401, "Invalid access token");
   }
 

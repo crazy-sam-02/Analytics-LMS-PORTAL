@@ -40,6 +40,7 @@ const adminAdminsRoutes = require("./routes/Admin/admins.routes");
 const adminAnalyticsRoutes = require("./routes/Admin/analytics.routes");
 const superAdminAuthRoutes = require("./routes/SuperAdmin/auth.routes");
 const superAdminDashboardRoutes = require("./routes/SuperAdmin/dashboard.routes");
+const superAdminSystemAdminsRoutes = require("./routes/SuperAdmin/system-admins.routes");
 const superAdminCollegesRoutes = require("./routes/SuperAdmin/colleges.routes");
 const superAdminAdminsRoutes = require("./routes/SuperAdmin/admins.routes");
 const superAdminStudentsRoutes = require("./routes/SuperAdmin/students.routes");
@@ -82,23 +83,39 @@ const collegeAdminResourcesRoutes = createResourcesRouter({ managementEnabled: t
 const superAdminResourcesRoutes = createResourcesRouter({ managementEnabled: true, analyticsEnabled: true });
 const superAdminResourcesAliasRoutes = createResourcesRouter({ managementEnabled: true, analyticsEnabled: true });
 
-const createAuthLoginLimiter = (scopeSuffix, routeLabel) =>
+const isUnifiedSuperAdminLoginRequest = (req) => {
+  const role = String(req.body?.role || "").trim().replace(/[\s-]+/g, "_").toUpperCase();
+  return role === "SUPER_ADMIN";
+};
+
+const createAuthLoginLimiter = (scopeSuffix, routeLabel, overrides = {}) =>
   isRateLimitDisabled
     ? createRateLimiter({ scope: "noop", windowMs: 1, max: 999999999, skip: () => true })
     : createRateLimiter({
         scope: `auth-login:${scopeSuffix}`,
         routeLabel,
-        windowMs: env.rateLimit.authLoginWindowMs,
-        max: env.rateLimit.authLoginMax,
+        windowMs: overrides.windowMs || env.rateLimit.authLoginWindowMs,
+        max: overrides.max || env.rateLimit.authLoginMax,
+        skip: overrides.skip,
         keySelector: authKeyByIp,
         failOpen: false,
         message: "Too many login attempts. Try again in a few minutes.",
       });
 
-const authLoginLimiter = createAuthLoginLimiter("student", "/api/auth/login");
+const authLoginLimiter = createAuthLoginLimiter("student", "/api/auth/login", {
+  skip: isUnifiedSuperAdminLoginRequest,
+});
 const adminAuthLoginLimiter = createAuthLoginLimiter("admin", "/api/admin/auth/login");
 const collegeAdminAuthLoginLimiter = createAuthLoginLimiter("college-admin", "/api/college-admin/auth/login");
-const superAdminAuthLoginLimiter = createAuthLoginLimiter("super-admin", "/api/super-admin/auth/login");
+const superAdminAuthLoginLimiter = createAuthLoginLimiter("super-admin", "/api/super-admin/auth/login", {
+  windowMs: env.rateLimit.superAdminAuthLoginWindowMs,
+  max: env.rateLimit.superAdminAuthLoginMax,
+});
+const unifiedSuperAdminAuthLoginLimiter = createAuthLoginLimiter("super-admin", "/api/auth/login", {
+  windowMs: env.rateLimit.superAdminAuthLoginWindowMs,
+  max: env.rateLimit.superAdminAuthLoginMax,
+  skip: (req) => !isUnifiedSuperAdminLoginRequest(req),
+});
 
 
 const authRefreshLimiter = isRateLimitDisabled
@@ -397,6 +414,7 @@ app.get("/api/metrics", metricsAuth, asyncHandler(async (_req, res) => {
 
 app.use("/api", generalApiLimiter);
 
+app.use("/api/auth/login", unifiedSuperAdminAuthLoginLimiter);
 app.use("/api/auth/login", authLoginLimiter);
 app.use("/api/admin/auth/login", adminAuthLoginLimiter);
 app.use("/api/college-admin/auth/login", collegeAdminAuthLoginLimiter);
@@ -503,8 +521,12 @@ app.use((req, res, next) => {
     "/api/college-admin/events",
     "/api/college-admin/admins",
     "/api/super-admin/dashboard",
+    "/api/super-admin/system-admins",
+    "/api/super-admin/system-administrators",
     "/api/super-admin/analytics",
     "/api/superadmin/dashboard",
+    "/api/superadmin/system-admins",
+    "/api/superadmin/system-administrators",
     "/api/superadmin/analytics",
   ];
 
@@ -560,6 +582,8 @@ app.use("/api/college-admin/analytics", authenticateCollegeAdmin, adminAnalytics
 app.use("/api/college-admin/resources", authenticateCollegeAdmin, collegeAdminResourcesRoutes);
 
 app.use("/api/super-admin/dashboard", superAdminDashboardRoutes);
+app.use("/api/super-admin/system-admins", superAdminSystemAdminsRoutes);
+app.use("/api/super-admin/system-administrators", superAdminSystemAdminsRoutes);
 app.use("/api/super-admin/colleges", superAdminCollegesRoutes);
 app.use("/api/super-admin/admins", superAdminAdminsRoutes);
 app.use("/api/super-admin/students", superAdminStudentsRoutes);
@@ -580,6 +604,8 @@ app.use("/api/super-admin/resources", authenticateSuperAdmin, superAdminResource
 // Endpoint aliases for clients that use /superadmin instead of /super-admin.
 app.use("/api/superadmin/auth", superAdminAuthRoutes);
 app.use("/api/superadmin/dashboard", superAdminDashboardRoutes);
+app.use("/api/superadmin/system-admins", superAdminSystemAdminsRoutes);
+app.use("/api/superadmin/system-administrators", superAdminSystemAdminsRoutes);
 app.use("/api/superadmin/colleges", superAdminCollegesRoutes);
 app.use("/api/superadmin/admins", superAdminAdminsRoutes);
 app.use("/api/superadmin/students", superAdminStudentsRoutes);

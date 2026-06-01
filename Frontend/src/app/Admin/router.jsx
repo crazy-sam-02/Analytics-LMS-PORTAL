@@ -4,8 +4,10 @@ import { Navigate, Outlet, RouterProvider, createBrowserRouter } from "react-rou
 import { fetchCurrentAdmin } from "@/features/Admin/adminAuthSlice";
 import AdminPortalLayout from "@/components/Admin/AdminPortalLayout";
 import AdminLoginPage from "@/pages/Admin/LoginPage";
+import PasswordResetPage from "@/pages/Auth/PasswordResetPage";
 import AdminDashboardPage from "@/pages/Admin/DashboardPage";
 import ManageTestsPage from "@/pages/Admin/ManageTestsPage";
+import LiveMonitoringPage from "@/pages/Admin/LiveMonitoringPage";
 import QuestionBankPage from "@/pages/Admin/QuestionBankPage";
 import BatchesPage from "@/pages/Admin/BatchesPage";
 import StudentsPage from "@/pages/Admin/StudentsPage";
@@ -18,6 +20,7 @@ import PermissionDenied from "@/components/Admin/PermissionDenied";
 import { ADMIN_PERMISSIONS } from "@/features/Admin/adminPermissions";
 import { isCollegeAdminRole } from "@/features/Admin/adminRole";
 import HardRedirect from "@/components/common/HardRedirect";
+import { adminApi } from "@/services/api";
 
 function PermissionRoute({ permission, action }) {
   const allowed = usePermission(permission);
@@ -70,6 +73,32 @@ const router = createBrowserRouter([
         children: [{ path: "/admin/login", element: <AdminLoginPage /> }],
       },
       {
+        path: "/admin/forgot-password",
+        element: (
+          <PasswordResetPage
+            portalName="Admin"
+            portalLabel="Admin workspace"
+            loginPath="/admin/login"
+            mainPath="/admin"
+            requestReset={adminApi.forgotPassword}
+            completeReset={adminApi.resetPassword}
+          />
+        ),
+      },
+      {
+        path: "/admin/reset-password",
+        element: (
+          <PasswordResetPage
+            portalName="Admin"
+            portalLabel="Admin workspace"
+            loginPath="/admin/login"
+            mainPath="/admin"
+            requestReset={adminApi.forgotPassword}
+            completeReset={adminApi.resetPassword}
+          />
+        ),
+      },
+      {
         element: <AdminProtectedRoute />,
         children: [
           {
@@ -78,6 +107,10 @@ const router = createBrowserRouter([
               { path: "/admin", element: <Navigate to="/admin/dashboard" replace /> },
               { path: "/admin/dashboard", element: <AdminDashboardPage /> },
               { path: "/admin/tests", element: <ManageTestsPage /> },
+              {
+                element: <PermissionRoute permission={ADMIN_PERMISSIONS.EDIT_TEST} action="monitor live tests" />,
+                children: [{ path: "/admin/tests/:testId/monitoring", element: <LiveMonitoringPage /> }],
+              },
               {
                 element: <PermissionRoute permission={ADMIN_PERMISSIONS.MANAGE_QUESTIONS} action="access question bank" />,
                 children: [{ path: "/admin/question-bank", element: <QuestionBankPage /> }],

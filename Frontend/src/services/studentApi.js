@@ -81,6 +81,24 @@ export const studentApi = {
     }
   },
 
+  forgotPassword: async (payload) => {
+    try {
+      const response = await httpClient.post("/auth/forgot-password", payload);
+      return response.data;
+    } catch (error) {
+      throw toApiError(error);
+    }
+  },
+
+  resetPassword: async (payload) => {
+    try {
+      const response = await httpClient.post("/auth/reset-password", payload);
+      return response.data;
+    } catch (error) {
+      throw toApiError(error);
+    }
+  },
+
   refreshSession: async (payload = {}) => {
     try {
       const response = await httpClient.post("/auth/refresh", payload);

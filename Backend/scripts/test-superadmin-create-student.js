@@ -11,11 +11,12 @@ const requiredEnv = (name) => {
   const creds = {
     email: requiredEnv("SMOKE_SUPERADMIN_EMAIL"),
     password: requiredEnv("SMOKE_SUPERADMIN_PASSWORD"),
+    role: "SUPER_ADMIN",
   };
   const fetchImpl = global.fetch || (await import("node-fetch")).default;
 
   try {
-    const loginRes = await fetchImpl(`${baseUrl}/api/super-admin/auth/login`, {
+    const loginRes = await fetchImpl(`${baseUrl}/api/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(creds),

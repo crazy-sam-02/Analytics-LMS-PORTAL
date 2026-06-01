@@ -20,9 +20,10 @@ jest.mock("../../services/access-token-revocation.service", () => ({
   revokeAccessTokenFromRequest: jest.fn(async () => {}),
 }));
 
+const bcrypt = require("bcrypt");
 const models = require("../../models");
-const { verifyRefreshToken } = require("../../utils/token");
-const { superAdminRefresh, superAdminLogout } = require("../../controllers/SuperAdmin/auth.controller");
+const { createRefreshToken, verifyRefreshToken } = require("../../utils/token");
+const { superAdminLogin, superAdminRefresh, superAdminLogout } = require("../../controllers/SuperAdmin/auth.controller");
 
 const invoke = async (handler, req = {}) =>
   new Promise((resolve, reject) => {
@@ -48,6 +49,63 @@ const invoke = async (handler, req = {}) =>
 describe("super-admin auth refresh", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    createRefreshToken.mockReturnValue("rotated-super-refresh-token");
+  });
+
+  it("logs in SuperAdmins through database-backed credentials only", async () => {
+    const passwordHash = await bcrypt.hash("StrongPassword123!", 10);
+    const nowPlusOneHour = new Date(Date.now() + 60 * 60 * 1000);
+    const superAdminRecord = {
+      id: "super-1",
+      fullName: "Prionex Owner",
+      email: "owner@prionex.com",
+      role: "SUPER_ADMIN",
+      isActive: true,
+      passwordHash,
+    };
+    const db = {
+      superAdmin: {
+        findFirst: jest.fn().mockResolvedValue(superAdminRecord),
+        update: jest.fn().mockResolvedValue({ ...superAdminRecord, lastLoginAt: new Date() }),
+      },
+      superAdminRefreshToken: {
+        create: jest.fn().mockResolvedValue({
+          id: "session-1",
+          tokenHash: "hash:new-super-refresh-token",
+          superAdminId: "super-1",
+          revokedAt: null,
+          expiresAt: nowPlusOneHour,
+        }),
+      },
+    };
+    db.superAdmin.upsert = jest.fn();
+    models.init.mockResolvedValue({ dbClient: db });
+    createRefreshToken.mockReturnValue("new-super-refresh-token");
+    verifyRefreshToken.mockReturnValue({
+      sub: "super-1",
+      role: "SUPER_ADMIN",
+      exp: Math.floor(nowPlusOneHour.getTime() / 1000),
+    });
+
+    const { res, payload } = await invoke(superAdminLogin, {
+      body: {
+        email: "owner@prionex.com",
+        password: "StrongPassword123!",
+      },
+    });
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(payload.accessToken).toBe("new-super-access-token");
+    expect(payload.refreshToken).toBe("new-super-refresh-token");
+    expect(payload.superAdmin).toEqual(expect.objectContaining({
+      id: "super-1",
+      email: "owner@prionex.com",
+      role: "SUPER_ADMIN",
+    }));
+    expect(db.superAdmin.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ role: "SUPER_ADMIN" }),
+    }));
+    expect(db.superAdmin.upsert).not.toHaveBeenCalled();
   });
 
   it("rotates refresh tokens and writes cookies for both super-admin route aliases", async () => {

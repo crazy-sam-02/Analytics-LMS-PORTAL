@@ -13,6 +13,7 @@ const {
   verifyRefreshPayloadOrThrow,
 } = require("../../services/refresh-token-session.service");
 const { revokeAccessTokenFromRequest } = require("../../services/access-token-revocation.service");
+const { requestPasswordReset, resetPasswordWithToken } = require("../../services/password-reset.service");
 
 const ADMIN_REFRESH_COOKIE = "lms_admin_refresh_token";
 
@@ -168,9 +169,30 @@ const adminMe = asyncHandler(async (req, res) => {
   res.status(200).json(req.admin);
 });
 
+const adminForgotPassword = asyncHandler(async (req, res) => {
+  const result = await requestPasswordReset({
+    scope: "admin",
+    portal: String(req.baseUrl || req.originalUrl || "").includes("college-admin") ? "college-admin" : "admin",
+    identifier: req.body?.email,
+    req,
+  });
+  res.status(202).json(result);
+});
+
+const adminResetPassword = asyncHandler(async (req, res) => {
+  const result = await resetPasswordWithToken({
+    scope: "admin",
+    token: req.body?.token,
+    password: req.body?.password,
+  });
+  res.status(200).json(result);
+});
+
 module.exports = {
   adminLogin,
   adminRefresh,
   adminLogout,
   adminMe,
+  adminForgotPassword,
+  adminResetPassword,
 };

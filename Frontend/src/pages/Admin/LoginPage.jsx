@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Eye, EyeOff, Lock, ShieldCheck, User } from "lucide-react";
 import { useDispatch, useSelector } from "react-redux";
-import { Navigate } from "react-router-dom";
+import { Link, Navigate } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -155,9 +155,9 @@ export default function AdminLoginPage() {
               <div>
                 <div className="mb-2.5 flex items-center justify-between text-xs font-bold tracking-wide text-slate-600 uppercase">
                   <span>Password</span>
-                  <button type="button" className="text-xs font-bold tracking-normal text-blue-600 normal-case hover:text-blue-700">
+                  <Link to="/admin/forgot-password" className="text-xs font-bold tracking-normal text-blue-600 normal-case hover:text-blue-700">
                     Forgot Password?
-                  </button>
+                  </Link>
                 </div>
                 <div className="flex h-14 items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 shadow-[0_1px_2px_rgba(15,23,42,0.04),inset_0_1px_0_rgba(255,255,255,0.9)] transition focus-within:border-blue-500 focus-within:shadow-[0_0_0_4px_rgba(37,99,235,0.10)]">
                   <Lock className="size-5 text-slate-500" />

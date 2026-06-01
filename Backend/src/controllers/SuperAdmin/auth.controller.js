@@ -1,8 +1,9 @@
 const bcrypt = require("bcrypt");
 const models = require("../../models");
-const env = require("../../config/env");
 const { createAccessToken } = require("../../utils/token");
 const { ApiError, asyncHandler } = require("../../utils/http");
+const { ROLES, normalizeRole } = require("../../constants/roles");
+const { recordSuperAdminLogin, toPublicSuperAdmin } = require("../../services/super-admin.service");
 const {
   assertRefreshTokenRecordUsable,
   createRefreshTokenRecord,
@@ -12,6 +13,7 @@ const {
   verifyRefreshPayloadOrThrow,
 } = require("../../services/refresh-token-session.service");
 const { revokeAccessTokenFromRequest } = require("../../services/access-token-revocation.service");
+const { requestPasswordReset, resetPasswordWithToken } = require("../../services/password-reset.service");
 
 const SUPER_ADMIN_REFRESH_COOKIE = "lms_super_admin_refresh_token";
 const SUPER_ADMIN_AUTH_COOKIE_PATHS = ["/api/super-admin/auth", "/api/superadmin/auth"];
@@ -36,64 +38,19 @@ const clearRefreshCookie = (res) => {
   });
 };
 
-const superAdminLogin = asyncHandler(async (req, res) => {
+const performSuperAdminLogin = async (req, res) => {
   const { email, password } = req.body;
-
-  const envEmail = String(env.superAdminEmail || "").trim().toLowerCase();
-  const incomingEmail = String(email || "").trim().toLowerCase();
-  const envPassword = String(env.superAdminPassword || "");
-
-  if (envEmail && incomingEmail === envEmail && envPassword && password === envPassword) {
-    const passwordHash = await bcrypt.hash(envPassword, 10);
-    const m = await models.init();
-    const SuperAdmin = m.dbClient.superAdmin;
-
-    const superAdmin = await SuperAdmin.upsert({
-      where: { email: env.superAdminEmail },
-      update: {
-        fullName: env.superAdminName || "Super Admin",
-        passwordHash,
-        role: "SUPER_ADMIN",
-        isActive: true,
-      },
-      create: {
-        email: env.superAdminEmail,
-        fullName: env.superAdminName || "Super Admin",
-        passwordHash,
-        role: "SUPER_ADMIN",
-        isActive: true,
-      }
-    });
-
-    const accessToken = createAccessToken(superAdmin);
-    const { refreshToken } = await createRefreshTokenRecord({
-      db: m.dbClient,
-      modelName: "superAdminRefreshToken",
-      scope: "super-admin",
-      principal: superAdmin,
-      ownerField: "superAdminId",
-    });
-    setRefreshCookie(res, refreshToken);
-
-    return res.status(200).json({
-      accessToken,
-      refreshToken,
-      superAdmin: {
-        id: superAdmin.id,
-        fullName: superAdmin.fullName,
-        email: superAdmin.email,
-        role: superAdmin.role,
-      },
-    });
-  }
 
   const m = await models.init();
   const SuperAdmin = m.dbClient.superAdmin;
   const superAdmin = await SuperAdmin.findFirst({
-    where: { email, role: "SUPER_ADMIN" }
+    where: {
+      email: { equals: String(email || "").trim().toLowerCase(), mode: "insensitive" },
+      role: ROLES.SUPER_ADMIN,
+    }
   });
 
-  if (!superAdmin || !superAdmin.isActive) {
+  if (!superAdmin || !superAdmin.isActive || normalizeRole(superAdmin.role) !== ROLES.SUPER_ADMIN) {
     throw new ApiError(401, "Invalid credentials");
   }
 
@@ -111,18 +68,16 @@ const superAdminLogin = asyncHandler(async (req, res) => {
     ownerField: "superAdminId",
   });
   setRefreshCookie(res, refreshToken);
+  const updatedSuperAdmin = await recordSuperAdminLogin({ db: m.dbClient, superAdminId: superAdmin.id }) || superAdmin;
 
   res.status(200).json({
     accessToken,
     refreshToken,
-    superAdmin: {
-      id: superAdmin.id,
-      fullName: superAdmin.fullName,
-      email: superAdmin.email,
-      role: superAdmin.role,
-    },
+    superAdmin: toPublicSuperAdmin(updatedSuperAdmin),
   });
-});
+};
+
+const superAdminLogin = asyncHandler(performSuperAdminLogin);
 
 const superAdminRefresh = asyncHandler(async (req, res) => {
   const refreshToken = req.cookies?.[SUPER_ADMIN_REFRESH_COOKIE] || req.body?.refreshToken;
@@ -149,12 +104,12 @@ const superAdminRefresh = asyncHandler(async (req, res) => {
     ownerId: payload.sub,
   });
 
-  if (payload.role !== "SUPER_ADMIN") {
+  if (normalizeRole(payload.role) !== ROLES.SUPER_ADMIN) {
     throw new ApiError(401, "Invalid refresh token role");
   }
 
   const superAdmin = await db.superAdmin.findUnique({ where: { id: payload.sub } });
-  if (!superAdmin || !superAdmin.isActive) {
+  if (!superAdmin || !superAdmin.isActive || normalizeRole(superAdmin.role) !== ROLES.SUPER_ADMIN) {
     throw new ApiError(401, "Invalid refresh token");
   }
 
@@ -197,12 +152,34 @@ const superAdminLogout = asyncHandler(async (req, res) => {
 });
 
 const superAdminMe = asyncHandler(async (req, res) => {
-  res.status(200).json(req.superAdmin);
+  res.status(200).json(toPublicSuperAdmin(req.superAdmin));
+});
+
+const superAdminForgotPassword = asyncHandler(async (req, res) => {
+  const result = await requestPasswordReset({
+    scope: "super-admin",
+    portal: "super-admin",
+    identifier: req.body?.email,
+    req,
+  });
+  res.status(202).json(result);
+});
+
+const superAdminResetPassword = asyncHandler(async (req, res) => {
+  const result = await resetPasswordWithToken({
+    scope: "super-admin",
+    token: req.body?.token,
+    password: req.body?.password,
+  });
+  res.status(200).json(result);
 });
 
 module.exports = {
+  performSuperAdminLogin,
   superAdminLogin,
   superAdminRefresh,
   superAdminLogout,
   superAdminMe,
+  superAdminForgotPassword,
+  superAdminResetPassword,
 };

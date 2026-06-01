@@ -21,6 +21,7 @@ const keepStack = String(process.env.LOCAL_PROD_SMOKE_KEEP_STACK || "false").toL
 const mongoRootPassword = randomSecret();
 const mongoAppPassword = randomSecret();
 const redisPassword = randomSecret();
+const smokeSuperAdminPassword = `Smoke${randomSecret(12)}1!`;
 
 const envContent = [
   "PORT=5000",
@@ -56,14 +57,21 @@ const envContent = [
   `JWT_REFRESH_SECRET=${randomSecret(48)}`,
   "JWT_ACCESS_EXPIRES_IN=15m",
   "JWT_REFRESH_EXPIRES_IN=30d",
+  "RESEND_API_KEY=re_smoke_dummy",
+  "RESEND_FROM_EMAIL=noreply@analyticsedify.com",
+  "RESEND_FROM_NAME=Analytics Edify",
+  "PASSWORD_RESET_DELIVERY_MODE=response",
+  "PASSWORD_RESET_RETURN_TOKEN=true",
+  "PASSWORD_RESET_FRONTEND_BASE_URL=http://127.0.0.1",
+  "PASSWORD_RESET_FRONTEND_URL=http://127.0.0.1/reset-password",
+  "PASSWORD_RESET_ADMIN_FRONTEND_URL=http://127.0.0.1/admin/reset-password",
+  "PASSWORD_RESET_COLLEGE_ADMIN_FRONTEND_URL=http://127.0.0.1/college-admin/reset-password",
+  "PASSWORD_RESET_SUPER_ADMIN_FRONTEND_URL=http://127.0.0.1/super-admin/reset-password",
   `FRONTEND_ORIGIN=http://127.0.0.1:${frontendPort}`,
   "CLOUDINARY_CLOUD_NAME=",
   "CLOUDINARY_API_KEY=",
   "CLOUDINARY_API_SECRET=",
   "CLOUDINARY_FOLDER=lms-portal",
-  "SUPERADMIN_EMAIL=",
-  "SUPERADMIN_PASSWORD=",
-  "SUPERADMIN_NAME=Super Admin",
   "BACKUP_ROOT=/backups",
   "UPLOADS_BACKUP_ROOT=/backups/uploads",
   `HOST_BACKUP_ROOT=${hostBackupRoot.replace(/\\/g, "/")}`,
@@ -157,6 +165,10 @@ const main = async () => {
     run("Run refresh-token migration", composeArgs("exec", "-T", "api", "npm", "run", "db:migrate:refresh-token-hashes"));
     run("Run violation migration", composeArgs("exec", "-T", "api", "npm", "run", "db:migrate:violations"));
     run("Create MongoDB indexes", composeArgs("exec", "-T", "api", "npm", "run", "db:create-indexes"));
+    run(
+      "Create smoke SuperAdmin",
+      composeArgs("exec", "-T", "api", "npm", "run", "create", "--", "--name=Smoke Owner", "--email=smoke-owner@example.com", `--password=${smokeSuperAdminPassword}`)
+    );
     run("Run production readiness check", composeArgs("exec", "-T", "api", "npm", "run", "prod:check"));
 
     const apiReadyRaw = run(

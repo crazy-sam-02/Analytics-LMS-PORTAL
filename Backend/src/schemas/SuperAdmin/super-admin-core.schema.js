@@ -1,4 +1,5 @@
 const { z } = require("zod");
+const { validatePasswordPolicy } = require("../../services/super-admin.service");
 const {
   TEST_TYPES,
   PROCTORING_PRESETS,
@@ -552,6 +553,51 @@ const updatePlatformSettingsSchema = z.object({
   query: z.object({}).optional().default({}),
 });
 
+const superAdminPasswordSchema = z.string().superRefine((password, ctx) => {
+  const result = validatePasswordPolicy(password);
+  if (!result.valid) {
+    ctx.addIssue({
+      code: "custom",
+      message: `Password must contain ${result.failures.join(", ")}.`,
+    });
+  }
+});
+
+const createSystemAdminSchema = z.object({
+  body: z.object({
+    name: z.string().trim().min(2).optional(),
+    fullName: z.string().trim().min(2).optional(),
+    email: z.string().trim().email(),
+    password: superAdminPasswordSchema,
+  }).superRefine((body, ctx) => {
+    if (!body.name && !body.fullName) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["name"],
+        message: "name is required",
+      });
+    }
+  }),
+  params: z.object({}).optional().default({}),
+  query: z.object({}).optional().default({}),
+});
+
+const updateSystemAdminStatusSchema = z.object({
+  body: z.object({
+    isActive: z.boolean(),
+  }),
+  params: z.object({ superAdminId: idSchema }),
+  query: z.object({}).optional().default({}),
+});
+
+const resetSystemAdminPasswordSchema = z.object({
+  body: z.object({
+    password: superAdminPasswordSchema,
+  }),
+  params: z.object({ superAdminId: idSchema }),
+  query: z.object({}).optional().default({}),
+});
+
 module.exports = {
   paginationQuerySchema,
   createCollegeSchema,
@@ -586,4 +632,7 @@ module.exports = {
   createSuperReportSchema,
   reportJobParamSchema,
   updatePlatformSettingsSchema,
+  createSystemAdminSchema,
+  updateSystemAdminStatusSchema,
+  resetSystemAdminPasswordSchema,
 };
