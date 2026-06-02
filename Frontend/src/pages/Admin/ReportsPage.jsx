@@ -202,7 +202,7 @@ export default function ReportsPage({ basePathOverride = null, showStudentDepart
   });
 
   const analyticsQuery = useQuery({
-    queryKey: [`${queryKeyPrefix}-analytics-v2`, mode, testId, batchId, studentId],
+    queryKey: [`${queryKeyPrefix}-analytics-v2`, mode, testId, batchId, studentId, studentYear],
     queryFn: () =>
       adminApi.getReportAnalytics(
         toQueryString({
@@ -210,14 +210,15 @@ export default function ReportsPage({ basePathOverride = null, showStudentDepart
           testId,
           batchId,
           studentId,
+          year: studentYear || undefined,
         })
       ),
     enabled: canViewReports && (mode !== "student" || Boolean(studentId)),
     staleTime: 45000,
   });
   const studentDetailQuery = useQuery({
-    queryKey: [`${queryKeyPrefix}-student-detail-all-tests-v2`, studentId],
-    queryFn: () => adminApi.getReportStudentDetail(studentId),
+    queryKey: [`${queryKeyPrefix}-student-detail-all-tests-v2`, studentId, studentYear],
+    queryFn: () => adminApi.getReportStudentDetail(studentId, toQueryString({ year: studentYear || undefined })),
     enabled: canViewReports && mode === "student" && Boolean(studentId),
     staleTime: 45000,
   });
@@ -247,6 +248,7 @@ export default function ReportsPage({ basePathOverride = null, showStudentDepart
           id: studentDetailQuery.data.student.id,
           fullName: studentDetailQuery.data.student.name,
           studentId: studentDetailQuery.data.student.studentId,
+          year: studentDetailQuery.data.student.year || null,
           department: { name: studentDetailQuery.data.student.department },
           batch: { name: studentDetailQuery.data.student.batch },
         }
@@ -449,6 +451,7 @@ export default function ReportsPage({ basePathOverride = null, showStudentDepart
           testId: testId === "all" ? undefined : testId,
           batchId: mode === "batch" ? batchId || undefined : undefined,
           studentId: mode === "student" ? studentId || undefined : undefined,
+          year: studentYear || undefined,
         },
       });
 
@@ -494,8 +497,13 @@ export default function ReportsPage({ basePathOverride = null, showStudentDepart
   const handleModeSwitch = (nextMode) => {
     updateParams({ mode: nextMode, batch: "", student_id: "" });
     setStudentSearch("");
-    setStudentYear("");
     setStudentDepartmentId("");
+  };
+
+  const handleYearChange = (nextYear) => {
+    setStudentYear(nextYear || "");
+    updateParams({ student_id: "" });
+    setStudentSearch("");
   };
 
   const handleSort = (key) => {
@@ -591,6 +599,20 @@ export default function ReportsPage({ basePathOverride = null, showStudentDepart
         </div>
 
         <div className="flex flex-wrap gap-3">
+          <label className="space-y-1 text-xs text-text-secondary">
+            <span>Student Year</span>
+            <select
+              value={studentYear}
+              onChange={(event) => handleYearChange(event.target.value)}
+              className="h-9 min-w-40 rounded-lg border border-border bg-background px-3 text-sm text-text-primary"
+            >
+              <option value="">All years</option>
+              {YEAR_OPTIONS.map((year) => (
+                <option key={year} value={year}>{year} YEAR</option>
+              ))}
+            </select>
+          </label>
+
           {mode === "batch" ? (
             <select
               value={batchId}
@@ -610,26 +632,6 @@ export default function ReportsPage({ basePathOverride = null, showStudentDepart
                 <div className="mb-3">
                   <p className="text-sm font-semibold text-text-primary">Select student</p>
                   <p className="text-xs text-text-secondary">Choose a student here to load all of their test reports and analytics.</p>
-                </div>
-
-                <div className="mb-3 max-w-xs">
-                  <label className="space-y-1 text-xs text-text-secondary">
-                    <span>Year</span>
-                    <select
-                      value={studentYear}
-                      onChange={(event) => {
-                        setStudentYear(event.target.value);
-                        updateParams({ student_id: "" });
-                        setStudentSearch("");
-                      }}
-                      className="h-10 w-full rounded-xl border border-border bg-card px-3 text-sm"
-                    >
-                      <option value="">All years</option>
-                      {YEAR_OPTIONS.map((year) => (
-                        <option key={year} value={year}>{year} YEAR</option>
-                      ))}
-                    </select>
-                  </label>
                 </div>
 
                 {showStudentDepartmentFilter ? (
@@ -720,6 +722,7 @@ export default function ReportsPage({ basePathOverride = null, showStudentDepart
                   <div className="mt-3 space-y-1">
                     <p className="font-semibold text-text-primary">{selectedStudentPickerRecord.fullName}</p>
                     <p className="text-sm text-text-secondary">{selectedStudentPickerRecord.studentId}</p>
+                    <p className="text-sm text-text-secondary">Year: {selectedStudentPickerRecord.year ? `${selectedStudentPickerRecord.year} YEAR` : "-"}</p>
                     <p className="text-sm text-text-secondary">{selectedStudentPickerRecord.department?.name || "-"} · {selectedStudentPickerRecord.batch?.name || selectedStudentBatchLabel}</p>
                   </div>
                 ) : (

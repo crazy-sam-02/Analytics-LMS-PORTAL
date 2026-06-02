@@ -24,6 +24,20 @@ const testSessionHeaders = () => ({
   "x-test-client-id": getOrCreateTestClientId(),
 });
 
+const getFilenameFromDisposition = (disposition = "") => {
+  const filenameExtMatch = String(disposition).match(/filename\*=UTF-8''([^;]+)/i);
+  if (filenameExtMatch?.[1]) {
+    try {
+      return decodeURIComponent(filenameExtMatch[1]);
+    } catch {
+      return filenameExtMatch[1];
+    }
+  }
+
+  const filenameMatch = String(disposition).match(/filename="?([^";]+)"?/i);
+  return filenameMatch?.[1] || "student-report.pdf";
+};
+
 const normalizeTestId = (item) => String(item?.id || item?.test_id || item?.testId || "");
 const normalizeSubmissionId = (item) => String(item?.submissionId || item?.attempt_id || item?.attemptId || "");
 
@@ -613,9 +627,29 @@ export const studentApi = {
     };
 
     try {
-      const response = await httpClient.post("/reports/export", payload);
-      return withServerTime(response).data;
+      const response = await httpClient.post("/reports/export", payload, {
+        responseType: "blob",
+      });
+      const contentType = response?.headers?.["content-type"] || "application/pdf";
+      const blob = response.data instanceof Blob ? response.data : new Blob([response.data], { type: contentType });
+      const url = URL.createObjectURL(blob);
+      const filename = getFilenameFromDisposition(response?.headers?.["content-disposition"]);
+
+      return {
+        url,
+        signed_url: url,
+        signedUrl: url,
+        filename,
+        revoke: () => URL.revokeObjectURL(url),
+      };
     } catch (error) {
+      if (error?.response?.data instanceof Blob && String(error.response.data.type || "").includes("application/json")) {
+        try {
+          error.response.data = JSON.parse(await error.response.data.text());
+        } catch {
+          // Keep the original blob-shaped error if it cannot be parsed.
+        }
+      }
       throw toApiError(error);
     }
   },

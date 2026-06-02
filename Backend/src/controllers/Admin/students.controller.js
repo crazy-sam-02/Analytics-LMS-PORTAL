@@ -145,10 +145,9 @@ const promoteStudentsYear = asyncHandler(async (req, res) => {
     const prior4 = await tx.student.findMany({ where: { collegeId, year: 4 }, select: { id: true } });
     const prior4Ids = prior4.map((s) => s.id);
 
-    const step1 = await tx.student.updateMany({ where: { collegeId, year: 1 }, data: { year: 2 } });
-    const step2 = await tx.student.updateMany({ where: { collegeId, year: 2 }, data: { year: 3 } });
-    // Ensure newly promoted 3->4 are active
     const step3 = await tx.student.updateMany({ where: { collegeId, year: 3 }, data: { year: 4, isActive: true } });
+    const step2 = await tx.student.updateMany({ where: { collegeId, year: 2 }, data: { year: 3 } });
+    const step1 = await tx.student.updateMany({ where: { collegeId, year: 1 }, data: { year: 2 } });
 
     let deactivated = { count: 0 };
     if (prior4Ids.length > 0) {

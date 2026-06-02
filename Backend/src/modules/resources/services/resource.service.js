@@ -11,7 +11,6 @@ const { ApiError } = require("../../../utils/http");
 const { ROLES, normalizeRole } = require("../../../constants/roles");
 const { uploadRoot } = require("../middlewares/upload.middleware");
 const {
-  DEFAULT_RESOURCE_SUBJECTS,
   EXTENSIONS_BY_RESOURCE_TYPE,
   FILE_RESOURCE_TYPES,
   LINK_RESOURCE_TYPES,
@@ -580,32 +579,17 @@ const actorCacheScope = (actor) => JSON.stringify({
   batchIds: actor.batchIds,
 });
 
-const ensureDefaultResourceSubjects = async (db) => {
-  for (const name of DEFAULT_RESOURCE_SUBJECTS) {
-    const existing = await db.subject.findFirst({
-      where: {
-        collegeId: null,
-        name: { equals: name, mode: "insensitive" },
-      },
-    });
-
-    if (!existing) {
-      await db.subject.create({
-        data: {
-          name,
-          collegeId: null,
-          createdBySuperAdminId: null,
-          isDefaultResourceSubject: true,
-          resourceSubjectScope: "GLOBAL",
-        },
-      });
-    }
-  }
-};
-
 const getModels = async () => {
   const m = await models.init();
   return m.dbClient;
+};
+
+const buildSubjectWhereForActor = (actor, query = {}) => {
+  if (actor.role === ROLES.SUPER_ADMIN) {
+    return query.collegeId ? { OR: [{ collegeId: null }, { collegeId: query.collegeId }] } : { collegeId: null };
+  }
+
+  return actor.collegeId ? { OR: [{ collegeId: null }, { collegeId: actor.collegeId }] } : { collegeId: null };
 };
 
 const findSubjectForPayload = async (db, actor, payload) => {
@@ -625,11 +609,24 @@ const findSubjectForPayload = async (db, actor, payload) => {
     throw new ApiError(422, "Global resources must use a global subject");
   }
 
+  if (
+    payload.visibilityScope !== VISIBILITY_SCOPES.GLOBAL &&
+    subject.collegeId &&
+    payload.collegeId &&
+    String(subject.collegeId) !== String(payload.collegeId)
+  ) {
+    throw new ApiError(403, "Subject does not belong to the selected college", null, "CROSS_COLLEGE_ACCESS_DENIED");
+  }
+
   return subject;
 };
 
 const validateScopedReferences = async (db, actor, payload) => {
   if (payload.visibilityScope === VISIBILITY_SCOPES.GLOBAL) {
+    if (actor.role !== ROLES.SUPER_ADMIN) {
+      throw new ApiError(403, "Only Super Admin can publish global resources");
+    }
+
     payload.collegeId = null;
     payload.departmentIds = [];
     payload.batchIds = [];
@@ -736,13 +733,12 @@ const buildFinalFilePath = async ({ resourceId, collegeId, subjectId, originalFi
 
 const createResource = async ({ actor, body, file }) => {
   const db = await getModels();
-  await ensureDefaultResourceSubjects(db);
   const payload = normalizeResourcePayload(body);
 
   try {
     validateResourceBasics(payload);
-    await findSubjectForPayload(db, actor, payload);
     await validateScopedReferences(db, actor, payload);
+    await findSubjectForPayload(db, actor, payload);
     assertValidExternalUrl(payload.resourceType, payload.externalUrl);
     await assertValidFileUpload(payload.resourceType, file);
 
@@ -832,11 +828,7 @@ const buildSearchWhere = async (db, actor, query = {}) => {
   }
 
   if (subjectName) {
-    const visibleSubjectWhere = actor.role === ROLES.SUPER_ADMIN && query.collegeId
-      ? { OR: [{ collegeId: null }, { collegeId: query.collegeId }] }
-      : actor.role === ROLES.SUPER_ADMIN
-        ? {}
-        : { OR: [{ collegeId: null }, { collegeId: actor.collegeId }] };
+    const visibleSubjectWhere = buildSubjectWhereForActor(actor, query);
 
     const subjects = await db.subject.findMany({
       where: appendAnd(visibleSubjectWhere, { name: { contains: subjectName, mode: "insensitive" } }),
@@ -852,7 +844,7 @@ const buildSearchWhere = async (db, actor, query = {}) => {
 
   if (searchText) {
     const subjects = await db.subject.findMany({
-      where: { name: { contains: searchText, mode: "insensitive" } },
+      where: appendAnd(buildSubjectWhereForActor(actor, query), { name: { contains: searchText, mode: "insensitive" } }),
       take: 50,
     });
     const subjectIds = subjects.map((subject) => subject.id);
@@ -871,7 +863,6 @@ const buildSearchWhere = async (db, actor, query = {}) => {
 
 const listResources = async ({ actor, query = {} }) => {
   const db = await getModels();
-  await ensureDefaultResourceSubjects(db);
 
   const limit = Math.min(Math.max(Number(query.limit || 20), 1), 100);
   const page = Math.max(Number(query.page || 1), 1);
@@ -1063,8 +1054,8 @@ const updateResource = async ({ actor, resourceId, body, file }) => {
 
   try {
     validateResourceBasics(payload);
-    await findSubjectForPayload(db, actor, payload);
     await validateScopedReferences(db, actor, payload);
+    await findSubjectForPayload(db, actor, payload);
     assertValidExternalUrl(payload.resourceType, payload.externalUrl);
 
     if (file || FILE_RESOURCE_TYPES.includes(payload.resourceType)) {
@@ -1271,11 +1262,7 @@ const getResourceAnalytics = async ({ actor, query = {} }) => {
 
 const getResourceSubjects = async ({ actor, query = {} }) => {
   const db = await getModels();
-  await ensureDefaultResourceSubjects(db);
-
-  const where = actor.role === ROLES.SUPER_ADMIN
-    ? (query.collegeId ? { OR: [{ collegeId: null }, { collegeId: query.collegeId }] } : { collegeId: null })
-    : { OR: [{ collegeId: null }, { collegeId: actor.collegeId }] };
+  const where = buildSubjectWhereForActor(actor, query);
 
   const subjects = await db.subject.findMany({
     where,
@@ -1299,19 +1286,22 @@ const getResourceSubjects = async ({ actor, query = {} }) => {
 };
 
 const createResourceSubject = async ({ actor, body }) => {
-  if (![ROLES.SUPER_ADMIN, ROLES.COLLEGE_ADMIN].includes(actor.role)) {
-    throw new ApiError(403, "Only Super Admin and College Admin can create resource subjects");
+  if (![ROLES.SUPER_ADMIN, ROLES.COLLEGE_ADMIN, ROLES.ADMIN].includes(actor.role)) {
+    throw new ApiError(403, "Only Super Admin, College Admin, and Admin can create resource subjects");
   }
 
   const db = await getModels();
-  await ensureDefaultResourceSubjects(db);
   const name = String(body?.name || "").trim();
 
   if (!name) {
     throw new ApiError(422, "Subject name is required");
   }
 
-  const collegeId = actor.role === ROLES.COLLEGE_ADMIN ? actor.collegeId : null;
+  if (actor.role !== ROLES.SUPER_ADMIN && !actor.collegeId) {
+    throw new ApiError(422, "collegeId is required to create a resource subject");
+  }
+
+  const collegeId = actor.role === ROLES.SUPER_ADMIN ? null : actor.collegeId;
   const duplicate = await db.subject.findFirst({
     where: {
       collegeId,
@@ -1327,9 +1317,8 @@ const createResourceSubject = async ({ actor, body }) => {
     data: {
       name,
       collegeId,
-      createdByAdminId: actor.role === ROLES.COLLEGE_ADMIN ? actor.id : null,
+      createdByAdminId: actor.role === ROLES.SUPER_ADMIN ? null : actor.id,
       createdBySuperAdminId: actor.role === ROLES.SUPER_ADMIN ? actor.id : null,
-      isDefaultResourceSubject: false,
       resourceSubjectScope: actor.role === ROLES.SUPER_ADMIN ? "GLOBAL" : "COLLEGE",
     },
   });
@@ -1339,8 +1328,12 @@ const createResourceSubject = async ({ actor, body }) => {
 };
 
 const deleteResourceSubject = async ({ actor, subjectId }) => {
-  if (![ROLES.SUPER_ADMIN, ROLES.COLLEGE_ADMIN].includes(actor.role)) {
-    throw new ApiError(403, "Only Super Admin and College Admin can delete resource subjects");
+  if (![ROLES.SUPER_ADMIN, ROLES.COLLEGE_ADMIN, ROLES.ADMIN].includes(actor.role)) {
+    throw new ApiError(403, "Only Super Admin, College Admin, and Admin can delete resource subjects");
+  }
+
+  if (actor.role !== ROLES.SUPER_ADMIN && !actor.collegeId) {
+    throw new ApiError(422, "collegeId is required to delete a resource subject");
   }
 
   const db = await getModels();
@@ -1349,15 +1342,15 @@ const deleteResourceSubject = async ({ actor, subjectId }) => {
     throw new ApiError(404, "Subject not found");
   }
 
-  if (subject.isDefaultResourceSubject) {
-    throw new ApiError(409, "Default resource subjects cannot be deleted", null, "DEFAULT_SUBJECT_LOCKED");
-  }
-
   if (actor.role === ROLES.SUPER_ADMIN && subject.collegeId) {
     throw new ApiError(403, "Super Admin can only delete global resource subjects from this endpoint");
   }
 
-  if (actor.role === ROLES.COLLEGE_ADMIN && String(subject.collegeId || "") !== String(actor.collegeId)) {
+  if (actor.role !== ROLES.SUPER_ADMIN && !subject.collegeId) {
+    throw new ApiError(403, "Only Super Admin can delete global resource subjects");
+  }
+
+  if (actor.role !== ROLES.SUPER_ADMIN && String(subject.collegeId || "") !== String(actor.collegeId || "")) {
     throw new ApiError(403, "Cross-college subject access denied", null, "CROSS_COLLEGE_ACCESS_DENIED");
   }
 
@@ -1376,7 +1369,7 @@ module.exports = {
   buildVisibilityWhereForActor,
   canAccessResource,
   assertSafeStoredPath,
-  ensureDefaultResourceSubjects,
+  buildSubjectWhereForActor,
   getResourceSubjects,
   createResourceSubject,
   deleteResourceSubject,

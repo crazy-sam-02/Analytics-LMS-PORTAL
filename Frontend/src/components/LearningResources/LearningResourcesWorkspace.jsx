@@ -139,8 +139,9 @@ export default function LearningResourcesWorkspace({
 
   const isSuper = role === "super";
   const isStudent = role === "student";
-  const isDepartmentAdmin = role === "admin" && String(admin?.role || "").toUpperCase() === "ADMIN";
-  const canCreateSubject = isSuper || (role === "admin" && String(admin?.role || "").toUpperCase() === "COLLEGE_ADMIN");
+  const adminRole = String(admin?.role || "").toUpperCase();
+  const isDepartmentAdmin = role === "admin" && adminRole === "ADMIN";
+  const canCreateSubject = isSuper || (role === "admin" && (adminRole === "COLLEGE_ADMIN" || adminRole === "ADMIN"));
 
   const visibilityOptions = useMemo(() => {
     if (isSuper) {
@@ -292,6 +293,7 @@ export default function LearningResourcesWorkspace({
   };
 
   const analyticsSummary = analytics?.summary || {};
+  const canDeleteSubject = (subject) => canCreateSubject && (isSuper ? subject.isGlobal : !subject.isGlobal);
 
   return (
     <div className="space-y-5">
@@ -580,7 +582,7 @@ export default function LearningResourcesWorkspace({
                       </div>
                       {subject.isGlobal ? <Badge variant="outline">Global</Badge> : <Badge variant="secondary">College</Badge>}
                     </div>
-                    {canCreateSubject && !subject.isDefaultResourceSubject ? (
+                    {canDeleteSubject(subject) ? (
                       <Button
                         size="sm"
                         variant="destructive"

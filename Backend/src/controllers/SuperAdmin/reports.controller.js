@@ -33,6 +33,12 @@ const normalizeId = (value) => {
   return normalized === "all" ? "" : normalized;
 };
 
+const normalizeStudentYear = (value) => {
+  if (value == null || value === "") return null;
+  const year = Number(value);
+  return Number.isInteger(year) && year >= 1 && year <= 4 ? year : null;
+};
+
 const toValidDate = (value) => {
   if (!value) return null;
   const date = new Date(value);
@@ -111,6 +117,7 @@ const generateSuperReport = asyncHandler(async (req, res) => {
   const departmentId = normalizeId(filters.departmentId);
   const studentId = normalizeId(filters.studentId);
   const testId = normalizeId(filters.testId);
+  const year = normalizeStudentYear(filters.year);
 
   if (!collegeId) {
     throw new ApiError(400, "Select a college before generating a super admin report");
@@ -121,6 +128,7 @@ const generateSuperReport = asyncHandler(async (req, res) => {
   if (departmentId) reportFilters.departmentId = departmentId;
   if (studentId) reportFilters.studentId = studentId;
   if (testId) reportFilters.testId = testId;
+  if (year) reportFilters.year = year;
 
   const job = await db.superReportJob.create({
     data: {
@@ -146,6 +154,7 @@ const getSuperReportAnalytics = asyncHandler(async (req, res) => {
   const departmentId = normalizeId(req.query.departmentId);
   const studentId = normalizeId(req.query.studentId);
   const testId = normalizeId(req.query.testId);
+  const year = normalizeStudentYear(req.query.year);
   const dateFrom = toValidDate(req.query.dateFrom);
   const dateTo = toValidDate(req.query.dateTo);
 
@@ -173,6 +182,7 @@ const getSuperReportAnalytics = asyncHandler(async (req, res) => {
     ...(collegeId ? { collegeId } : {}),
     ...(departmentId ? { departmentId } : {}),
     ...(studentId ? { id: studentId } : {}),
+    ...(year ? { year } : {}),
     isActive: true,
   };
 
@@ -203,9 +213,11 @@ const getSuperReportAnalytics = asyncHandler(async (req, res) => {
           user: {
             ...(departmentId ? { departmentId } : {}),
             ...(studentId ? { id: studentId } : {}),
+            ...(year ? { year } : {}),
           },
         }
       : {}),
+    ...(!departmentId && !studentId && year ? { user: { year } } : {}),
   };
 
   const submissionCount = await db.submission.count({ where: submissionWhere });
@@ -260,6 +272,7 @@ const getSuperReportAnalytics = asyncHandler(async (req, res) => {
             studentId: true,
             enrollNumber: true,
             enrollmentNumber: true,
+            year: true,
             collegeId: true,
             departmentId: true,
             batchId: true,
@@ -343,6 +356,7 @@ const getSuperReportAnalytics = asyncHandler(async (req, res) => {
       departmentId: student.departmentId,
       department: student.department?.name || "-",
       batch: student.batch?.name || "-",
+      year: student.year || null,
       avgScore: toPercent(avgScore),
       testsTaken: rows.length,
       violations,
@@ -471,6 +485,7 @@ const getSuperReportAnalytics = asyncHandler(async (req, res) => {
         college: selectedStudentBase.college?.name || "-",
         department: selectedStudentBase.department?.name || "-",
         batch: selectedStudentBase.batch?.name || "-",
+        year: selectedStudentBase.year || null,
         rank: selectedStudentRank?.rank || null,
       }
     : null;
@@ -515,6 +530,7 @@ const getSuperReportAnalytics = asyncHandler(async (req, res) => {
       departmentId: departmentId || null,
       studentId: studentId || null,
       testId: testId || null,
+      year: year || null,
     },
     metrics: {
       totalStudents: students.length,

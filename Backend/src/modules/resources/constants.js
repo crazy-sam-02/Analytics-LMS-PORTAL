@@ -31,23 +31,6 @@ const VISIBILITY_SCOPES = Object.freeze({
   GLOBAL: "GLOBAL",
 });
 
-const DEFAULT_RESOURCE_SUBJECTS = Object.freeze([
-  "Quantitative Aptitude",
-  "Verbal Ability",
-  "Logical Reasoning",
-  "Non-Verbal Reasoning",
-  "Java",
-  "Python",
-  "C",
-  "C++",
-  "Web Development",
-  "Database",
-  "Networking",
-  "Operating Systems",
-  "Placement Preparation",
-  "Interview Preparation",
-]);
-
 const MIME_TYPES_BY_RESOURCE_TYPE = Object.freeze({
   [RESOURCE_TYPES.PDF]: ["application/pdf"],
   [RESOURCE_TYPES.DOCX]: [
@@ -125,7 +108,6 @@ module.exports = {
   FILE_RESOURCE_TYPES,
   LINK_RESOURCE_TYPES,
   VISIBILITY_SCOPES,
-  DEFAULT_RESOURCE_SUBJECTS,
   MIME_TYPES_BY_RESOURCE_TYPE,
   EXTENSIONS_BY_RESOURCE_TYPE,
   DANGEROUS_FILE_EXTENSIONS,

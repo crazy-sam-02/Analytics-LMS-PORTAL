@@ -145,7 +145,19 @@ export default function ReportsPage() {
         return;
       }
 
-      window.open(signedUrl, "_blank", "noopener,noreferrer");
+      const opened = window.open(signedUrl, "_blank", "noopener,noreferrer");
+      if (!opened) {
+        const link = document.createElement("a");
+        link.href = signedUrl;
+        link.download = payload?.filename || "student-report.pdf";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+      }
+
+      if (typeof payload?.revoke === "function") {
+        window.setTimeout(() => payload.revoke(), 60_000);
+      }
       toast.success("Report export is ready.");
     },
     onError: (error) => {

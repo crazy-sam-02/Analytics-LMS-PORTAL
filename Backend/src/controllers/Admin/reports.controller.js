@@ -41,6 +41,12 @@ const normalizeId = (value) => String(value || "").trim();
 const normalizeIdList = (values = []) =>
   [...new Set(values.map((value) => normalizeId(value)).filter(Boolean))];
 
+const normalizeStudentYear = (value) => {
+  if (value == null || value === "") return null;
+  const year = Number(value);
+  return Number.isInteger(year) && year >= 1 && year <= 4 ? year : null;
+};
+
 const buildEmptyAnalyticsPayload = (mode = "department") => ({
   mode,
   metrics: {
@@ -170,6 +176,7 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
   const departmentId = req.query.departmentId;
   const batchId = req.query.batchId;
   const studentId = req.query.studentId;
+  const year = normalizeStudentYear(req.query.year);
   const dateFrom = req.query.dateFrom;
   const dateTo = req.query.dateTo;
   const dateFromValue = toValidDate(dateFrom);
@@ -203,6 +210,7 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
         }
       : {}),
     ...(studentId ? { id: studentId } : {}),
+    ...(year ? { year } : {}),
   };
   const submissionWhere = {
     collegeId,
@@ -221,6 +229,7 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
       ? {
           user: {
             ...(scopedDepartmentId ? { departmentId: scopedDepartmentId } : {}),
+            ...(year ? { year } : {}),
             ...(scopedBatchId
               ? {
                   OR: [
@@ -232,6 +241,7 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
           },
         }
       : {}),
+    ...(!scopedDepartmentId && !scopedBatchId && year ? { user: { year } } : {}),
   };
 
   const submissionCount = await db.submission.count({ where: submissionWhere });
@@ -247,7 +257,7 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
   const submissions = await db.submission.findMany({
     where: submissionWhere,
     include: {
-      user: { select: { id: true, fullName: true, studentId: true, enrollNumber: true, enrollmentNumber: true, departmentId: true, batchId: true, batchIds: true } },
+      user: { select: { id: true, fullName: true, studentId: true, enrollNumber: true, enrollmentNumber: true, year: true, departmentId: true, batchId: true, batchIds: true } },
       test: { select: { id: true, title: true, subject: true, totalMarks: true } },
       violations: {
         select: {
@@ -271,6 +281,7 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
 
   const scopedSubmissions = submissions.filter((item) => {
     if (scopedDepartmentId && item.user?.departmentId !== scopedDepartmentId) return false;
+    if (year && Number(item.user?.year) !== year) return false;
     if (
       scopedBatchId &&
       item.user?.batchId !== scopedBatchId &&
@@ -332,6 +343,7 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
       departmentName: student.department?.name || "-",
       batchId: student.batchId,
       batchName: student.batch?.name || "-",
+      year: student.year || null,
       avgScore: toPercent(average),
       testsTaken: rows.length,
       violations,
@@ -562,6 +574,7 @@ const resolveDateFilters = (query = {}) => {
     departmentId: query.departmentId,
     batchId: query.batchId,
     studentId: query.studentId,
+    year: normalizeStudentYear(query.year) || undefined,
     dateFrom: validDateFrom ? validDateFrom.toISOString() : undefined,
     dateTo: validDateTo ? validDateTo.toISOString() : undefined,
     mode: query.mode || "department",
@@ -870,6 +883,7 @@ const getReportStudentDetailDashboard = asyncHandler(async (req, res) => {
       id: studentId,
       collegeId: req.collegeId,
       ...(scope.departmentId ? { departmentId: scope.departmentId } : {}),
+      ...(filters.year ? { year: filters.year } : {}),
       ...(scope.batchId
         ? {
             OR: [
@@ -978,6 +992,7 @@ const getReportStudentDetailDashboard = asyncHandler(async (req, res) => {
       id: student.id,
       name: student.fullName,
       studentId: getStudentNumber(student),
+      year: student.year || null,
       department: student.department?.name || "-",
       batch: student.batch?.name || "-",
       rank: selected?.rank || null,
@@ -1001,6 +1016,7 @@ const normalizeFilters = (filters = {}) => {
     testId: filters.testId || undefined,
     departmentId: filters.departmentId || undefined,
     batchId: filters.batchId || undefined,
+    year: normalizeStudentYear(filters.year) || undefined,
     semester: filters.semester || undefined,
     academicYear: filters.academicYear || undefined,
     remarks: filters.remarks || undefined,

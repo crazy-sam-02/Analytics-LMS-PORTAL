@@ -42,6 +42,7 @@ const NUMERIC_SORT_KEYS = new Set([
   "participation",
   "testsTaken",
   "violations",
+  "year",
   "scorePercent",
   "timeTaken",
   "violationsCount",
@@ -139,6 +140,7 @@ function StudentSummary({ student, metrics }) {
           <p className="text-xs text-text-secondary">
             {student.studentId || "-"} - {student.college || "-"} - {student.department || "-"} - {student.batch || "-"}
           </p>
+          <p className="text-xs text-text-secondary">Year: {student.year ? `${student.year} YEAR` : "-"}</p>
         </div>
         <div className="grid min-w-60 grid-cols-2 gap-4 text-center sm:grid-cols-4">
           <div>
@@ -221,13 +223,14 @@ export default function ReportsPage() {
   });
 
   const scopeQuery = useQuery({
-    queryKey: ["super-report-analytics-scope-v4", collegeId, departmentId, testId],
+    queryKey: ["super-report-analytics-scope-v4", collegeId, departmentId, testId, studentYear],
     queryFn: () =>
       superAdminApi.getReportAnalytics(
         toQueryString({
           collegeId,
           departmentId,
           testId,
+          year: studentYear || undefined,
         })
       ),
     enabled: hasCollegeSelected,
@@ -235,7 +238,7 @@ export default function ReportsPage() {
   });
 
   const studentDetailQuery = useQuery({
-    queryKey: ["super-report-student-detail-v4", collegeId, departmentId, testId, studentId],
+    queryKey: ["super-report-student-detail-v4", collegeId, departmentId, testId, studentId, studentYear],
     queryFn: () =>
       superAdminApi.getReportAnalytics(
         toQueryString({
@@ -243,6 +246,7 @@ export default function ReportsPage() {
           departmentId,
           testId,
           studentId,
+          year: studentYear || undefined,
         })
       ),
     enabled: hasCollegeSelected && Boolean(studentId),
@@ -303,6 +307,7 @@ export default function ReportsPage() {
     departmentId: row.departmentId,
     department: row.department || "-",
     batch: row.batch || "-",
+    year: row.year || null,
     avgScore: clampPercent(row.avgScore),
     testsTaken: toNumber(row.testsTaken),
     participation: toNumber(row.participation),
@@ -437,6 +442,7 @@ export default function ReportsPage() {
           departmentId: departmentId || undefined,
           studentId: mode === "student" ? studentId || undefined : undefined,
           testId: testId === "all" ? undefined : testId,
+          year: studentYear || undefined,
         },
       });
       const jobId = result?.jobId || result?.id;
@@ -503,6 +509,12 @@ export default function ReportsPage() {
     updateParams({ department: nextDepartmentId, student_id: "" });
   };
 
+  const handleYearChange = (nextYear) => {
+    setStudentYear(nextYear || "");
+    updateParams({ student_id: "" });
+    setStudentSearch("");
+  };
+
   const loading = collegesQuery.isLoading || (hasCollegeSelected && scopeQuery.isLoading);
 
   return (
@@ -545,7 +557,7 @@ export default function ReportsPage() {
           ))}
         </div>
 
-        <div className="grid gap-3 md:grid-cols-3">
+        <div className="grid gap-3 md:grid-cols-4">
           <label className="space-y-1 text-xs text-text-secondary">
             <span>College</span>
             <select
@@ -589,29 +601,25 @@ export default function ReportsPage() {
               ))}
             </select>
           </label>
+
+          <label className="space-y-1 text-xs text-text-secondary">
+            <span>Student Year</span>
+            <select
+              value={studentYear}
+              onChange={(event) => handleYearChange(event.target.value)}
+              disabled={!collegeId}
+              className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm text-text-primary disabled:opacity-60"
+            >
+              <option value="">{collegeId ? "All years" : "Select a college first"}</option>
+              {YEAR_OPTIONS.map((year) => (
+                <option key={year} value={year}>{year} YEAR</option>
+              ))}
+            </select>
+          </label>
         </div>
 
         {mode === "student" ? (
           <div className="relative max-w-xl">
-            <div className="mb-3 max-w-xs">
-              <label className="space-y-1 text-xs text-text-secondary">
-                <span>Year</span>
-                <select
-                  value={studentYear}
-                  onChange={(event) => {
-                    setStudentYear(event.target.value);
-                    updateParams({ student_id: "" });
-                    setStudentSearch("");
-                  }}
-                  className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm text-text-primary"
-                >
-                  <option value="">All years</option>
-                  {YEAR_OPTIONS.map((year) => (
-                    <option key={year} value={year}>{year} YEAR</option>
-                  ))}
-                </select>
-              </label>
-            </div>
             <input
               value={studentSearch}
               onChange={(event) => setStudentSearch(event.target.value)}
@@ -842,6 +850,7 @@ export default function ReportsPage() {
                       <Th sortKey="rank" sortState={sortState} onSort={handleSort}>Rank</Th>
                       <Th sortKey="name" sortState={sortState} onSort={handleSort}>Student</Th>
                       <Th sortKey="department" sortState={sortState} onSort={handleSort}>Department</Th>
+                      <Th sortKey="year" sortState={sortState} onSort={handleSort}>Year</Th>
                       <Th sortKey="avgScore" sortState={sortState} onSort={handleSort}>Avg Score</Th>
                       <Th sortKey="testsTaken" sortState={sortState} onSort={handleSort}>Tests</Th>
                       <Th sortKey="violations" sortState={sortState} onSort={handleSort}>Violations</Th>
@@ -862,6 +871,7 @@ export default function ReportsPage() {
                           </button>
                         </td>
                         <td className="px-4 py-3 text-text-secondary">{row.department}</td>
+                        <td className="px-4 py-3 text-text-secondary">{row.year ? `${row.year} YEAR` : "-"}</td>
                         <td className="px-4 py-3"><ScoreBadge score={row.avgScore} /></td>
                         <td className="px-4 py-3">{row.testsTaken}</td>
                         <td className="px-4 py-3"><ViolationBadge count={row.violations} /></td>

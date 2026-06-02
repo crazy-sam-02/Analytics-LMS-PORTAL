@@ -41,6 +41,12 @@ const resolveStudentYear = (student) => {
   return student?.batch?.academicYear || student?.batch?.year || "-";
 };
 
+const normalizeStudentYear = (value) => {
+  if (value == null || value === "") return null;
+  const year = Number(value);
+  return Number.isInteger(year) && year >= 1 && year <= 4 ? year : null;
+};
+
 const getDepartmentBatchIds = async (db, filters = {}) => {
   if (!filters.departmentId) return [];
   const batches = await db.batch.findMany({
@@ -116,6 +122,7 @@ const buildDepartmentAcademicPayload = async (db, filters = {}) => {
       where: {
         ...(filters.collegeId ? { collegeId: filters.collegeId } : {}),
         ...(filters.departmentId ? { departmentId: filters.departmentId } : {}),
+        ...(normalizeStudentYear(filters.year) ? { year: normalizeStudentYear(filters.year) } : {}),
         isActive: true,
       },
       include: {
@@ -126,7 +133,14 @@ const buildDepartmentAcademicPayload = async (db, filters = {}) => {
       where: buildSubmittedSubmissionWhere(filters, {
         ...(filters.collegeId ? { collegeId: filters.collegeId } : {}),
         ...(filters.testId ? { testId: filters.testId } : {}),
-        ...(filters.departmentId ? { user: { departmentId: filters.departmentId } } : {}),
+        ...(filters.departmentId || normalizeStudentYear(filters.year)
+          ? {
+              user: {
+                ...(filters.departmentId ? { departmentId: filters.departmentId } : {}),
+                ...(normalizeStudentYear(filters.year) ? { year: normalizeStudentYear(filters.year) } : {}),
+              },
+            }
+          : {}),
       }),
       include: {
         user: {
@@ -242,6 +256,7 @@ if (Queue && redisClient && queueConnection) {
 
 const buildGlobalReportPayload = async (db, job) => {
   const filters = job.filters || {};
+  const scopedYear = normalizeStudentYear(filters.year);
   const departmentBatchIds = await getDepartmentBatchIds(db, filters);
   const scopedTests = filters.departmentId
     ? await db.test.findMany({
@@ -261,7 +276,14 @@ const buildGlobalReportPayload = async (db, job) => {
         ...(filters.collegeId ? { collegeId: filters.collegeId } : {}),
         ...scopedTestFilter,
         ...(filters.studentId ? { userId: filters.studentId } : {}),
-        ...(filters.departmentId ? { user: { departmentId: filters.departmentId } } : {}),
+        ...(filters.departmentId || scopedYear
+          ? {
+              user: {
+                ...(filters.departmentId ? { departmentId: filters.departmentId } : {}),
+                ...(scopedYear ? { year: scopedYear } : {}),
+              },
+            }
+          : {}),
       }),
       include: {
         user: { select: { fullName: true, studentId: true, enrollNumber: true, enrollmentNumber: true, collegeId: true, department: { select: { name: true } } } },
@@ -292,7 +314,14 @@ const buildGlobalReportPayload = async (db, job) => {
         submissions: {
           where: buildSubmittedSubmissionWhere(filters, {
             ...(filters.studentId ? { userId: filters.studentId } : {}),
-            ...(filters.departmentId ? { user: { departmentId: filters.departmentId } } : {}),
+            ...(filters.departmentId || scopedYear
+              ? {
+                  user: {
+                    ...(filters.departmentId ? { departmentId: filters.departmentId } : {}),
+                    ...(scopedYear ? { year: scopedYear } : {}),
+                  },
+                }
+              : {}),
           }),
         },
       },
@@ -326,6 +355,7 @@ const buildGlobalReportPayload = async (db, job) => {
         students: {
           where: {
             ...(filters.studentId ? { id: filters.studentId } : {}),
+            ...(scopedYear ? { year: scopedYear } : {}),
           },
           include: {
             submissions: {
@@ -364,6 +394,7 @@ const buildGlobalReportPayload = async (db, job) => {
       students: {
         where: {
           ...(filters.studentId ? { id: filters.studentId } : {}),
+          ...(scopedYear ? { year: scopedYear } : {}),
         },
         include: {
           submissions: {

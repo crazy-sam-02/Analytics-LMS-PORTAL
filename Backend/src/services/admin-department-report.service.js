@@ -102,6 +102,7 @@ const buildDepartmentReportPayload = async ({ db, job }) => {
   const collegeId = job.collegeId;
   const batchId = filters.batchId ? String(filters.batchId) : null;
   const testId = filters.testId ? String(filters.testId) : null;
+  const year = filters.year ? Number(filters.year) : null;
 
   const departmentBatches = await db.batch.findMany({
     where: { collegeId, departmentId },
@@ -135,6 +136,7 @@ const buildDepartmentReportPayload = async ({ db, job }) => {
   const studentWhere = {
     collegeId,
     departmentId,
+    ...(year ? { year } : {}),
     ...(batchId ? { OR: [{ batchId }, { batchIds: { in: [batchId] } }] } : {}),
   };
 
@@ -182,6 +184,7 @@ const buildDepartmentReportPayload = async ({ db, job }) => {
       ...(submissionDateFilter ? { submittedAt: submissionDateFilter } : {}),
       user: {
         departmentId,
+        ...(year ? { year } : {}),
         ...(batchId ? { OR: [{ batchId }, { batchIds: { in: [batchId] } }] } : {}),
       },
     },

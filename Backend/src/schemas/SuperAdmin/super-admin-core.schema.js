@@ -614,6 +614,7 @@ module.exports = {
   createStudentGlobalSchema,
   superStudentBulkImportSchema,
   superStudentBulkImportJobParamSchema,
+  promoteStudentsYearGlobalSchema,
   assignTestToBatchesSchema,
   createBatchGlobalSchema,
   updateBatchGlobalSchema,

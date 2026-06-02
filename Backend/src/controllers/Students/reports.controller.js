@@ -15,11 +15,62 @@ const {
   maskCorrectAnswer,
   resolveReviewMode,
 } = require("../../services/student-review-policy.service");
+const { renderHtmlToPdfBuffer } = require("../../services/report-pdf.service");
 const { clampPercent, getSubmissionScorePercent, getTestTotalMarks } = require("../../utils/score");
 
 const toPercent = (value) => clampPercent(value);
 
 const getSubmissionTotalMarks = (submission) => getTestTotalMarks(submission?.test);
+
+const escapeHtml = (value) => String(value ?? "")
+  .replace(/&/g, "&amp;")
+  .replace(/</g, "&lt;")
+  .replace(/>/g, "&gt;")
+  .replace(/"/g, "&quot;")
+  .replace(/'/g, "&#39;");
+
+const formatDate = (value) => {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "-";
+  return date.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+};
+
+const formatDateTime = (value) => {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "-";
+  return date.toLocaleString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+};
+
+const formatPercent = (value) => `${toPercent(value).toFixed(1)}%`;
+
+const formatMarksPair = (obtained, total) => {
+  const obtainedNum = Number(obtained);
+  const totalNum = Number(total);
+  if (!Number.isFinite(obtainedNum) || !Number.isFinite(totalNum) || totalNum <= 0) {
+    return "--";
+  }
+  return `${obtainedNum}/${totalNum}`;
+};
+
+const formatDuration = (secondsInput) => {
+  const totalSeconds = Math.max(0, Math.round(Number(secondsInput || 0)));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+  return `${minutes}m ${seconds}s`;
+};
+
+const getStudentNumber = (student = {}) =>
+  student.enrollNumber || student.enrollmentNumber || student.studentId || student.rollNo || "-";
 
 const formatAnswerValue = (value) => {
   if (Array.isArray(value)) return value.length ? value.join(", ") : "Not answered";
@@ -69,17 +120,15 @@ const finalizeClosedStudentSubmissions = async ({ db, userId }) => {
   return closable.length;
 };
 
-const getReport = asyncHandler(async (req, res) => {
-  const m = await models.init();
-  const db = m.dbClient;
-  const view = String(req.query.view || "overall").toLowerCase();
-  const testId = String(req.query.test_id || "").trim();
+const buildStudentReportPayload = async ({ db, userId, filters = {} }) => {
+  const view = String(filters.view || "overall").toLowerCase();
+  const testId = String(filters.test_id || filters.testId || "").trim();
 
-  await finalizeClosedStudentSubmissions({ db, userId: req.user.id });
+  await finalizeClosedStudentSubmissions({ db, userId });
 
   const baseWhere = {
     where: {
-      userId: req.user.id,
+      userId,
       status: {
         in: ["SUBMITTED", "AUTO_SUBMITTED"],
       },
@@ -226,7 +275,7 @@ const getReport = asyncHandler(async (req, res) => {
 
     const target = await db.submission.findFirst({
       where: {
-        userId: req.user.id,
+        userId,
         testId,
         status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
       },
@@ -335,7 +384,269 @@ const getReport = asyncHandler(async (req, res) => {
     };
   }
 
+  return payload;
+};
+
+const getReport = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
+  const payload = await buildStudentReportPayload({ db, userId: req.user.id, filters: req.query });
+
   res.status(200).json(payload);
 });
 
-module.exports = { getReport };
+const buildStudentReportHtml = ({ student, payload, filters, generatedAt }) => {
+  const view = String(filters?.view || "overall").toLowerCase();
+  const summary = payload?.overall?.summary || {};
+  const attempts = Array.isArray(payload?.testWise) ? [...payload.testWise] : [];
+  const byTest = payload?.by_test || payload?.byTest || null;
+  const studentName = student?.fullName || student?.name || "Student";
+  const selectedTestName = byTest?.test?.title || attempts.find((row) => String(row.testId || "") === String(filters?.test_id || filters?.testId || ""))?.testName || "Selected Test";
+
+  const sortedAttempts = attempts.sort((a, b) => new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0));
+  const attemptRows = sortedAttempts.length > 0
+    ? sortedAttempts.map((row) => {
+        const scorePercent = Number(row.scorePercent ?? row.score ?? 0);
+        return `
+          <tr>
+            <td>${escapeHtml(formatDate(row.submittedAt))}</td>
+            <td>${escapeHtml(row.testName || "Test")}</td>
+            <td>${escapeHtml(row.subject || "-")}</td>
+            <td><strong>${escapeHtml(formatPercent(scorePercent))}</strong></td>
+            <td>${escapeHtml(formatMarksPair(row.obtainedMarks, row.totalMarks))}</td>
+            <td>${escapeHtml(formatDuration(row.timeSpentSeconds))}</td>
+            <td><span class="badge ${scorePercent >= 40 ? "success" : "danger"}">${scorePercent >= 40 ? "PASS" : "FAIL"}</span></td>
+            <td>${escapeHtml(row.testStatus || row.test_status || "-")}</td>
+          </tr>
+        `;
+      }).join("")
+    : `<tr><td colspan="8" class="muted">No submitted tests found.</td></tr>`;
+
+  const questionRows = Array.isArray(byTest?.questions) && byTest.questions.length > 0
+    ? byTest.questions.map((row, index) => `
+        <tr>
+          <td>${index + 1}</td>
+          <td>${escapeHtml(row.topic || "-")}</td>
+          <td>${escapeHtml(row.type || "-")}</td>
+          <td>${escapeHtml(row.student_answer ?? row.studentAnswer ?? "Not answered")}</td>
+          <td>${escapeHtml(row.correct_answer ?? row.correctAnswer ?? "-")}</td>
+          <td>${row.marks == null ? "-" : escapeHtml(`${row.marks}/${row.total_marks ?? 0}`)}</td>
+        </tr>
+      `).join("")
+    : `<tr><td colspan="6" class="muted">No question-level data available.</td></tr>`;
+
+  const detailSection = view === "by_test" && byTest
+    ? `
+      <section class="section">
+        <div class="section-heading">
+          <h2>Selected Test Report</h2>
+          <p>${escapeHtml(selectedTestName)}</p>
+        </div>
+        <div class="metrics-grid">
+          <div class="metric-card"><div class="metric-value">${escapeHtml(formatMarksPair(byTest.obtained_marks, byTest.total_marks))}</div><div class="metric-label">Marks</div></div>
+          <div class="metric-card"><div class="metric-value">${escapeHtml(formatPercent(byTest.percentage))}</div><div class="metric-label">Percentage</div></div>
+          <div class="metric-card"><div class="metric-value">${byTest.percentile == null ? "-" : escapeHtml(`${Number(byTest.percentile).toFixed(1)}%`)}</div><div class="metric-label">Percentile</div></div>
+          <div class="metric-card"><div class="metric-value">${escapeHtml(formatDuration(byTest.time_analytics?.total_time))}</div><div class="metric-label">Total Time</div></div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Question-Level Report</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Topic</th>
+              <th>Type</th>
+              <th>Student Answer</th>
+              <th>Correct Answer</th>
+              <th>Marks</th>
+            </tr>
+          </thead>
+          <tbody>${questionRows}</tbody>
+        </table>
+      </section>
+    `
+    : "";
+
+  return `
+    <!doctype html>
+    <html lang="en">
+      <head>
+        <meta charset="utf-8" />
+        <title>Student Report</title>
+        <style>
+          * { box-sizing: border-box; }
+          body {
+            margin: 0;
+            background: #f8fafc;
+            color: #0f172a;
+            font-family: "Segoe UI", Arial, sans-serif;
+            font-size: 12px;
+          }
+          .page { padding: 24px; }
+          .hero {
+            border-radius: 18px;
+            padding: 22px;
+            color: white;
+            background: linear-gradient(135deg, #1d4ed8, #0f172a);
+          }
+          .hero h1 { margin: 0; font-size: 26px; }
+          .hero p { margin: 7px 0 0; color: #dbeafe; }
+          .meta {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px 20px;
+            margin-top: 16px;
+            color: #e0f2fe;
+          }
+          .meta strong { color: white; }
+          .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+            margin-top: 14px;
+          }
+          .metric-card {
+            border: 1px solid #e2e8f0;
+            border-radius: 14px;
+            background: #ffffff;
+            padding: 14px;
+          }
+          .metric-value { font-size: 20px; font-weight: 750; }
+          .metric-label {
+            margin-top: 5px;
+            color: #64748b;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: .06em;
+            text-transform: uppercase;
+          }
+          .section {
+            margin-top: 18px;
+            border-radius: 16px;
+            background: #ffffff;
+            padding: 16px;
+            border: 1px solid #e2e8f0;
+            page-break-inside: avoid;
+          }
+          .section-heading {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            align-items: baseline;
+          }
+          h2 { margin: 0 0 12px; font-size: 16px; }
+          .section-heading p { margin: 0; color: #64748b; font-weight: 600; }
+          table { width: 100%; border-collapse: collapse; }
+          th {
+            text-align: left;
+            padding: 10px;
+            background: #f1f5f9;
+            color: #334155;
+            font-size: 11px;
+          }
+          td {
+            padding: 10px;
+            border-bottom: 1px solid #e2e8f0;
+            vertical-align: top;
+          }
+          .badge {
+            display: inline-block;
+            padding: 3px 9px;
+            border-radius: 999px;
+            font-weight: 700;
+            font-size: 10px;
+          }
+          .badge.success { background: #dcfce7; color: #166534; }
+          .badge.danger { background: #fee2e2; color: #991b1b; }
+          .muted { color: #64748b; text-align: center; }
+          .footer {
+            margin-top: 18px;
+            color: #94a3b8;
+            text-align: center;
+            font-size: 11px;
+          }
+        </style>
+      </head>
+      <body>
+        <main class="page">
+          <section class="hero">
+            <h1>${escapeHtml(view === "by_test" ? "Student Test Report" : "Student Performance Report")}</h1>
+            <p>${escapeHtml(view === "by_test" ? selectedTestName : "Complete submitted test performance summary")}</p>
+            <div class="meta">
+              <div><strong>Student:</strong> ${escapeHtml(studentName)}</div>
+              <div><strong>Student ID:</strong> ${escapeHtml(getStudentNumber(student))}</div>
+              <div><strong>Department:</strong> ${escapeHtml(student?.department?.name || "-")}</div>
+              <div><strong>Generated:</strong> ${escapeHtml(formatDateTime(generatedAt))}</div>
+            </div>
+          </section>
+
+          <section class="section">
+            <h2>Overall Summary</h2>
+            <div class="metrics-grid">
+              <div class="metric-card"><div class="metric-value">${escapeHtml(summary.tests_taken ?? 0)}</div><div class="metric-label">Tests Taken</div></div>
+              <div class="metric-card"><div class="metric-value">${escapeHtml(formatPercent(summary.avg_score))}</div><div class="metric-label">Average Score</div></div>
+              <div class="metric-card"><div class="metric-value">${escapeHtml(formatPercent(summary.best_score_percent ?? summary.best_score))}</div><div class="metric-label">Best Score</div></div>
+              <div class="metric-card"><div class="metric-value">${escapeHtml(summary.missed_tests ?? 0)}</div><div class="metric-label">Missed Tests</div></div>
+            </div>
+          </section>
+
+          ${detailSection}
+
+          <section class="section">
+            <div class="section-heading">
+              <h2>Submitted Test Timeline</h2>
+              <p>${sortedAttempts.length} records</p>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Test</th>
+                  <th>Subject</th>
+                  <th>Score</th>
+                  <th>Marks</th>
+                  <th>Time</th>
+                  <th>Pass/Fail</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>${attemptRows}</tbody>
+            </table>
+          </section>
+
+          <div class="footer">This PDF was generated by LMS Portal.</div>
+        </main>
+      </body>
+    </html>
+  `;
+};
+
+const exportReport = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
+  const filters = req.body || {};
+  const payload = await buildStudentReportPayload({ db, userId: req.user.id, filters });
+  const generatedAt = new Date();
+  const htmlContent = buildStudentReportHtml({
+    student: req.user,
+    payload,
+    filters,
+    generatedAt,
+  });
+
+  const pdfBuffer = await renderHtmlToPdfBuffer(htmlContent, {
+    displayHeaderFooter: true,
+    footerTemplate:
+      '<div style="width:100%;font-size:10px;color:#94a3b8;padding:0 10mm;text-align:right;">Page <span class="pageNumber"></span> of <span class="totalPages"></span></div>',
+  });
+
+  const filename = `student-report-${String(req.user.id || "me").slice(0, 8)}-${generatedAt.getTime()}.pdf`;
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  res.setHeader("Cache-Control", "private, no-store");
+  res.status(200).send(pdfBuffer);
+});
+
+module.exports = { getReport, exportReport };
