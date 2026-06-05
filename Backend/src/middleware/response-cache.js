@@ -8,6 +8,8 @@ const cacheLogThrottle = new Map();
 
 const CACHE_LOG_THROTTLE_MS = 60000;
 
+const isProduction = () => process.env.NODE_ENV === "production";
+
 const hash = (value) => crypto.createHash("sha256").update(String(value || "")).digest("hex");
 
 const getPathname = (originalUrl = "") => {
@@ -223,12 +225,14 @@ const createResponseCache = ({
     if (!cacheKey) return null;
 
     if (!isRedisAvailable()) {
+      if (isProduction()) return null;
       return getMemoryCache(cacheKey);
     }
 
     try {
       return await getRedisCache(cacheKey);
     } catch {
+      if (isProduction()) return null;
       return getMemoryCache(cacheKey);
     }
   };
@@ -238,6 +242,7 @@ const createResponseCache = ({
     if (!cacheKey) return; // skip storing if we can't compute a stable key
 
     if (!isRedisAvailable()) {
+      if (isProduction()) return;
       setMemoryCache(cacheKey, payload, ttlSeconds, tags);
       return;
     }
@@ -245,6 +250,7 @@ const createResponseCache = ({
     try {
       await setRedisCache(cacheKey, payload, ttlSeconds, tags);
     } catch {
+      if (isProduction()) return;
       setMemoryCache(cacheKey, payload, ttlSeconds, tags);
     }
   };
@@ -301,6 +307,9 @@ const invalidateResponseCacheByTags = async (tags = []) => {
   }
 
   if (!isRedisAvailable()) {
+    if (isProduction()) {
+      return;
+    }
     for (const tag of normalizedTags) {
       const keys = memoryTagIndex.get(tag) || new Set();
       for (const key of keys) {

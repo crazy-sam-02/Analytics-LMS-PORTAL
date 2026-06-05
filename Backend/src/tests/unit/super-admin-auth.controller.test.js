@@ -96,12 +96,22 @@ describe("super-admin auth refresh", () => {
 
     expect(res.status).toHaveBeenCalledWith(200);
     expect(payload.accessToken).toBe("new-super-access-token");
-    expect(payload.refreshToken).toBe("new-super-refresh-token");
+    expect(payload).not.toHaveProperty("refreshToken");
     expect(payload.superAdmin).toEqual(expect.objectContaining({
       id: "super-1",
       email: "owner@prionex.com",
       role: "SUPER_ADMIN",
     }));
+    expect(res.cookie).toHaveBeenCalledWith(
+      "lms_super_admin_refresh_token",
+      "new-super-refresh-token",
+      expect.objectContaining({ path: "/api/super-admin/auth" })
+    );
+    expect(res.cookie).toHaveBeenCalledWith(
+      "lms_super_admin_refresh_token",
+      "new-super-refresh-token",
+      expect.objectContaining({ path: "/api/superadmin/auth" })
+    );
     expect(db.superAdmin.findFirst).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({ role: "SUPER_ADMIN" }),
     }));
@@ -154,9 +164,9 @@ describe("super-admin auth refresh", () => {
     expect(res.status).toHaveBeenCalledWith(200);
     expect(payload).toEqual({
       accessToken: "new-super-access-token",
-      refreshToken: "rotated-super-refresh-token",
       sessionId: "session-2",
     });
+    expect(payload).not.toHaveProperty("refreshToken");
     expect(res.cookie).toHaveBeenCalledWith(
       "lms_super_admin_refresh_token",
       "rotated-super-refresh-token",

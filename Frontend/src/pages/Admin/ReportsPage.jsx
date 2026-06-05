@@ -226,8 +226,16 @@ export default function ReportsPage({ basePathOverride = null, showStudentDepart
   const tests = testsQuery.data?.data || [];
   const batches = batchesQuery.data || [];
   const departments = Array.isArray(departmentsQuery.data) ? departmentsQuery.data : [];
-  const studentsDirectory = studentsDirectoryQuery.data?.data || [];
-  const studentSearchResults = studentSearchQuery.data?.data || [];
+  const studentsDirectoryData = studentsDirectoryQuery.data?.data;
+  const studentSearchData = studentSearchQuery.data?.data;
+  const studentsDirectory = useMemo(
+    () => (Array.isArray(studentsDirectoryData) ? studentsDirectoryData : []),
+    [studentsDirectoryData]
+  );
+  const studentSearchResults = useMemo(
+    () => (Array.isArray(studentSearchData) ? studentSearchData : []),
+    [studentSearchData]
+  );
   const analytics = analyticsQuery.data || {};
   const notAttended = analytics?.notAttended || {};
   const notAttendedStudents = Array.isArray(notAttended.students) ? notAttended.students : [];
@@ -1039,10 +1047,15 @@ export default function ReportsPage({ basePathOverride = null, showStudentDepart
             </div>
           ) : (
             <div className="max-h-[55vh] space-y-2 overflow-y-auto pr-1">
-              {violationDialog.events.map((event, index) => (
-                <div key={event.id || `${event.submissionId || "submission"}-${index}`} className="rounded-xl border border-border bg-background p-3">
+              {violationDialog.events.map((event, index) => {
+                const eventKey = event.anomalyId || event.id || `${event.submissionId || "submission"}-${index}`;
+                const isCurrentReview = reviewState.eventKey === eventKey;
+                const reviewable = Boolean(event.testId && event.anomalyId && event.anomalyType);
+                const isSubmittingReview = isCurrentReview && reviewState.submitting;
+                return (
+                <div key={eventKey} className="rounded-xl border border-border bg-background p-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-sm font-semibold capitalize text-text-primary">{formatViolationType(event.type)}</p>
+                    <p className="text-sm font-semibold capitalize text-text-primary">{formatViolationType(event.type || event.anomalyType)}</p>
                     <p className="text-xs text-text-secondary">{formatDateLabel(event.createdAt)}</p>
                   </div>
                   <p className="mt-1 text-xs text-text-secondary">Test: {event.testName || "-"}</p>
@@ -1050,14 +1063,49 @@ export default function ReportsPage({ basePathOverride = null, showStudentDepart
                     <pre className="mt-2 overflow-x-auto rounded-lg border border-border/70 bg-card p-2 text-[11px] text-text-secondary">{JSON.stringify(event.metadata, null, 2)}</pre>
                   ) : null}
                   <div className="mt-3 space-y-2">
-                    
-                    
-                    {reviewState.eventKey === (event.anomalyId || event.id) && reviewState.error ? (
+                    {reviewable ? (
+                      <>
+                        <textarea
+                          value={isCurrentReview ? reviewState.reason : ""}
+                          onChange={(changeEvent) =>
+                            setReviewState({
+                              eventKey,
+                              action: "",
+                              reason: changeEvent.target.value,
+                              submitting: false,
+                              error: "",
+                            })
+                          }
+                          placeholder="Review reason"
+                          className="min-h-18 w-full rounded-lg border border-border bg-card px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-primary"
+                        />
+                        <div className="flex flex-wrap justify-end gap-2">
+                          <button
+                            type="button"
+                            disabled={isSubmittingReview}
+                            onClick={() => handleViolationReview(event, "DISMISS")}
+                            className="rounded-full border border-border px-3 py-1 text-xs font-medium hover:bg-muted disabled:opacity-60"
+                          >
+                            Dismiss
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isSubmittingReview}
+                            onClick={() => handleViolationReview(event, "ESCALATE")}
+                            className="rounded-full bg-danger px-3 py-1 text-xs font-medium text-white disabled:opacity-60"
+                          >
+                            Escalate
+                          </button>
+                        </div>
+                      </>
+                    ) : null}
+                    {isCurrentReview && reviewState.error ? (
                       <p className="text-xs text-red-500">{reviewState.error}</p>
                     ) : null}
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
 

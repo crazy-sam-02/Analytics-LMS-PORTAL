@@ -62,10 +62,8 @@ const safeWriteSessionStorage = (key, value) => {
 const persistStudentAuth = (payload = {}) => {
   safeWriteStorage(STUDENT_ACCESS_TOKEN_KEY, null);
   safeWriteSessionStorage(STUDENT_ACCESS_TOKEN_KEY, payload.accessToken || null);
-  if (payload.refreshToken !== undefined) {
-    safeWriteStorage(STUDENT_REFRESH_TOKEN_KEY, payload.refreshToken || null);
-    safeWriteSessionStorage(STUDENT_REFRESH_TOKEN_KEY, payload.refreshToken || null);
-  }
+  safeWriteStorage(STUDENT_REFRESH_TOKEN_KEY, null);
+  safeWriteSessionStorage(STUDENT_REFRESH_TOKEN_KEY, null);
   safeWriteStorage(STUDENT_SESSION_ID_KEY, payload.sessionId || null);
   safeWriteStorage(LEGACY_SESSION_KEY, payload.sessionId || null);
   safeWriteStorage(STUDENT_USER_KEY, payload.user ? JSON.stringify(payload.user) : null);

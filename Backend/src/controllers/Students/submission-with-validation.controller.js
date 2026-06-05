@@ -10,7 +10,6 @@ const {
   createSubmission,
   updateSubmissionStatus,
   recordViolation,
-  updateSubmissionMetadata,
 } = require("../../services/submission.service");
 const {
   saveAnswer,
@@ -83,9 +82,6 @@ const startSubmission = asyncHandler(async (req, res) => {
  * Save single answer with validation
  */
 const saveAnswerHandler = asyncHandler(async (req, res) => {
-  const m = await models.init();
-  const db = m.dbClient;
-  const studentId = req.user.id;
   const collegeId = req.collegeId;
   const { submissionId } = req.params;
 
@@ -118,9 +114,6 @@ const saveAnswerHandler = asyncHandler(async (req, res) => {
  * Bulk save answers (when submitting test)
  */
 const bulkSaveAnswersHandler = asyncHandler(async (req, res) => {
-  const m = await models.init();
-  const db = m.dbClient;
-  const studentId = req.user.id;
   const collegeId = req.collegeId;
   const { submissionId } = req.params;
 
@@ -157,9 +150,6 @@ const bulkSaveAnswersHandler = asyncHandler(async (req, res) => {
  * Mark answer for review
  */
 const markAnswerForReviewHandler = asyncHandler(async (req, res) => {
-  const m = await models.init();
-  const db = m.dbClient;
-  const studentId = req.user.id;
   const collegeId = req.collegeId;
   const { submissionId, answerId } = req.params;
   const { markedForReview } = req.body;
@@ -186,8 +176,6 @@ const markAnswerForReviewHandler = asyncHandler(async (req, res) => {
  * Get all answers for submission
  */
 const getAnswers = asyncHandler(async (req, res) => {
-  const m = await models.init();
-  const db = m.dbClient;
   const collegeId = req.collegeId;
   const { submissionId } = req.params;
 
@@ -204,8 +192,6 @@ const getAnswers = asyncHandler(async (req, res) => {
  * Submit test (transition status to SUBMITTED)
  */
 const submitTest = asyncHandler(async (req, res) => {
-  const m = await models.init();
-  const db = m.dbClient;
   const collegeId = req.collegeId;
   const { submissionId } = req.params;
 
@@ -247,8 +233,6 @@ const submitTest = asyncHandler(async (req, res) => {
  * Record proctoring violation
  */
 const recordProctoringViolation = asyncHandler(async (req, res) => {
-  const m = await models.init();
-  const db = m.dbClient;
   const collegeId = req.collegeId;
   const { submissionId } = req.params;
 
@@ -282,8 +266,6 @@ const recordProctoringViolation = asyncHandler(async (req, res) => {
  * Get submission metrics
  */
 const getSubmissionMetrics = asyncHandler(async (req, res) => {
-  const m = await models.init();
-  const db = m.dbClient;
   const metrics = await getMetricsSnapshot();
   const submissionMetrics = metrics.failures?.SubmissionValidation || {};
   const answerMetrics = metrics.failures?.AnswerValidation || {};

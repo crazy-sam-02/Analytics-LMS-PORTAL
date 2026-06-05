@@ -1040,6 +1040,72 @@ async function filterByRelations(modelName, docs, relationFilters) {
   return filtered;
 }
 
+const getRelationFilterMaxCandidates = () => Math.max(1, Number(env.database?.relationFilterMaxCandidates || 5000));
+
+const getRelationFilterBatchSize = () =>
+  Math.max(1, Math.min(Number(env.database?.relationFilterBatchSize || 500), getRelationFilterMaxCandidates()));
+
+const createRelationFilterLimitError = (modelName, maxCandidates) => {
+  const error = new Error("Relation-filtered query is too broad. Add more filters or raise DB_RELATION_FILTER_MAX_CANDIDATES.");
+  error.statusCode = 422;
+  error.code = "RELATION_FILTER_QUERY_TOO_BROAD";
+  error.details = { model: modelName, maxCandidates };
+  return error;
+};
+
+async function collectRelationFilteredDocuments({
+  modelName,
+  collection,
+  cleanFilter,
+  relations,
+  sort,
+  skip = 0,
+  take = null,
+}) {
+  const maxCandidates = getRelationFilterMaxCandidates();
+  const batchSize = getRelationFilterBatchSize();
+  const normalizedSkip = Number.isFinite(Number(skip)) && Number(skip) > 0 ? Math.floor(Number(skip)) : 0;
+  const normalizedTake = Number.isFinite(Number(take)) && Number(take) >= 0 ? Math.floor(Number(take)) : null;
+
+  if (normalizedTake === 0) {
+    return [];
+  }
+
+  let cursor = collection.find(cleanFilter).batchSize(batchSize).limit(maxCandidates + 1);
+  if (sort) {
+    cursor = cursor.sort(sort);
+  }
+
+  let seenCandidates = 0;
+  let skippedMatches = 0;
+  const filtered = [];
+
+  for await (const rawDoc of cursor) {
+    seenCandidates += 1;
+    if (seenCandidates > maxCandidates) {
+      throw createRelationFilterLimitError(modelName, maxCandidates);
+    }
+
+    const doc = cleanDoc(rawDoc);
+    const matches = await filterByRelations(modelName, [doc], relations);
+    if (matches.length === 0) {
+      continue;
+    }
+
+    if (skippedMatches < normalizedSkip) {
+      skippedMatches += 1;
+      continue;
+    }
+
+    filtered.push(doc);
+    if (normalizedTake !== null && filtered.length >= normalizedTake) {
+      break;
+    }
+  }
+
+  return filtered;
+}
+
 // ---------------------------------------------------------------------------
 // modelClient — Drop-in replacement for the previous ORM, using native
 // MongoDB queries with proper indexed filters and $lookup for relations.
@@ -1089,22 +1155,15 @@ function modelClient(modelName) {
       }
 
       // Has relation filters — fetch candidates then filter
-      let cursor = collection.find(cleanFilter);
-      if (sort) {
-        cursor = cursor.sort(sort);
-      }
-      // Fetch a generous batch to allow for relation filtering
-      const rawDocs = await cursor.toArray();
-      const candidates = rawDocs.map(cleanDoc);
-      let filtered = await filterByRelations(modelName, candidates, relations);
-
-      // Apply sort, skip, take on the relation-filtered results
-      if (typeof args.skip === "number" && args.skip > 0) {
-        filtered = filtered.slice(args.skip);
-      }
-      if (typeof args.take === "number") {
-        filtered = filtered.slice(0, args.take);
-      }
+      const filtered = await collectRelationFilteredDocuments({
+        modelName,
+        collection,
+        cleanFilter,
+        relations,
+        sort,
+        skip: args.skip,
+        take: args.take,
+      });
 
       const out = [];
       for (const doc of filtered) {
@@ -1239,9 +1298,12 @@ function modelClient(modelName) {
 
       if (Object.keys(relations).length > 0) {
         // Relations in updateMany where — need to resolve IDs first
-        const candidates = await collection.find(cleanFilter).toArray();
-        const docs = candidates.map(cleanDoc);
-        const filtered = await filterByRelations(modelName, docs, relations);
+        const filtered = await collectRelationFilteredDocuments({
+          modelName,
+          collection,
+          cleanFilter,
+          relations,
+        });
         const ids = filtered.map((d) => d.id);
         if (ids.length === 0) {
           return { count: 0 };
@@ -1285,9 +1347,12 @@ function modelClient(modelName) {
       const { cleanFilter, relations } = extractRelationFilters(resolvedFilter);
 
       if (Object.keys(relations).length > 0) {
-        const candidates = await collection.find(cleanFilter).toArray();
-        const docs = candidates.map(cleanDoc);
-        const filtered = await filterByRelations(modelName, docs, relations);
+        const filtered = await collectRelationFilteredDocuments({
+          modelName,
+          collection,
+          cleanFilter,
+          relations,
+        });
         const ids = filtered.map((d) => d.id);
         if (ids.length === 0) {
           return { count: 0 };
@@ -1392,9 +1457,12 @@ function modelClient(modelName) {
       const { cleanFilter, relations } = extractRelationFilters(resolvedFilter);
 
       if (Object.keys(relations).length > 0) {
-        const candidates = await collection.find(cleanFilter).toArray();
-        const docs = candidates.map(cleanDoc);
-        const filtered = await filterByRelations(modelName, docs, relations);
+        const filtered = await collectRelationFilteredDocuments({
+          modelName,
+          collection,
+          cleanFilter,
+          relations,
+        });
         return filtered.length;
       }
 

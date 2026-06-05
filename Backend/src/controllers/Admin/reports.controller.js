@@ -8,6 +8,10 @@ const { emitToRole } = require("../../realtime/socket");
 const { ApiError, asyncHandler } = require("../../utils/http");
 const { clampPercent, getSubmissionScorePercent } = require("../../utils/score");
 const { getScopedDepartmentId } = require("../../utils/admin-scope");
+const {
+  buildAdminTestVisibilityWhere,
+  resolveAdminTestScope,
+} = require("../../utils/admin-test-access");
 
 const MAX_ANALYTICS_SUBMISSIONS = 20000;
 const toPercent = (value) => clampPercent(value);
@@ -79,50 +83,23 @@ const buildEmptyAnalyticsPayload = (mode = "department") => ({
 });
 
 const buildAdminReportScope = async ({ db, req, filters = {}, testSelect = { id: true } }) => {
-  const collegeId = req.collegeId;
-  const adminDepartmentId = getScopedDepartmentId(req, { requiredForDepartmentAdmin: false });
-  const requestedDepartmentId = filters.departmentId ? normalizeId(filters.departmentId) : null;
-  const departmentId = adminDepartmentId ? normalizeId(adminDepartmentId) : (requestedDepartmentId || null);
-
-  if (adminDepartmentId && requestedDepartmentId && normalizeId(adminDepartmentId) !== requestedDepartmentId) {
-    return { ok: false, reason: "DEPARTMENT_OUT_OF_SCOPE" };
+  let scope;
+  try {
+    scope = await resolveAdminTestScope({ db, req, filters });
+  } catch (error) {
+    if (error instanceof ApiError && [403, 404].includes(error.statusCode)) {
+      return { ok: false, reason: error.code || "SCOPE_OUT_OF_RANGE" };
+    }
+    throw error;
   }
 
-  const departmentBatches = await db.batch.findMany({
-    where: { collegeId, ...(departmentId ? { departmentId } : {}) },
-    select: { id: true },
+  const testWhere = buildAdminTestVisibilityWhere({
+    collegeId: scope.collegeId,
+    departmentId: scope.departmentId,
+    batchId: scope.batchId,
+    batchIds: scope.batchIds,
+    testId: filters.testId || null,
   });
-  const departmentBatchIds = normalizeIdList(departmentBatches.map((batch) => batch.id));
-
-  const requestedBatchId = filters.batchId ? normalizeId(filters.batchId) : null;
-  if (requestedBatchId && !departmentBatchIds.includes(requestedBatchId)) {
-    return { ok: false, reason: "BATCH_OUT_OF_SCOPE" };
-  }
-
-  const batchScopeIds = requestedBatchId ? [requestedBatchId] : departmentBatchIds;
-
-  const testWhere = {
-    collegeId,
-    ...(filters.testId ? { id: filters.testId } : {}),
-    ...(departmentId ? { OR: [
-      { assignmentMethod: "department_wise", departmentId },
-      { assignmentMethod: "department_wise", assignedTo: { in: [departmentId] } },
-      { assignmentMethod: null, departmentId },
-      { assignmentMethod: null, assignedTo: { in: [departmentId] } },
-      { assignmentMethod: "batch_wise", batchId: { in: batchScopeIds } },
-      { assignmentMethod: "batch_wise", batchAssignments: { some: { batchId: { in: batchScopeIds } } } },
-      { assignmentMethod: "department_wise", departmentId: null, batchId: { in: batchScopeIds } },
-      { assignmentMethod: "department_wise", departmentId: null, batchAssignments: { some: { batchId: { in: batchScopeIds } } } },
-      { assignmentMethod: null, batchId: { in: batchScopeIds } },
-      { assignmentMethod: null, batchAssignments: { some: { batchId: { in: batchScopeIds } } } },
-    ] } : {}),
-    ...(!departmentId && requestedBatchId ? {
-      OR: [
-        { batchId: requestedBatchId },
-        { batchAssignments: { some: { batchId: requestedBatchId } } },
-      ],
-    } : {}),
-  };
 
   const tests = await db.test.findMany({
     where: testWhere,
@@ -133,9 +110,9 @@ const buildAdminReportScope = async ({ db, req, filters = {}, testSelect = { id:
     ok: true,
     tests,
     testIds: normalizeIdList(tests.map((test) => test.id)),
-    departmentId,
-    batchId: requestedBatchId,
-    batchIds: batchScopeIds,
+    departmentId: scope.departmentId,
+    batchId: scope.batchId,
+    batchIds: scope.batchIds,
   };
 };
 

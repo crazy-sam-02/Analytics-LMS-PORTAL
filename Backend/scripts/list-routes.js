@@ -6,7 +6,6 @@ function listRoutes(stack, prefix = '') {
       const methods = Object.keys(layer.route.methods).join(',').toUpperCase();
       console.log(`${methods} ${prefix}${layer.route.path}`);
     } else if (layer.name === 'router' && layer.handle && layer.handle.stack) {
-      const path = layer.regexp && layer.regexp.source ? layer.regexp.source : '';
       listRoutes(layer.handle.stack, prefix);
     }
   }

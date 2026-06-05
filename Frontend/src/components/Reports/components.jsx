@@ -271,8 +271,10 @@ export function GroupedBarChart({ data, series = [], xKey = "department", highli
 
       <div className="h-full">
         <div className="space-y-3">
-          {rows.map((row) => (
-            <div key={row[xKey] || row.departmentId} className="flex items-start gap-3">
+          {rows.map((row) => {
+            const isHighlighted = highlightCategory && String(row[xKey] || "") === String(highlightCategory);
+            return (
+            <div key={row[xKey] || row.departmentId} className={`flex items-start gap-3 rounded-lg ${isHighlighted ? "bg-primary/10 px-2 py-1" : ""}`}>
               <div className="w-36 text-sm font-medium text-text-primary truncate">{row[xKey]}</div>
               <div className="flex-1 space-y-1">
                 {s.map((ser, idx) => {
@@ -291,7 +293,8 @@ export function GroupedBarChart({ data, series = [], xKey = "department", highli
                 })}
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>

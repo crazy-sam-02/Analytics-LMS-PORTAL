@@ -8,7 +8,6 @@ const models = require("../../models");
 const { ApiError, asyncHandler } = require("../../utils/http");
 const { createAuditLog } = require("../../services/audit.service");
 const {
-  createBatch,
   updateBatch,
   bulkCreateBatches: bulkCreateBatchesService,
   toggleBatchStatus,
@@ -223,8 +222,6 @@ const createBatchHandler = asyncHandler(async (req, res) => {
  * Update batch with validation
  */
 const updateBatchHandler = asyncHandler(async (req, res) => {
-  const m = await models.init();
-  const db = m.dbClient;
   const collegeId = req.collegeId;
   const adminId = req.admin.id;
   const { batchId } = req.params;
@@ -259,8 +256,6 @@ const updateBatchHandler = asyncHandler(async (req, res) => {
  * Bulk create batches
  */
 const bulkCreateBatchesHandler = asyncHandler(async (req, res) => {
-  const m = await models.init();
-  const db = m.dbClient;
   const collegeId = req.collegeId;
   const adminId = req.admin.id;
 
@@ -307,8 +302,6 @@ const bulkCreateBatchesHandler = asyncHandler(async (req, res) => {
  * Toggle batch status
  */
 const toggleBatchStatusHandler = asyncHandler(async (req, res) => {
-  const m = await models.init();
-  const db = m.dbClient;
   const collegeId = req.collegeId;
   const adminId = req.admin.id;
   const { batchId } = req.params;
@@ -336,8 +329,6 @@ const toggleBatchStatusHandler = asyncHandler(async (req, res) => {
  * Get batch validation metrics
  */
 const getBatchMetrics = asyncHandler(async (req, res) => {
-  const m = await models.init();
-  const db = m.dbClient;
   const metrics = await getMetricsSnapshot();
   const batchMetrics = metrics.failures?.BatchValidation || {};
 

@@ -285,34 +285,42 @@ export default function ReportsPage() {
   const reports = Array.isArray(reportsQuery.data) ? reportsQuery.data : [];
 
   const metrics = scope.metrics || {};
-  const departmentRows = (scope.departmentRows || []).map((row) => ({
-    departmentId: row.departmentId,
-    college: row.college || "-",
-    department: row.department || "-",
-    students: toNumber(row.students),
-    submissions: toNumber(row.submissions),
-    avgScore: clampPercent(row.avgScore),
-    passRate: clampPercent(row.passRate),
-    participation: clampPercent(row.participation),
-    violations: toNumber(row.violations),
-  }));
+  const departmentSourceRows = scope.departmentRows;
+  const studentSourceRows = scope.tableRows;
+  const departmentRows = useMemo(
+    () => (Array.isArray(departmentSourceRows) ? departmentSourceRows : []).map((row) => ({
+      departmentId: row.departmentId,
+      college: row.college || "-",
+      department: row.department || "-",
+      students: toNumber(row.students),
+      submissions: toNumber(row.submissions),
+      avgScore: clampPercent(row.avgScore),
+      passRate: clampPercent(row.passRate),
+      participation: clampPercent(row.participation),
+      violations: toNumber(row.violations),
+    })),
+    [departmentSourceRows]
+  );
 
-  const studentRows = (scope.tableRows || []).map((row) => ({
-    rank: row.rank,
-    studentId: row.studentId,
-    name: row.name || "-",
-    rollNo: row.rollNo || "-",
-    collegeId: row.collegeId,
-    college: row.college || "-",
-    departmentId: row.departmentId,
-    department: row.department || "-",
-    batch: row.batch || "-",
-    year: row.year || null,
-    avgScore: clampPercent(row.avgScore),
-    testsTaken: toNumber(row.testsTaken),
-    participation: toNumber(row.participation),
-    violations: toNumber(row.violations),
-  }));
+  const studentRows = useMemo(
+    () => (Array.isArray(studentSourceRows) ? studentSourceRows : []).map((row) => ({
+      rank: row.rank,
+      studentId: row.studentId,
+      name: row.name || "-",
+      rollNo: row.rollNo || "-",
+      collegeId: row.collegeId,
+      college: row.college || "-",
+      departmentId: row.departmentId,
+      department: row.department || "-",
+      batch: row.batch || "-",
+      year: row.year || null,
+      avgScore: clampPercent(row.avgScore),
+      testsTaken: toNumber(row.testsTaken),
+      participation: toNumber(row.participation),
+      violations: toNumber(row.violations),
+    })),
+    [studentSourceRows]
+  );
 
   const selectedTestName = useMemo(() => {
     if (testId === "all") return "";

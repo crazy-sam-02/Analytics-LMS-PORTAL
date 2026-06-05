@@ -27,7 +27,7 @@ const createNavItems = (basePath) => [
   { to: `${basePath}/departments`, label: "Departments", icon: Building2, permission: ADMIN_PERMISSIONS.MANAGE_DEPARTMENTS },
   { to: `${basePath}/admins`, label: "Admin Management", icon: ShieldUser, permission: ADMIN_PERMISSIONS.MANAGE_ADMINS },
   { to: `${basePath}/students`, label: "Students", icon: Users, permission: ADMIN_PERMISSIONS.MANAGE_STUDENTS },
-  { to: `${basePath}/tests`, label: "All Tests", icon: FileCheck2, permission: ADMIN_PERMISSIONS.EDIT_TEST },
+  { to: `${basePath}/tests`, label: "All Tests", icon: FileCheck2, permission: ADMIN_PERMISSIONS.VIEW_TESTS },
   { to: `${basePath}/tests?create=1`, label: "Create New", icon: PlusSquare, permission: ADMIN_PERMISSIONS.CREATE_TEST },
   { to: `${basePath}/question-bank`, label: "Question Bank", icon: LibraryBig, permission: ADMIN_PERMISSIONS.MANAGE_QUESTIONS },
   { to: `${basePath}/resources`, label: "Learning Resources", icon: BookOpenCheck, permission: ADMIN_PERMISSIONS.VIEW_RESOURCES },
@@ -49,6 +49,7 @@ export default function AdminSidebar({
   const collapsed = useSelector((state) => state.adminUi?.sidebarCollapsed);
   const [logoutOpen, setLogoutOpen] = useState(false);
   const navItems = createNavItems(basePath);
+  const canViewTests = usePermission(ADMIN_PERMISSIONS.VIEW_TESTS);
   const canEditTest = usePermission(ADMIN_PERMISSIONS.EDIT_TEST);
   const canManageQuestions = usePermission(ADMIN_PERMISSIONS.MANAGE_QUESTIONS);
   const canViewResources = usePermission(ADMIN_PERMISSIONS.VIEW_RESOURCES);
@@ -61,6 +62,7 @@ export default function AdminSidebar({
   const canViewAnalytics = usePermission(ADMIN_PERMISSIONS.VIEW_ANALYTICS);
 
   const permissionMap = {
+    [ADMIN_PERMISSIONS.VIEW_TESTS]: canViewTests,
     [ADMIN_PERMISSIONS.EDIT_TEST]: canEditTest,
     [ADMIN_PERMISSIONS.MANAGE_QUESTIONS]: canManageQuestions,
     [ADMIN_PERMISSIONS.VIEW_RESOURCES]: canViewResources,

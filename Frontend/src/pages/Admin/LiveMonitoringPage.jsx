@@ -5,6 +5,8 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { toast } from "sonner";
 import { adminApi } from "@/services/api";
 import { connectTestSocket, disconnectTestSocket, joinTestRoom, leaveTestRoom } from "@/services/testSocket";
+import usePermission from "@/hooks/usePermission";
+import { ADMIN_PERMISSIONS } from "@/features/Admin/adminPermissions";
 import ViolationFeed from "@/components/Admin/ViolationFeed";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -41,6 +43,7 @@ export default function LiveMonitoringPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const basePath = location.pathname.startsWith("/college-admin") ? "/college-admin" : "/admin";
+  const canEditTest = usePermission(ADMIN_PERMISSIONS.EDIT_TEST);
   const parentRef = useRef(null);
   const [socketHealthy, setSocketHealthy] = useState(true);
   const [studentRows, setStudentRows] = useState([]);
@@ -132,6 +135,9 @@ export default function LiveMonitoringPage() {
   });
 
   const activeStudents = useMemo(() => studentRows.length, [studentRows]);
+  const canControlMonitoring = canEditTest && Boolean(
+    monitorQuery.data?.canAdminControl ?? monitorQuery.data?.test?.canAdminControl ?? true
+  );
   const rateLimits = monitorQuery.data?.rateLimits || {
     totalBlocked: 0,
     topScopes: [],
@@ -145,6 +151,7 @@ export default function LiveMonitoringPage() {
   const hottestActor = rateLimits.topActors?.[0] || null;
 
   const forceSubmit = async () => {
+    if (!canControlMonitoring) return;
     if (!forceDialog.row?.submissionId || !forceDialog.reason.trim()) return;
     await adminApi.forceSubmitAttempt(testId, {
       submissionId: forceDialog.row.submissionId,
@@ -156,6 +163,7 @@ export default function LiveMonitoringPage() {
   };
 
   const extendTime = async () => {
+    if (!canControlMonitoring) return;
     if (!extendDialog.row?.submissionId) return;
     await adminApi.extendAttemptTime(testId, {
       submissionId: extendDialog.row.submissionId,
@@ -175,10 +183,14 @@ export default function LiveMonitoringPage() {
       <td className="px-3 py-2">{row.violations}</td>
       <td className={`px-3 py-2 font-medium ${statusTone[row.connectionStatus] || statusTone.OFFLINE}`}>{row.connectionStatus}</td>
       <td className="px-3 py-2 text-right">
-        <div className="flex justify-end gap-2">
-          <Button size="sm" variant="outline" onClick={() => setExtendDialog({ open: true, row, minutes: 10 })}>Extend Time</Button>
-          <Button size="sm" variant="destructive" onClick={() => setForceDialog({ open: true, row, reason: "" })}>Force Submit</Button>
-        </div>
+        {canControlMonitoring ? (
+          <div className="flex justify-end gap-2">
+            <Button size="sm" variant="outline" onClick={() => setExtendDialog({ open: true, row, minutes: 10 })}>Extend Time</Button>
+            <Button size="sm" variant="destructive" onClick={() => setForceDialog({ open: true, row, reason: "" })}>Force Submit</Button>
+          </div>
+        ) : (
+          <span className="rounded-full border border-border px-2 py-0.5 text-xs text-text-secondary">Read-only</span>
+        )}
       </td>
     </tr>
   );
@@ -194,6 +206,11 @@ export default function LiveMonitoringPage() {
           <span className={`text-xs font-semibold ${socketHealthy ? "text-success" : "text-warning"}`}>
             {socketHealthy ? "Socket Connected" : "Fallback Polling"}
           </span>
+          {!canControlMonitoring && monitorQuery.data ? (
+            <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
+              Read-only monitoring
+            </span>
+          ) : null}
           <Button variant="outline" onClick={() => navigate(`${basePath}/tests`)}>Back to Tests</Button>
         </div>
       </section>

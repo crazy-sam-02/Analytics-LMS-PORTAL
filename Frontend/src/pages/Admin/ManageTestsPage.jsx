@@ -75,8 +75,16 @@ const transitionsForStatus = (status) => {
 const isAdminReadOnlyTest = (test) => {
   if (!test) return false;
   if (test.canAdminOperate === false) return true;
+  if (test.canAdminControl === false) return true;
   if (test.managedBy === "SUPER_ADMIN") return true;
+  if (test.managedBy === "COLLEGE_ADMIN") return true;
   return Boolean(test.isGlobal);
+};
+
+const managedByLabel = (test) => {
+  if (test?.managedBy === "SUPER_ADMIN" || test?.isGlobal) return "Super admin managed";
+  if (test?.managedBy === "COLLEGE_ADMIN") return "College admin managed";
+  return "Department managed";
 };
 
 const transitionConfirmationText = (testTitle, action) => {
@@ -103,6 +111,8 @@ export default function ManageTestsPage() {
   const pagination = useSelector((state) => state.adminPanel.tests.pagination || {});
   const serverStatusCounts = useSelector((state) => state.adminPanel.tests.statusCounts || {});
   const canCreate = usePermission(ADMIN_PERMISSIONS.CREATE_TEST);
+  const canViewTests = usePermission(ADMIN_PERMISSIONS.VIEW_TESTS);
+  const canViewReports = usePermission(ADMIN_PERMISSIONS.VIEW_REPORTS);
   const canPublish = usePermission(ADMIN_PERMISSIONS.PUBLISH_TEST);
   const canEdit = usePermission(ADMIN_PERMISSIONS.EDIT_TEST);
   const canDelete = usePermission(ADMIN_PERMISSIONS.DELETE_TEST);
@@ -121,6 +131,7 @@ export default function ManageTestsPage() {
 
   const basePath = location.pathname.startsWith("/college-admin") ? "/college-admin" : "/admin";
   const canTransition = canEdit || canPublish;
+  const canMonitor = canViewTests || canEdit;
 
   const queryString = useMemo(() => {
     const query = new URLSearchParams();
@@ -134,10 +145,10 @@ export default function ManageTestsPage() {
   }, [activeStatus, page, search, sortBy, sortOrder]);
 
   useEffect(() => {
-    if (canEdit || canPublish || canCreate) {
+    if (canViewTests || canEdit || canPublish || canCreate) {
       dispatch(fetchAdminTests(queryString));
     }
-  }, [canCreate, canEdit, canPublish, dispatch, queryString]);
+  }, [canCreate, canEdit, canPublish, canViewTests, dispatch, queryString]);
 
   useEffect(() => {
     setSelectedIds([]);
@@ -254,7 +265,7 @@ export default function ManageTestsPage() {
 
     const selectedTest = tests.find((item) => item.id === testId);
     if (isAdminReadOnlyTest(selectedTest)) {
-      toast.error("This test is managed by super admin and is read-only for admins.");
+      toast.error(`${managedByLabel(selectedTest)} tests are read-only here.`);
       return;
     }
 
@@ -269,7 +280,7 @@ export default function ManageTestsPage() {
     }
   };
 
-  if (!canEdit && !canPublish && !canCreate) {
+  if (!canViewTests && !canEdit && !canPublish && !canCreate) {
     return <PermissionDenied action="view or manage tests" />;
   }
 
@@ -350,14 +361,23 @@ export default function ManageTestsPage() {
                       <td className="px-3 py-2"><span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${STATUS_TONE[normalizeStatus(test.status)] || STATUS_TONE.DRAFT}`}>{normalizeStatus(test.status)}</span></td>
                       <td className="px-3 py-2 text-text-secondary">
                         {test?.department?.name || "Department"} / {test?.batchAssignments?.length || 0} batches
-                        {adminReadOnly ? <span className="ml-2 text-xs text-amber-700">(Super admin managed)</span> : null}
+                        {adminReadOnly ? <span className="ml-2 text-xs text-amber-700">({managedByLabel(test)})</span> : null}
                       </td>
                       <td className="px-3 py-2 text-text-secondary">{new Date(test.startsAt).toLocaleDateString()} - {new Date(test.endsAt).toLocaleDateString()}</td>
                       <td className="px-3 py-2 text-text-secondary">{totalAttempts}</td>
                       <td className="px-3 py-2 text-text-secondary">{totalAttempts > 0 ? "Computed" : "-"}</td>
                       <td className="px-3 py-2 text-right">
                         <div className="flex justify-end gap-1">
-                          {canEdit && normalizeStatus(test.status) === "LIVE" ? (
+                          {canViewReports ? (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => navigate(`${basePath}/reports?test=${encodeURIComponent(test.id)}`)}
+                            >
+                              Reports
+                            </Button>
+                          ) : null}
+                          {canMonitor && normalizeStatus(test.status) === "LIVE" ? (
                             <Button
                               size="sm"
                               variant="outline"

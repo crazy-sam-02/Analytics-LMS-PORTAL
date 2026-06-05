@@ -155,6 +155,14 @@ const responseCache = {
   superDashboardTtlSeconds: toPositiveInt(process.env.RESPONSE_CACHE_SUPER_DASHBOARD_TTL_SECONDS, 20),
 };
 
+const database = {
+  relationFilterMaxCandidates: toPositiveInt(
+    process.env.DB_RELATION_FILTER_MAX_CANDIDATES,
+    nodeEnv === "production" ? 5000 : 50000
+  ),
+  relationFilterBatchSize: toPositiveInt(process.env.DB_RELATION_FILTER_BATCH_SIZE, 500),
+};
+
 const redis = {
   enabled: toBoolean(process.env.REDIS_ENABLED, nodeEnv !== "development" && nodeEnv !== "test"),
   connectTimeoutMs: toPositiveInt(process.env.REDIS_CONNECT_TIMEOUT_MS, 10_000),
@@ -261,4 +269,5 @@ module.exports = {
   cloudinaryFolder: process.env.CLOUDINARY_FOLDER || "lms-portal",
   rateLimit,
   responseCache,
+  database,
 };

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useDispatch, useSelector } from "react-redux";
 import { createSuperAdminUser, fetchSuperAdmins, fetchSuperColleges } from "@/features/SuperAdmin/superAdminPanelSlice";
@@ -59,7 +59,7 @@ export default function AdminsPage() {
     status: "all",
   });
 
-  const buildAdminsQuery = () => {
+  const buildAdminsQuery = useCallback(() => {
     const params = new URLSearchParams();
     params.set("page", "1");
     params.set("limit", "100");
@@ -75,14 +75,14 @@ export default function AdminsPage() {
     }
 
     return `?${params.toString()}`;
-  };
+  }, [filters]);
 
-  const loadAdmins = () => dispatch(fetchSuperAdmins(buildAdminsQuery()));
+  const loadAdmins = useCallback(() => dispatch(fetchSuperAdmins(buildAdminsQuery())), [buildAdminsQuery, dispatch]);
 
   useEffect(() => {
     loadAdmins();
     dispatch(fetchSuperColleges());
-  }, [dispatch]);
+  }, [dispatch, loadAdmins]);
 
   const departmentsQuery = useQuery({
     queryKey: ["super-admins-departments", form.collegeId],

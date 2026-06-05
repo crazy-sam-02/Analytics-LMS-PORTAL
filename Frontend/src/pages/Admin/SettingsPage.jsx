@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { adminApi } from "@/services/api";
 import {
@@ -13,11 +13,8 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import SkeletonBlock from "@/components/common/SkeletonBlock";
-import { PROCTORING_PRESETS, TEST_TYPES } from "@/lib/testConfig";
 
 export default function AdminSettingsPage() {
-  const queryClient = useQueryClient();
-  const [settingsDraft, setSettingsDraft] = useState(null);
   const [passwordForm, setPasswordForm] = useState({
     currentPassword: "",
     newPassword: "",
@@ -27,33 +24,6 @@ export default function AdminSettingsPage() {
   const settingsQuery = useQuery({
     queryKey: ["admin-settings"],
     queryFn: adminApi.getSettings,
-  });
-
-  useEffect(() => {
-    if (settingsQuery.data?.settings) {
-      setSettingsDraft(settingsQuery.data.settings);
-    }
-  }, [settingsQuery.data]);
-
-  const updateMutation = useMutation({
-    mutationFn: adminApi.updateSettings,
-    onSuccess: () => {
-      toast.success("Settings updated.");
-      setBanner({
-        type: "success",
-        title: "Settings saved",
-        message: "Default test and college settings were updated.",
-      });
-      queryClient.invalidateQueries({ queryKey: ["admin-settings"] });
-    },
-    onError: (error) => {
-      setBanner({
-        type: "error",
-        title: "Save failed",
-        message: error?.message || "Unable to update settings.",
-      });
-      toast.error(error?.message || "Failed to update settings.");
-    },
   });
 
   const passwordMutation = useMutation({

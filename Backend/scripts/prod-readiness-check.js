@@ -1,7 +1,21 @@
-require("dotenv").config();
+process.env.NODE_ENV = "production";
 const fs = require("fs");
-const mongoose = require("mongoose");
 const path = require("path");
+const dotenv = require("dotenv");
+const mongoose = require("mongoose");
+
+const resolveEnvFile = () => {
+  if (process.env.PROD_ENV_FILE) {
+    return process.env.PROD_ENV_FILE;
+  }
+
+  return [".env.production.local", ".env.production", ".env"].find((candidate) =>
+    fs.existsSync(path.resolve(process.cwd(), candidate))
+  );
+};
+
+const envFile = resolveEnvFile();
+dotenv.config(envFile ? { path: envFile } : undefined);
 
 const env = require("../src/config/env");
 const { getRedisHealthSnapshot, redisClient, shutdownRedis } = require("../src/config/redis");

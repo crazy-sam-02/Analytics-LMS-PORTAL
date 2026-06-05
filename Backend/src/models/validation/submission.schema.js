@@ -1,5 +1,5 @@
 const mongoose = require("mongoose");
-const { referenceValidator, optionalReferenceValidator } = require("./shared");
+const { referenceValidator } = require("./shared");
 
 const SUBMISSION_STATUSES = ["IN_PROGRESS", "SUBMITTED", "AUTO_SUBMITTED", "GRADED", "ARCHIVED"];
 

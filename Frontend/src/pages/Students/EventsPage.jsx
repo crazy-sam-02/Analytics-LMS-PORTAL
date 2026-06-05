@@ -53,15 +53,15 @@ const getEventState = (event) => {
 
 export default function EventsPage() {
   const [activeCategory, setActiveCategory] = useState("ALL");
-  const localCancelledIds = [];
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
 
   const eventsQuery = useQuery(eventsQueryOptions());
+  const eventItems = eventsQuery.data?.items;
 
   const events = useMemo(
-    () => (Array.isArray(eventsQuery.data?.items) ? eventsQuery.data.items : []),
-    [eventsQuery.data?.items]
+    () => (Array.isArray(eventItems) ? eventItems : []),
+    [eventItems]
   );
 
   const navigateToRegistrationLink = (event) => {
@@ -101,14 +101,13 @@ export default function EventsPage() {
 
   const filteredEvents = useMemo(() => {
     const selected = CATEGORY_TABS.find((item) => item.value === activeCategory);
-    const activeItems = events.filter((event) => !localCancelledIds.includes(String(event?.id)));
 
     if (!selected?.eventType) return events;
 
-    return activeItems.filter((event) =>
+    return events.filter((event) =>
       String(event.eventType || "").toLowerCase() === selected.eventType.toLowerCase()
     );
-  }, [events, activeCategory, localCancelledIds]);
+  }, [events, activeCategory]);
 
   if (eventsQuery.isLoading) {
     return <EventsSkeleton />;

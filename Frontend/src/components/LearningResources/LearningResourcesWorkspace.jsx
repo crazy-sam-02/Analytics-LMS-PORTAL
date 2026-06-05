@@ -138,7 +138,6 @@ export default function LearningResourcesWorkspace({
   const [colleges, setColleges] = useState([]);
 
   const isSuper = role === "super";
-  const isStudent = role === "student";
   const adminRole = String(admin?.role || "").toUpperCase();
   const isDepartmentAdmin = role === "admin" && adminRole === "ADMIN";
   const canCreateSubject = isSuper || (role === "admin" && (adminRole === "COLLEGE_ADMIN" || adminRole === "ADMIN"));

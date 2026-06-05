@@ -8,16 +8,10 @@ const STUDENT_REFRESH_TOKEN_KEY = "student_refresh_token";
 const removeStoredStudentAccessToken = () => {
   try {
     localStorage.removeItem(STUDENT_ACCESS_TOKEN_KEY);
+    localStorage.removeItem(STUDENT_REFRESH_TOKEN_KEY);
+    sessionStorage.removeItem(STUDENT_REFRESH_TOKEN_KEY);
   } catch {
     // Ignore storage cleanup failures.
-  }
-};
-
-const getStoredStudentRefreshToken = () => {
-  try {
-    return localStorage.getItem(STUDENT_REFRESH_TOKEN_KEY) || sessionStorage.getItem(STUDENT_REFRESH_TOKEN_KEY) || null;
-  } catch {
-    return null;
   }
 };
 
@@ -128,9 +122,7 @@ httpClient.interceptors.response.use(
     try {
       const refreshResponse = await axios.post(
         `${API_BASE}/auth/refresh`,
-        {
-          ...(getStoredStudentRefreshToken() ? { refreshToken: getStoredStudentRefreshToken() } : {}),
-        },
+        {},
         {
           withCredentials: true,
         }

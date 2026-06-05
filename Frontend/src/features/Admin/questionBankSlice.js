@@ -140,7 +140,7 @@ const questionBankSlice = createSlice({
       .addCase(createQuestionBankQuestion.fulfilled, (state, action) => {
         state.questions = [action.payload, ...state.questions];
       })
-      .addCase(importQuestionBankQuestions.fulfilled, (state) => {
+      .addCase(importQuestionBankQuestions.fulfilled, () => {
         // caller refetches list after import
       })
       .addCase(updateQuestionBankQuestion.fulfilled, (state, action) => {

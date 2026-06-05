@@ -542,14 +542,6 @@ const cloneTestToCollege = asyncHandler(async (req, res) => {
     throw new ApiError(422, "For batch-wise assignment, provide batchIds array with at least one ID", { assignmentMethod }, "MISSING_BATCH_IDS");
   }
 
-  console.log("[CLONE_TEST] Cloning test", {
-    sourceTestId: testId,
-    destinationCollegeId,
-    assignmentMethod,
-    departmentIdCount: departmentIds.length,
-    batchIdCount: batchIds.length,
-  });
-
   const cloned = await cloneServiceToCollege({
     sourceTestId: testId,
     destinationCollegeId,
@@ -559,8 +551,6 @@ const cloneTestToCollege = asyncHandler(async (req, res) => {
     years,
     superAdminId: req.superAdmin.id,
   });
-
-  console.log("[CLONE_TEST] Clone successful", { clonedTestId: cloned.id, title: cloned.title });
 
   await createAuditLog({
     action: "SUPER_ADMIN_CLONE_TEST",

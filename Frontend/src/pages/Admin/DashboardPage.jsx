@@ -68,22 +68,15 @@ export default function AdminDashboardPage() {
   }, [refetch]);
 
   const cards = data?.cards || {};
-  const allSubmissions = data?.recentSubmissions || [];
-  const allActivity = data?.recentActivity || [];
   const trend = data?.charts?.testParticipationTrend || [];
   const avgScore = data?.charts?.averageScorePerTest?.slice(0, 8) || [];
 
   // Filter submissions to only include those from the admin's college
   const submissions = useMemo(() => {
+    const allSubmissions = data?.recentSubmissions || [];
     if (!adminCollegeId) return [];
     return allSubmissions.filter((submission) => submission.collegeId === adminCollegeId);
-  }, [allSubmissions, adminCollegeId]);
-
-  // Filter activity to only include those from the admin's college
-  const activity = useMemo(() => {
-    if (!adminCollegeId) return [];
-    return allActivity.filter((item) => item.collegeId === adminCollegeId);
-  }, [allActivity, adminCollegeId]);
+  }, [adminCollegeId, data?.recentSubmissions]);
 
   return (
     <div className="space-y-6">

@@ -15,6 +15,12 @@ const {
   getScopedDepartmentId,
   isCollegeAdminRequest,
 } = require("../../utils/admin-scope");
+const {
+  buildAdminTestVisibilityWhereForRequest,
+  assertAdminCanViewTest,
+  assertAdminCanControlTest,
+  decorateAdminTestAccess,
+} = require("../../utils/admin-test-access");
 
 const TEST_STATUS = {
   DRAFT: "DRAFT",
@@ -138,19 +144,6 @@ const assertTransition = (currentStatus, nextStatus) => {
 
 const hasQuestionMutation = (body) => Array.isArray(body?.questions);
 
-const assertAdminCanOperateTest = (test) => {
-  if (!test?.isGlobal) {
-    return;
-  }
-
-  throw new ApiError(
-    403,
-    "This test is managed by super admin and is read-only for admins",
-    { testId: test.id, scope: "SUPER_ADMIN" },
-    "SUPER_ADMIN_TEST_READ_ONLY"
-  );
-};
-
 const resolveTransitionTarget = (currentStatus, action) => {
   switch (action) {
     case TRANSITION_ACTION.SCHEDULE:
@@ -245,17 +238,6 @@ const getAssignmentDepartmentIdForRequest = (req, requestedDepartmentId = null) 
   }
 
   return requestedDepartmentId || null;
-};
-
-const assertTestDepartmentScope = (req, test, message = "Test is outside the admin department scope") => {
-  const scopedDepartmentId = getScopedDepartmentId(req, { requiredForDepartmentAdmin: false });
-  if (!scopedDepartmentId) {
-    return;
-  }
-
-  if (test?.departmentId && String(test.departmentId) !== String(scopedDepartmentId)) {
-    throw new ApiError(403, message, null, "CROSS_DEPARTMENT_ACCESS_DENIED");
-  }
 };
 
 const resolveAssignmentBatchIds = async ({ db, assignmentMethod, batchIds, departmentId, collegeId }) => {
@@ -460,8 +442,6 @@ const createTest = asyncHandler(async (req, res) => {
 const getTests = asyncHandler(async (req, res) => {
   const m = await models.init();
   const db = m.dbClient;
-  const collegeId = req.collegeId;
-  const scopedDepartmentId = getScopedDepartmentId(req, { requiredForDepartmentAdmin: false });
   const page = Math.max(1, Number(req.query.page || 1));
   const limit = Math.min(100, Math.max(1, Number(req.query.limit || 20)));
   const status = req.query.status;
@@ -475,66 +455,57 @@ const getTests = asyncHandler(async (req, res) => {
   const allowedSortFields = new Set(["createdAt", "startsAt", "endsAt", "title", "status"]);
   const resolvedSortBy = allowedSortFields.has(sortBy) ? sortBy : "createdAt";
 
-  if (scopedDepartmentId && departmentId && String(departmentId) !== String(scopedDepartmentId)) {
-    throw new ApiError(403, "Cross-department test access denied", null, "CROSS_DEPARTMENT_ACCESS_DENIED");
-  }
-
-  const statusFilter = status
+  const normalizedStatus = String(status || "").trim().toUpperCase();
+  const statusFilter = normalizedStatus && normalizedStatus !== "ALL"
     ? {
         status: {
           in:
-            status === TEST_STATUS.SCHEDULED
+            normalizedStatus === TEST_STATUS.SCHEDULED
               ? [TEST_STATUS.SCHEDULED, LEGACY_STATUS.UPCOMING]
-              : status === TEST_STATUS.LIVE
+              : normalizedStatus === TEST_STATUS.LIVE
                 ? [TEST_STATUS.LIVE, LEGACY_STATUS.PUBLISHED]
-                : [status],
+                : [normalizedStatus],
         },
       }
     : {};
 
-  const scopedBatchIds = scopedDepartmentId
-    ? (await db.batch.findMany({
-        where: { collegeId, departmentId: scopedDepartmentId },
-        select: { id: true },
-      })).map((batch) => batch.id)
-    : [];
-
-  const scopedTestVisibilityFilter = scopedDepartmentId
-    ? {
-        OR: [
-          { departmentId: scopedDepartmentId },
-          { batchId: { in: scopedBatchIds } },
-          { batchAssignments: { some: { batchId: { in: scopedBatchIds } } } },
-        ],
-      }
-    : {};
-
-  const baseWhere = {
-    collegeId,
-    ...scopedTestVisibilityFilter,
-    ...(subject ? { subject } : {}),
-    ...((scopedDepartmentId || departmentId) ? { departmentId: scopedDepartmentId || departmentId } : {}),
-    ...(batchId ? { batchAssignments: { some: { batchId } } } : {}),
-    ...(search
+  const { where: visibilityWhere } = await buildAdminTestVisibilityWhereForRequest({
+    db,
+    req,
+    filters: { departmentId, batchId },
+  });
+  const optionalFilters = [
+    subject ? { subject } : null,
+    search
       ? {
           OR: [
             { title: { contains: search, mode: "insensitive" } },
             { description: { contains: search, mode: "insensitive" } },
           ],
         }
-      : {}),
-  };
+      : null,
+  ].filter(Boolean);
 
-  const where = {
-    ...baseWhere,
-    ...statusFilter,
-  };
+  const baseWhere = optionalFilters.length > 0
+    ? { AND: [visibilityWhere, ...optionalFilters] }
+    : visibilityWhere;
+  const where = Object.keys(statusFilter).length > 0
+    ? { AND: [baseWhere, statusFilter] }
+    : baseWhere;
 
   const [total, data, statusCounts] = await Promise.all([
     db.test.count({ where }),
     db.test.findMany({
       where,
       include: {
+        department: true,
+        createdByAdmin: {
+          select: {
+            id: true,
+            role: true,
+            fullName: true,
+          },
+        },
         batchAssignments: {
           include: {
             batch: true,
@@ -582,8 +553,7 @@ const getTests = asyncHandler(async (req, res) => {
       return {
         ...attachResolvedTestConfiguration(item),
         status: lifecycleStatus,
-        canAdminOperate: !item.isGlobal,
-        managedBy: item.isGlobal ? "SUPER_ADMIN" : "ADMIN",
+        ...decorateAdminTestAccess(req, item),
       };
     })
   );
@@ -618,6 +588,13 @@ const getTestById = asyncHandler(async (req, res) => {
         },
       },
       department: true,
+      createdByAdmin: {
+        select: {
+          id: true,
+          role: true,
+          fullName: true,
+        },
+      },
       _count: {
         select: {
           questions: true,
@@ -630,7 +607,7 @@ const getTestById = asyncHandler(async (req, res) => {
   if (!test) {
     throw new ApiError(404, "Test not found");
   }
-  assertTestDepartmentScope(req, test);
+  await assertAdminCanViewTest({ db, req, test });
 
   const lifecycleStatus = deriveLifecycleStatus(test);
   if (lifecycleStatus !== test.status) {
@@ -643,8 +620,7 @@ const getTestById = asyncHandler(async (req, res) => {
   res.status(200).json({
     ...attachResolvedTestConfiguration(test),
     status: lifecycleStatus,
-    canAdminOperate: !test.isGlobal,
-    managedBy: test.isGlobal ? "SUPER_ADMIN" : "ADMIN",
+    ...decorateAdminTestAccess(req, test),
   });
 });
 
@@ -657,6 +633,12 @@ const duplicateTest = asyncHandler(async (req, res) => {
   const source = await db.test.findFirst({
     where: { id: testId, collegeId },
     include: {
+      createdByAdmin: {
+        select: {
+          id: true,
+          role: true,
+        },
+      },
       questions: {
         orderBy: { order: "asc" },
       },
@@ -666,9 +648,8 @@ const duplicateTest = asyncHandler(async (req, res) => {
   if (!source) {
     throw new ApiError(404, "Test not found");
   }
-  assertTestDepartmentScope(req, source);
-
-  assertAdminCanOperateTest(source);
+  await assertAdminCanViewTest({ db, req, test: source });
+  assertAdminCanControlTest(req, source);
 
   const now = new Date();
   const startsAt = new Date(now.getTime() + 24 * 60 * 60 * 1000);
@@ -763,24 +744,25 @@ const cloneTest = asyncHandler(async (req, res) => {
     await ensureBatchDepartmentScope({ db, batchIds, collegeId, departmentId: resolvedDepartmentId || scopedDepartmentId });
   }
 
-  const source = await db.test.findFirst({ where: { id: testId, collegeId } });
+  const source = await db.test.findFirst({
+    where: { id: testId, collegeId },
+    include: {
+      createdByAdmin: {
+        select: {
+          id: true,
+          role: true,
+        },
+      },
+    },
+  });
   if (!source) throw new ApiError(404, "Test not found in this college");
-  assertTestDepartmentScope(req, source);
-
-  assertAdminCanOperateTest(source);
+  await assertAdminCanViewTest({ db, req, test: source });
+  assertAdminCanControlTest(req, source);
 
   // Ensure source belongs to this college and is not global
   if (source.isGlobal) {
     throw new ApiError(403, "Cannot clone super-admin managed test as admin");
   }
-
-  console.log("[CLONE_TEST_ADMIN] Cloning test within college", {
-    sourceTestId: testId,
-    collegeId,
-    assignmentMethod,
-    departmentId: resolvedDepartmentId,
-    batchIdCount: batchIds.length,
-  });
 
   const cloned = await cloneTestWithinCollege({
     sourceTestId: testId,
@@ -791,8 +773,6 @@ const cloneTest = asyncHandler(async (req, res) => {
     years,
     adminId: req.admin.id,
   });
-
-  console.log("[CLONE_TEST_ADMIN] Clone successful", { clonedTestId: cloned.id, title: cloned.title });
 
   await createAuditLog({
     action: "TEST_CLONED",
@@ -836,6 +816,12 @@ const updateTest = asyncHandler(async (req, res) => {
   const existing = await db.test.findFirst({
     where: { id: testId, collegeId },
     include: {
+      createdByAdmin: {
+        select: {
+          id: true,
+          role: true,
+        },
+      },
       batchAssignments: {
         select: { batchId: true },
       },
@@ -844,9 +830,8 @@ const updateTest = asyncHandler(async (req, res) => {
   if (!existing) {
     throw new ApiError(404, "Test not found");
   }
-  assertTestDepartmentScope(req, existing);
-
-  assertAdminCanOperateTest(existing);
+  await assertAdminCanViewTest({ db, req, test: existing });
+  assertAdminCanControlTest(req, existing);
 
   const currentStatus = deriveLifecycleStatus(existing);
   const providedKeys = Object.entries(req.body || {})
@@ -1051,13 +1036,22 @@ const deleteTest = asyncHandler(async (req, res) => {
   const { testId } = req.params;
   const collegeId = req.collegeId;
 
-  const existing = await db.test.findFirst({ where: { id: testId, collegeId } });
+  const existing = await db.test.findFirst({
+    where: { id: testId, collegeId },
+    include: {
+      createdByAdmin: {
+        select: {
+          id: true,
+          role: true,
+        },
+      },
+    },
+  });
   if (!existing) {
     throw new ApiError(404, "Test not found");
   }
-  assertTestDepartmentScope(req, existing);
-
-  assertAdminCanOperateTest(existing);
+  await assertAdminCanViewTest({ db, req, test: existing });
+  assertAdminCanControlTest(req, existing);
 
   const currentStatus = deriveLifecycleStatus(existing);
   const submissionCount = await db.submission.count({ where: { testId, collegeId } });
@@ -1111,6 +1105,12 @@ const transitionTestStatus = asyncHandler(async (req, res) => {
   const existing = await db.test.findFirst({
     where: { id: testId, collegeId },
     include: {
+      createdByAdmin: {
+        select: {
+          id: true,
+          role: true,
+        },
+      },
       _count: {
         select: {
           questions: true,
@@ -1122,9 +1122,8 @@ const transitionTestStatus = asyncHandler(async (req, res) => {
   if (!existing) {
     throw new ApiError(404, "Test not found");
   }
-  assertTestDepartmentScope(req, existing);
-
-  assertAdminCanOperateTest(existing);
+  await assertAdminCanViewTest({ db, req, test: existing });
+  assertAdminCanControlTest(req, existing);
 
   const currentStatus = deriveLifecycleStatus(existing);
 
@@ -1201,19 +1200,37 @@ const getLiveMonitoring = asyncHandler(async (req, res) => {
 
   const test = await db.test.findFirst({
     where: { id: testId, collegeId },
-    select: { id: true, title: true, durationMins: true, status: true, startsAt: true, endsAt: true },
+    select: {
+      id: true,
+      title: true,
+      durationMins: true,
+      status: true,
+      startsAt: true,
+      endsAt: true,
+      isGlobal: true,
+      createdByAdminId: true,
+      createdByAdmin: {
+        select: {
+          id: true,
+          role: true,
+        },
+      },
+    },
   });
 
   if (!test) {
     throw new ApiError(404, "Test not found");
   }
-  assertTestDepartmentScope(req, test);
-
-  assertAdminCanOperateTest(test);
+  await assertAdminCanViewTest({ db, req, test });
+  const access = decorateAdminTestAccess(req, test);
+  const scopedDepartmentId = getScopedDepartmentId(req, { requiredForDepartmentAdmin: false });
+  const submissionUserScope = scopedDepartmentId
+    ? { user: { departmentId: scopedDepartmentId } }
+    : {};
 
   const [inProgress, questionCount, sessions, rateLimits] = await Promise.all([
     db.submission.findMany({
-      where: { testId, collegeId, status: "IN_PROGRESS" },
+      where: { testId, collegeId, status: "IN_PROGRESS", ...submissionUserScope },
       include: {
         user: {
           select: {
@@ -1304,7 +1321,9 @@ const getLiveMonitoring = asyncHandler(async (req, res) => {
       ...test,
       activeStudents: studentTable.length,
       questionCount,
+      ...access,
     },
+    ...access,
     rateLimits,
     studentTable,
     violationFeed,
@@ -1323,7 +1342,19 @@ const forceSubmitAttempt = asyncHandler(async (req, res) => {
     where: { id: submissionId, testId, collegeId },
     include: {
       user: { select: { fullName: true } },
-      test: { select: { id: true, isGlobal: true } },
+      test: {
+        select: {
+          id: true,
+          isGlobal: true,
+          createdByAdminId: true,
+          createdByAdmin: {
+            select: {
+              id: true,
+              role: true,
+            },
+          },
+        },
+      },
     },
   });
 
@@ -1331,7 +1362,8 @@ const forceSubmitAttempt = asyncHandler(async (req, res) => {
     throw new ApiError(404, "Submission not found");
   }
 
-  assertAdminCanOperateTest(submission.test);
+  await assertAdminCanViewTest({ db, req, test: submission.test });
+  assertAdminCanControlTest(req, submission.test);
 
   if (submission.status !== "IN_PROGRESS") {
     throw new ApiError(409, "Submission is already completed", null, "SUBMISSION_ALREADY_COMPLETED");
@@ -1380,7 +1412,19 @@ const extendAttemptTime = asyncHandler(async (req, res) => {
     where: { id: submissionId, testId, collegeId },
     include: {
       user: { select: { fullName: true } },
-      test: { select: { id: true, isGlobal: true } },
+      test: {
+        select: {
+          id: true,
+          isGlobal: true,
+          createdByAdminId: true,
+          createdByAdmin: {
+            select: {
+              id: true,
+              role: true,
+            },
+          },
+        },
+      },
     },
   });
 
@@ -1388,7 +1432,8 @@ const extendAttemptTime = asyncHandler(async (req, res) => {
     throw new ApiError(404, "Submission not found");
   }
 
-  assertAdminCanOperateTest(submission.test);
+  await assertAdminCanViewTest({ db, req, test: submission.test });
+  assertAdminCanControlTest(req, submission.test);
 
   if (submission.status !== "IN_PROGRESS") {
     throw new ApiError(409, "Only in-progress attempts can be extended", null, "SUBMISSION_NOT_ACTIVE");

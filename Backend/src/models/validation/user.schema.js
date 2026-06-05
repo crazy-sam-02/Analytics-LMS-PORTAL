@@ -1,7 +1,6 @@
 const mongoose = require("mongoose");
 const {
   normalizeLowerEnumValue,
-  referenceValidator,
   optionalReferenceValidator,
 } = require("./shared");
 const { ROLES } = require("../../constants/roles");

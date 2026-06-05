@@ -96,9 +96,9 @@ describe("admin auth refresh", () => {
     expect(res.status).toHaveBeenCalledWith(200);
     expect(payload).toEqual({
       accessToken: "new-access-token",
-      refreshToken: "rotated-refresh-token",
       sessionId: "session-2",
     });
+    expect(payload).not.toHaveProperty("refreshToken");
     expect(updateMany).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ revokedReason: "rotated" }),
     }));

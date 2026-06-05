@@ -196,7 +196,7 @@ router.post(
 router.get(
 	"/:testId/monitoring",
 	authenticatePlatformAdmin,
-	requirePermission("edit_test"),
+	requireAnyPermission("edit_test", "view_tests"),
 	validate(testIdParamSchema),
 	departmentMatch(async (id) => db.test.findFirst({ where: { id } })),
 	getLiveMonitoring

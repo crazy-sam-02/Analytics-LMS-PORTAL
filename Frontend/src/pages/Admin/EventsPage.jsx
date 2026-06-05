@@ -442,8 +442,8 @@ export default function EventsPage() {
         </CardContent>
       </Card>
 
-      <div className="grid gap-6 ">
-        <Card className="rounded-2xl border-border lg:w-1/5">
+      <div className="grid gap-6 lg:grid-cols-[minmax(280px,360px)_1fr]">
+        <Card className="rounded-2xl border-border">
           <CardHeader><CardTitle>Events</CardTitle></CardHeader>
           <CardContent className="space-y-2">
             {eventsQuery.isLoading ? (
@@ -505,6 +505,92 @@ export default function EventsPage() {
                 </div>
               </div>
             ) : null}
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-2xl border-border">
+          <CardHeader>
+            <CardTitle>{selectedEvent ? selectedEvent.title : "Event Registrants"}</CardTitle>
+            <CardDescription>
+              {selectedEvent
+                ? `${registrants.length} registration${registrants.length === 1 ? "" : "s"} captured for this event.`
+                : "Select an event to review registrations, export attendees, or cancel the event."}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {!selectedEvent ? (
+              <p className="text-sm text-text-secondary">No event selected.</p>
+            ) : (
+              <>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button type="button" variant="outline" disabled={selectedEventQuery.isLoading} onClick={downloadCsv}>
+                    Download Registrants
+                  </Button>
+                  {getEventStatus(selectedEvent) === "ACTIVE" ? (
+                    <>
+                      <Input
+                        value={cancelReason}
+                        onChange={(event) => setCancelReason(event.target.value)}
+                        placeholder="Cancellation reason"
+                        className="min-w-56 flex-1"
+                      />
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        disabled={!cancelReason.trim() || cancelMutation.isPending}
+                        onClick={() => cancelMutation.mutate({ eventId: selectedEventId, reason: cancelReason.trim() })}
+                      >
+                        {cancelMutation.isPending ? "Cancelling..." : "Cancel Event"}
+                      </Button>
+                    </>
+                  ) : null}
+                </div>
+
+                {selectedEventQuery.isLoading ? (
+                  <div className="space-y-2">
+                    <SkeletonBlock className="h-12" />
+                    <SkeletonBlock className="h-12" />
+                  </div>
+                ) : null}
+                {selectedEventQuery.isError ? (
+                  <p className="text-sm text-danger">{selectedEventQuery.error?.message || "Unable to load registrants."}</p>
+                ) : null}
+                {!selectedEventQuery.isLoading && !selectedEventQuery.isError && pagedRegistrants.length === 0 ? (
+                  <p className="text-sm text-text-secondary">No registrants yet.</p>
+                ) : null}
+                {pagedRegistrants.length > 0 ? (
+                  <div className="overflow-hidden rounded-xl border border-border">
+                    <div className="grid grid-cols-[1.5fr_1.5fr_1fr] bg-muted px-3 py-2 text-xs font-semibold uppercase tracking-wide text-text-secondary">
+                      <span>Name</span>
+                      <span>Email</span>
+                      <span>Registered</span>
+                    </div>
+                    {pagedRegistrants.map((registrant, index) => {
+                      const student = registrant.student || registrant.user || registrant;
+                      const name = student.fullName || student.name || registrant.fullName || "-";
+                      const email = student.email || registrant.email || "-";
+                      const registeredAt = registrant.registeredAt || registrant.createdAt || registrant.updatedAt;
+                      return (
+                        <div key={registrant.id || `${email}-${index}`} className="grid grid-cols-[1.5fr_1.5fr_1fr] border-t border-border px-3 py-2 text-sm">
+                          <span className="truncate font-medium text-text-primary">{name}</span>
+                          <span className="truncate text-text-secondary">{email}</span>
+                          <span className="text-text-secondary">{registeredAt ? new Date(registeredAt).toLocaleDateString() : "-"}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
+                {registrants.length > REGISTRANT_PAGE_SIZE ? (
+                  <div className="flex items-center justify-between border-t border-border pt-2 text-xs text-text-secondary">
+                    <p>Page {registrantPage} of {totalRegistrantPages}</p>
+                    <div className="flex items-center gap-2">
+                      <Button variant="outline" size="sm" disabled={registrantPage <= 1} onClick={() => setRegistrantPage((prev) => Math.max(prev - 1, 1))}>Previous</Button>
+                      <Button variant="outline" size="sm" disabled={registrantPage >= totalRegistrantPages} onClick={() => setRegistrantPage((prev) => Math.min(prev + 1, totalRegistrantPages))}>Next</Button>
+                    </div>
+                  </div>
+                ) : null}
+              </>
+            )}
           </CardContent>
         </Card>
 

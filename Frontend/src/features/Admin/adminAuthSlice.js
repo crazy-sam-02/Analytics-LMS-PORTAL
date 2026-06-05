@@ -14,7 +14,6 @@ export const loginAdmin = createAsyncThunk("adminAuth/login", async (payload) =>
   const data = await adminApi.login(payload);
   adminTokenStorage.setTokens({
     accessToken: data.accessToken,
-    refreshToken: data.refreshToken,
   });
   return normalizeAdminPrincipal(data.admin);
 });
@@ -26,7 +25,7 @@ export const fetchCurrentAdmin = createAsyncThunk("adminAuth/me", async () => {
 
 export const logoutAdmin = createAsyncThunk("adminAuth/logout", async () => {
   try {
-    await adminApi.logout(adminTokenStorage.getRefresh());
+    await adminApi.logout();
   } finally {
     adminTokenStorage.clear();
   }

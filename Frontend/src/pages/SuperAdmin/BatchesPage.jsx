@@ -227,16 +227,25 @@ export default function BatchesPage() {
     },
   });
 
-  const colleges = collegesQuery.data?.data || [];
-  const tests = testsQuery.data?.data || [];
-  const createDepartmentOptions = createDepartmentsQuery.data?.data || [];
-  const editDepartmentOptions = editDepartmentsQuery.data?.data || [];
-  const batches = batchesQuery.data?.data || [];
-  const assignBatches = assignBatchesQuery.data?.data || [];
-  const studentDepartmentOptions = studentDepartmentsQuery.data?.data || [];
-  const studentBatchOptions = studentBatchesQuery.data?.data || [];
+  const collegesData = collegesQuery.data?.data;
+  const testsData = testsQuery.data?.data;
+  const createDepartmentData = createDepartmentsQuery.data?.data;
+  const editDepartmentData = editDepartmentsQuery.data?.data;
+  const batchesData = batchesQuery.data?.data;
+  const assignBatchesData = assignBatchesQuery.data?.data;
+  const studentDepartmentData = studentDepartmentsQuery.data?.data;
+  const studentBatchData = studentBatchesQuery.data?.data;
+  const studentsData = studentsQuery.data?.data;
+  const colleges = useMemo(() => (Array.isArray(collegesData) ? collegesData : []), [collegesData]);
+  const tests = useMemo(() => (Array.isArray(testsData) ? testsData : []), [testsData]);
+  const createDepartmentOptions = useMemo(() => (Array.isArray(createDepartmentData) ? createDepartmentData : []), [createDepartmentData]);
+  const editDepartmentOptions = useMemo(() => (Array.isArray(editDepartmentData) ? editDepartmentData : []), [editDepartmentData]);
+  const batches = useMemo(() => (Array.isArray(batchesData) ? batchesData : []), [batchesData]);
+  const assignBatches = useMemo(() => (Array.isArray(assignBatchesData) ? assignBatchesData : []), [assignBatchesData]);
+  const studentDepartmentOptions = useMemo(() => (Array.isArray(studentDepartmentData) ? studentDepartmentData : []), [studentDepartmentData]);
+  const studentBatchOptions = useMemo(() => (Array.isArray(studentBatchData) ? studentBatchData : []), [studentBatchData]);
   const pagination = batchesQuery.data?.pagination;
-  const students = studentsQuery.data?.data || [];
+  const students = useMemo(() => (Array.isArray(studentsData) ? studentsData : []), [studentsData]);
   const studentPagination = studentsQuery.data?.pagination;
   const selectedStudentProfile = studentProfileQuery.data?.data?.[0] || null;
   const selectedStudent = selectedStudentId ? students.find((s) => s.id === selectedStudentId) || selectedStudentProfile : null;
@@ -573,6 +582,73 @@ export default function BatchesPage() {
         </CardContent>
       </Card>
             
+
+      <Card className="rounded-2xl border-border">
+        <CardHeader>
+          <CardTitle>Assign Test to Batches</CardTitle>
+          <CardDescription>Select a test and one or more batches from the same college.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-3 lg:grid-cols-[1.2fr_1fr_auto]">
+            <select
+              className="h-10 rounded-lg border border-border px-2"
+              value={form.testId}
+              onChange={(event) => {
+                setForm({ testId: event.target.value });
+                setSelectedBatchIds([]);
+              }}
+            >
+              <option value="">Select test</option>
+              {tests.map((test) => (
+                <option key={test.id} value={test.id}>{test.title} ({test.college?.name || test.collegeName || "College"})</option>
+              ))}
+            </select>
+            <Input
+              value={assignBatchSearch}
+              onChange={(event) => setAssignBatchSearch(event.target.value)}
+              placeholder="Search batches"
+              disabled={!form.testId}
+            />
+            <Button
+              type="button"
+              className="bg-primary/100 hover:bg-primary"
+              disabled={assignMutation.isPending || !form.testId || finalBatchIds.length === 0}
+              onClick={assign}
+            >
+              {assignMutation.isPending ? "Assigning..." : `Assign ${finalBatchIds.length || ""}`.trim()}
+            </Button>
+          </div>
+
+          {!form.testId ? (
+            <p className="text-sm text-text-secondary">Choose a test to load eligible batches.</p>
+          ) : null}
+          {form.testId && filteredAssignBatches.length === 0 ? (
+            <p className="text-sm text-text-secondary">No batches match the selected test and search.</p>
+          ) : null}
+          {form.testId && filteredAssignBatches.length > 0 ? (
+            <div className="grid max-h-72 gap-2 overflow-y-auto rounded-xl border border-border p-2 sm:grid-cols-2 xl:grid-cols-3">
+              {filteredAssignBatches.map((batch) => {
+                const batchId = String(batch.id);
+                const checked = finalBatchIds.includes(batchId);
+                return (
+                  <label key={batch.id} className={`flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2 text-sm ${checked ? "border-primary/40 bg-primary/10" : "border-border"}`}>
+                    <input
+                      type="checkbox"
+                      className="mt-1 size-4"
+                      checked={checked}
+                      onChange={() => toggleAssignBatchSelection(batchId)}
+                    />
+                    <span>
+                      <span className="block font-medium text-text-primary">{batch.name} ({batch.year || "-"})</span>
+                      <span className="block text-xs text-text-secondary">{batch.college?.name || "-"} • {batch.department?.name || (batch.isGlobal ? "Global" : "-")}</span>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
 
       
 

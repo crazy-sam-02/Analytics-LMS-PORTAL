@@ -7,6 +7,8 @@ const TEST_QUESTIONS_TTL_SECONDS = 300;
 const memoryCache = new Map();
 const MEMORY_MAX_ENTRIES = 500;
 
+const isProduction = () => process.env.NODE_ENV === "production";
+
 const pruneMemoryCache = () => {
   if (memoryCache.size <= MEMORY_MAX_ENTRIES) return;
   const now = Date.now();
@@ -23,8 +25,12 @@ const getFromCache = async (key) => {
       const raw = await redisClient.get(key);
       return raw ? JSON.parse(raw) : null;
     } catch {
-      // Fall through to memory
+      if (isProduction()) return null;
     }
+  }
+
+  if (isProduction()) {
+    return null;
   }
 
   const entry = memoryCache.get(key);
@@ -43,8 +49,12 @@ const setInCache = async (key, value, ttlSeconds) => {
       await redisClient.set(key, JSON.stringify(value), "EX", ttlSeconds);
       return;
     } catch {
-      // Fall through to memory
+      if (isProduction()) return;
     }
+  }
+
+  if (isProduction()) {
+    return;
   }
 
   memoryCache.set(key, {
@@ -55,7 +65,9 @@ const setInCache = async (key, value, ttlSeconds) => {
 };
 
 const deleteFromCache = async (key) => {
-  memoryCache.delete(key);
+  if (!isProduction()) {
+    memoryCache.delete(key);
+  }
   if (isRedisAvailable()) {
     try {
       await redisClient.del(key);
@@ -76,7 +88,10 @@ const getCachedTestMeta = (testId) => getFromCache(`test:meta:${testId}`);
 const setCachedTestMeta = (testId, test) => {
   if (!testId || !test) return Promise.resolve();
   // Store only metadata fields — not questions/submissions
-  const { questions, submissions, answers, ...meta } = test;
+  const meta = { ...test };
+  delete meta.questions;
+  delete meta.submissions;
+  delete meta.answers;
   return setInCache(`test:meta:${testId}`, meta, TEST_META_TTL_SECONDS);
 };
 

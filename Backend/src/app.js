@@ -66,8 +66,8 @@ const { getDb } = require("./utils/db");
 const { asyncHandler } = require("./utils/http");
 const { getPrometheusMetrics } = require("./services/prometheus-metrics.service");
 const {
+  authenticateAdmin,
   authenticateCollegeAdmin,
-  authenticatePlatformAdmin,
   authenticateStudent,
   authenticateSuperAdmin,
 } = require("./middleware/auth");
@@ -430,19 +430,19 @@ app.use("/api/college-admin", collegeAdminApiLimiter);
 app.use("/api/super-admin", superAdminApiLimiter);
 app.use("/api/superadmin", superAdminApiLimiter);
 
-app.use("/api/admin/dashboard/summary", authenticatePlatformAdmin, adminDashboardCache);
-app.use("/api/admin/analytics", authenticatePlatformAdmin, adminAnalyticsCache);
-app.use("/api/admin/reports", authenticatePlatformAdmin, adminReportsCache);
-app.use("/api/admin/settings", authenticatePlatformAdmin, adminSettingsCache);
-app.use("/api/admin/tests", authenticatePlatformAdmin, adminCollectionCache);
-app.use("/api/admin/question-bank", authenticatePlatformAdmin, adminCollectionCache);
-app.use("/api/admin/questions", authenticatePlatformAdmin, adminCollectionCache);
-app.use("/api/admin/subjects", authenticatePlatformAdmin, adminCollectionCache);
-app.use("/api/admin/students", authenticatePlatformAdmin, adminCollectionCache);
-app.use("/api/admin/departments", authenticatePlatformAdmin, adminCollectionCache);
-app.use("/api/admin/batches", authenticatePlatformAdmin, adminCollectionCache);
-app.use("/api/admin/events", authenticatePlatformAdmin, adminCollectionCache);
-app.use("/api/admin/admins", authenticatePlatformAdmin, adminCollectionCache);
+app.use("/api/admin/dashboard/summary", authenticateAdmin, adminDashboardCache);
+app.use("/api/admin/analytics", authenticateAdmin, adminAnalyticsCache);
+app.use("/api/admin/reports", authenticateAdmin, adminReportsCache);
+app.use("/api/admin/settings", authenticateAdmin, adminSettingsCache);
+app.use("/api/admin/tests", authenticateAdmin, adminCollectionCache);
+app.use("/api/admin/question-bank", authenticateAdmin, adminCollectionCache);
+app.use("/api/admin/questions", authenticateAdmin, adminCollectionCache);
+app.use("/api/admin/subjects", authenticateAdmin, adminCollectionCache);
+app.use("/api/admin/students", authenticateAdmin, adminCollectionCache);
+app.use("/api/admin/departments", authenticateAdmin, adminCollectionCache);
+app.use("/api/admin/batches", authenticateAdmin, adminCollectionCache);
+app.use("/api/admin/events", authenticateAdmin, adminCollectionCache);
+app.use("/api/admin/admins", authenticateAdmin, adminCollectionCache);
 
 app.use("/api/college-admin/dashboard/summary", authenticateCollegeAdmin, adminDashboardCache);
 app.use("/api/college-admin/analytics", authenticateCollegeAdmin, adminAnalyticsCache);
@@ -547,22 +547,22 @@ app.use("/api/profile", studentProfileRoutes);
 app.use("/api/students/me", studentMeRoutes);
 app.use("/api/resources", authenticateStudent, studentResourcesRoutes);
 
-app.use("/api/admin/dashboard", adminDashboardRoutes);
-app.use("/api/admin/tests", adminTestsRoutes);
-app.use("/api/admin/question-bank", adminQuestionBankRoutes);
-app.use("/api/admin/questions", adminQuestionBankRoutes);
-app.use("/api/admin/subjects", adminSubjectsRoutes);
-app.use("/api/admin/students", adminStudentsRoutes);
-app.use("/api/admin/departments", adminDepartmentsRoutes);
-app.use("/api/admin/batches", adminBatchesRoutes);
-app.use("/api/admin/events", adminEventsRoutes);
-app.use("/api/admin/reports", adminReportsRoutes);
-app.use("/api/admin/jobs", adminJobsRoutes);
-app.use("/api/admin/search", adminSearchRoutes);
-app.use("/api/admin/settings", adminSettingsRoutes);
-app.use("/api/admin/admins", adminAdminsRoutes);
-app.use("/api/admin/analytics", adminAnalyticsRoutes);
-app.use("/api/admin/resources", authenticatePlatformAdmin, adminResourcesRoutes);
+app.use("/api/admin/dashboard", authenticateAdmin, adminDashboardRoutes);
+app.use("/api/admin/tests", authenticateAdmin, adminTestsRoutes);
+app.use("/api/admin/question-bank", authenticateAdmin, adminQuestionBankRoutes);
+app.use("/api/admin/questions", authenticateAdmin, adminQuestionBankRoutes);
+app.use("/api/admin/subjects", authenticateAdmin, adminSubjectsRoutes);
+app.use("/api/admin/students", authenticateAdmin, adminStudentsRoutes);
+app.use("/api/admin/departments", authenticateAdmin, adminDepartmentsRoutes);
+app.use("/api/admin/batches", authenticateAdmin, adminBatchesRoutes);
+app.use("/api/admin/events", authenticateAdmin, adminEventsRoutes);
+app.use("/api/admin/reports", authenticateAdmin, adminReportsRoutes);
+app.use("/api/admin/jobs", authenticateAdmin, adminJobsRoutes);
+app.use("/api/admin/search", authenticateAdmin, adminSearchRoutes);
+app.use("/api/admin/settings", authenticateAdmin, adminSettingsRoutes);
+app.use("/api/admin/admins", authenticateAdmin, adminAdminsRoutes);
+app.use("/api/admin/analytics", authenticateAdmin, adminAnalyticsRoutes);
+app.use("/api/admin/resources", authenticateAdmin, adminResourcesRoutes);
 
 app.use("/api/college-admin/dashboard", authenticateCollegeAdmin, adminDashboardCache, adminDashboardRoutes);
 app.use("/api/college-admin/tests", authenticateCollegeAdmin, adminCollectionCache, adminTestsRoutes);

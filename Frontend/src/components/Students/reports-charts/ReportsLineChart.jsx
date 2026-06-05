@@ -53,7 +53,7 @@ export function ReportsLineChart({ data = [] }) {
           }
           return 0;
         })
-        .map(({ sortKey, ...item }) => item)
+        .map(({ sortKey: _sortKey, ...item }) => item)
     : [];
 
   if (normalized.length === 0) {

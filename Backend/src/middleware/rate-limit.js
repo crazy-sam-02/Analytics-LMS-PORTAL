@@ -5,6 +5,8 @@ const { recordRateLimitEvent } = require("../services/rate-limit-metrics.service
 
 const memoryCounters = new Map();
 
+const isProduction = () => process.env.NODE_ENV === "production";
+
 const isRateLimitDisabled = () => {
   if (process.env.NODE_ENV === "test") {
     return false;
@@ -137,6 +139,25 @@ const hitRedisCounter = async (key, windowMs) => {
   };
 };
 
+const createRedisRequiredError = () => {
+  const error = new Error("Redis is required for rate limiting in production");
+  error.statusCode = 503;
+  error.code = "RATE_LIMIT_REDIS_REQUIRED";
+  return error;
+};
+
+const hitCounter = async (key, windowMs) => {
+  if (isRedisAvailable()) {
+    return hitRedisCounter(key, windowMs);
+  }
+
+  if (isProduction()) {
+    throw createRedisRequiredError();
+  }
+
+  return hitMemoryCounter(key, windowMs);
+};
+
 const applyRateLimitHeaders = (res, max, remaining, resetAfterMs) => {
   const safeRemaining = Math.max(0, remaining);
   const resetSeconds = Math.ceil(resetAfterMs / 1000);
@@ -167,9 +188,7 @@ const createRateLimiter = (options = {}) => {
     const key = buildKey(req, options);
 
     try {
-      const hit = isRedisAvailable()
-        ? await hitRedisCounter(key, windowMs)
-        : hitMemoryCounter(key, windowMs);
+      const hit = await hitCounter(key, windowMs);
 
       const remaining = max - hit.count;
       applyRateLimitHeaders(res, max, remaining, hit.remainingMs);
@@ -195,7 +214,7 @@ const createRateLimiter = (options = {}) => {
 
       return next();
     } catch (error) {
-      if (options.failOpen !== false) {
+      if (!isProduction() && options.failOpen !== false) {
         return next();
       }
 

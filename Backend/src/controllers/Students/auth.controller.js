@@ -105,7 +105,6 @@ const login = asyncHandler(async (req, res) => {
 
   res.status(200).json({
     accessToken,
-    refreshToken: keepLoggedIn ? refreshToken : undefined,
     sessionId: refreshRecord.id,
     user: buildStudentProfilePayload(user),
   });
@@ -170,7 +169,6 @@ const refresh = asyncHandler(async (req, res) => {
   res.cookie(STUDENT_REFRESH_COOKIE, newRefreshToken, getRefreshCookieOptions({ keepLoggedIn }));
   res.status(200).json({
     accessToken: newAccessToken,
-    refreshToken: newRefreshToken,
     sessionId: refreshRecord.id,
     user: buildStudentProfilePayload(userRecord),
   });

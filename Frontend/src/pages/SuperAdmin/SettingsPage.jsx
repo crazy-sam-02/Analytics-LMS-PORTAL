@@ -22,7 +22,6 @@ export default function SettingsPage() {
     defaultViolationLimit: 3,
     globalRules: "{}",
   });
-  const [settingsDraft, setSettingsDraft] = useState(null);
   const [passwordForm, setPasswordForm] = useState({ currentPassword: "", newPassword: "" });
   const [banner, setBanner] = useState({ type: "", title: "", message: "" });
 
@@ -40,7 +39,6 @@ export default function SettingsPage() {
         defaultViolationLimit: value.defaultViolationLimit ?? 3,
         globalRules: JSON.stringify(value.globalRules || {}, null, 2),
       });
-      setSettingsDraft(value);
     }
   }, [settingsQuery.data]);
 
@@ -79,11 +77,19 @@ export default function SettingsPage() {
   });
 
   const save = () => {
-    updateMutation.mutate({
-      maxAttemptsDefault: Number(form.maxAttemptsDefault),
-      defaultViolationLimit: Number(form.defaultViolationLimit),
-      globalRules: JSON.parse(form.globalRules || "{}"),
-    });
+    try {
+      updateMutation.mutate({
+        maxAttemptsDefault: Number(form.maxAttemptsDefault),
+        defaultViolationLimit: Number(form.defaultViolationLimit),
+        globalRules: JSON.parse(form.globalRules || "{}"),
+      });
+    } catch {
+      setBanner({
+        type: "error",
+        title: "Invalid JSON",
+        message: "Global rules must be valid JSON.",
+      });
+    }
   };
 
   const profile = settingsQuery.data?.profile;
@@ -145,6 +151,78 @@ export default function SettingsPage() {
             <span className="font-semibold">Department:</span>{" "}
             {profile?.department?.name || "-"}
           </p>
+        </CardContent>
+      </Card>
+
+      <Card className="rounded-2xl border-border">
+        <CardHeader>
+          <CardTitle>Global Defaults</CardTitle>
+          <CardDescription>Default attempt limits and platform rules for new tests.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <label htmlFor="max-attempts-default" className="text-sm font-medium text-text-secondary">Default Attempts</label>
+              <Input
+                id="max-attempts-default"
+                type="number"
+                min={1}
+                value={form.maxAttemptsDefault}
+                onChange={(event) => setForm((prev) => ({ ...prev, maxAttemptsDefault: event.target.value }))}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="default-violation-limit" className="text-sm font-medium text-text-secondary">Violation Limit</label>
+              <Input
+                id="default-violation-limit"
+                type="number"
+                min={1}
+                value={form.defaultViolationLimit}
+                onChange={(event) => setForm((prev) => ({ ...prev, defaultViolationLimit: event.target.value }))}
+              />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="global-rules" className="text-sm font-medium text-text-secondary">Global Rules JSON</label>
+            <Textarea
+              id="global-rules"
+              value={form.globalRules}
+              onChange={(event) => setForm((prev) => ({ ...prev, globalRules: event.target.value }))}
+              className="min-h-36 font-mono text-xs"
+            />
+          </div>
+          <Button type="button" onClick={save} disabled={updateMutation.isPending}>
+            {updateMutation.isPending ? "Saving..." : "Save Defaults"}
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Card className="rounded-2xl border-border">
+        <CardHeader>
+          <CardTitle>Change Password</CardTitle>
+          <CardDescription>Password updates are immediately audited.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3 sm:grid-cols-3">
+          <Input
+            type="password"
+            placeholder="Current password"
+            value={passwordForm.currentPassword}
+            onChange={(event) => setPasswordForm((prev) => ({ ...prev, currentPassword: event.target.value }))}
+          />
+          <Input
+            type="password"
+            placeholder="New password"
+            value={passwordForm.newPassword}
+            onChange={(event) => setPasswordForm((prev) => ({ ...prev, newPassword: event.target.value }))}
+          />
+          <Button
+            type="button"
+            onClick={() => passwordMutation.mutate(passwordForm)}
+            disabled={!passwordForm.currentPassword || !passwordForm.newPassword || Boolean(passwordError) || passwordMutation.isPending}
+          >
+            {passwordMutation.isPending ? "Updating..." : "Update Password"}
+          </Button>
+          {passwordError ? <p className="sm:col-span-3 text-xs text-danger">{passwordError}</p> : null}
         </CardContent>
       </Card>
 

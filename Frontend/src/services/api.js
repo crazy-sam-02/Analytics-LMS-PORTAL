@@ -21,14 +21,6 @@ const resolveAdminScopedPath = (path) => {
   return normalizedPath;
 };
 
-const safeReadStorage = (key) => {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-};
-
 const safeWriteStorage = (key, value) => {
   try {
     if (value === null || value === undefined || value === "") {
@@ -45,23 +37,20 @@ const safeWriteStorage = (key, value) => {
 const createTokenStorage = (prefix) => {
   const accessKey = `${prefix}_access_token`;
   const refreshKey = `${prefix}_refresh_token`;
-  const persistedAccessToken = safeReadStorage(accessKey);
-  const persistedRefreshToken = safeReadStorage(refreshKey);
-  let accessToken = persistedAccessToken || null;
-  let refreshToken = persistedRefreshToken || null;
+  safeWriteStorage(accessKey, null);
+  safeWriteStorage(refreshKey, null);
+  let accessToken = null;
 
   return {
     getAccess: () => accessToken,
-    getRefresh: () => refreshToken,
-    setTokens: ({ accessToken: nextAccessToken, refreshToken: nextRefreshToken }) => {
+    getRefresh: () => null,
+    setTokens: ({ accessToken: nextAccessToken }) => {
       accessToken = nextAccessToken || null;
-      refreshToken = nextRefreshToken === undefined ? refreshToken : nextRefreshToken || null;
-      safeWriteStorage(accessKey, accessToken);
-      safeWriteStorage(refreshKey, refreshToken);
+      safeWriteStorage(accessKey, null);
+      safeWriteStorage(refreshKey, null);
     },
     clear: () => {
       accessToken = null;
-      refreshToken = null;
       safeWriteStorage(accessKey, null);
       safeWriteStorage(refreshKey, null);
     },
@@ -155,7 +144,7 @@ const refreshAccessToken = async () => {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refreshToken: tokenStorage.getRefresh() }),
+      body: JSON.stringify({}),
     })
       .then(async (response) => {
         if (!response.ok) throw new Error("Refresh failed");
@@ -178,14 +167,13 @@ const refreshAdminAccessToken = async () => {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refreshToken: adminTokenStorage.getRefresh() || undefined }),
+      body: JSON.stringify({}),
     })
       .then(async (response) => {
         if (!response.ok) throw new Error("Refresh failed");
         const data = await response.json();
         adminTokenStorage.setTokens({
           accessToken: data.accessToken,
-          refreshToken: data.refreshToken,
         });
         return data.accessToken;
       })
@@ -203,14 +191,13 @@ const refreshSuperAdminAccessToken = async () => {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refreshToken: superAdminTokenStorage.getRefresh() || undefined }),
+      body: JSON.stringify({}),
     })
       .then(async (response) => {
         if (!response.ok) throw new Error("Refresh failed");
         const data = await response.json();
         superAdminTokenStorage.setTokens({
           accessToken: data.accessToken,
-          refreshToken: data.refreshToken,
         });
         return data.accessToken;
       })
@@ -632,10 +619,10 @@ export const superAdminApiBlobOrJsonRequest = async (path, options = {}) => {
 export const api = {
   login: (body) => apiRequest("/auth/login", { method: "POST", body: JSON.stringify(body) }),
   me: () => apiRequest("/auth/me"),
-  logout: (refreshToken) =>
+  logout: () =>
     apiRequest("/auth/logout", {
       method: "POST",
-      body: JSON.stringify({ refreshToken }),
+      body: JSON.stringify({}),
     }),
   getDashboard: () => apiRequest("/dashboard/summary"),
   getOngoingTests: () => apiRequest("/tests/ongoing"),
@@ -690,10 +677,10 @@ export const adminApi = {
   resetCollegeAdminPassword: (body) =>
     adminApiRequest("/college-admin/auth/reset-password", { method: "POST", body: JSON.stringify(body) }),
   me: () => adminApiRequest("/admin/auth/me"),
-  logout: (refreshToken) =>
+  logout: () =>
     adminApiRequest("/admin/auth/logout", {
       method: "POST",
-      body: JSON.stringify({ refreshToken }),
+      body: JSON.stringify({}),
     }),
   getDashboard: () => adminApiRequest("/admin/dashboard/summary"),
   getTests: (params = "") => adminApiRequest(`/admin/tests${params}`),
@@ -802,16 +789,16 @@ export const adminApi = {
 };
 
 export const superAdminApi = {
-  login: (body) => superAdminApiRequest("/auth/login", { method: "POST", body: JSON.stringify({ ...body, role: "SUPER_ADMIN" }) }),
+  login: (body) => superAdminApiRequest("/super-admin/auth/login", { method: "POST", body: JSON.stringify(body) }),
   forgotPassword: (body) =>
     superAdminApiRequest("/super-admin/auth/forgot-password", { method: "POST", body: JSON.stringify(body) }),
   resetPassword: (body) =>
     superAdminApiRequest("/super-admin/auth/reset-password", { method: "POST", body: JSON.stringify(body) }),
   me: () => superAdminApiRequest("/super-admin/auth/me"),
-  logout: (refreshToken) =>
+  logout: () =>
     superAdminApiRequest("/super-admin/auth/logout", {
       method: "POST",
-      body: JSON.stringify({ refreshToken }),
+      body: JSON.stringify({}),
     }),
   getDashboard: () => superAdminApiRequest("/super-admin/dashboard/summary"),
   getSystemHealth: () => superAdminApiRequest("/super-admin/system/health"),

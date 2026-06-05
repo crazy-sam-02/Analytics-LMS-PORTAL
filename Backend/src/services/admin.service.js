@@ -1,6 +1,6 @@
 const models = require("../models");
 const bcrypt = require("bcrypt");
-const { validateDocument, validateDocuments } = require("./model-validation.service");
+const { validateDocument } = require("./model-validation.service");
 const { UserValidation } = require("../models/validation");
 const { ApiError } = require("../utils/http");
 const { bumpPrincipalTokenVersion, invalidatePrincipalAuthCache } = require("./auth-revocation.service");

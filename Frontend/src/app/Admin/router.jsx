@@ -15,15 +15,17 @@ import EventsPage from "@/pages/Admin/EventsPage";
 import ReportsPage from "@/pages/Admin/ReportsPage";
 import AdminSettingsPage from "@/pages/Admin/SettingsPage";
 import LearningResourcesPage from "@/pages/Admin/LearningResourcesPage";
-import usePermission from "@/hooks/usePermission";
+import CollegeAnalyticsPage from "@/pages/CollegeAdmin/CollegeAnalyticsPage";
 import PermissionDenied from "@/components/Admin/PermissionDenied";
 import { ADMIN_PERMISSIONS } from "@/features/Admin/adminPermissions";
 import { isCollegeAdminRole } from "@/features/Admin/adminRole";
 import HardRedirect from "@/components/common/HardRedirect";
 import { adminApi } from "@/services/api";
 
-function PermissionRoute({ permission, action }) {
-  const allowed = usePermission(permission);
+function PermissionRoute({ permission, permissions, action }) {
+  const effectivePermissions = useSelector((state) => state.adminAuth.permissions || []);
+  const required = permissions || (permission ? [permission] : []);
+  const allowed = required.length === 0 || required.some((item) => effectivePermissions.includes(item));
   return allowed ? <Outlet /> : <PermissionDenied action={action} />;
 }
 
@@ -108,7 +110,7 @@ const router = createBrowserRouter([
               { path: "/admin/dashboard", element: <AdminDashboardPage /> },
               { path: "/admin/tests", element: <ManageTestsPage /> },
               {
-                element: <PermissionRoute permission={ADMIN_PERMISSIONS.EDIT_TEST} action="monitor live tests" />,
+                element: <PermissionRoute permissions={[ADMIN_PERMISSIONS.VIEW_TESTS, ADMIN_PERMISSIONS.EDIT_TEST]} action="monitor live tests" />,
                 children: [{ path: "/admin/tests/:testId/monitoring", element: <LiveMonitoringPage /> }],
               },
               {
@@ -134,6 +136,10 @@ const router = createBrowserRouter([
               {
                 element: <PermissionRoute permission={ADMIN_PERMISSIONS.VIEW_REPORTS} action="view reports" />,
                 children: [{ path: "/admin/reports", element: <ReportsPage /> }],
+              },
+              {
+                element: <PermissionRoute permission={ADMIN_PERMISSIONS.VIEW_ANALYTICS} action="view analytics" />,
+                children: [{ path: "/admin/analytics", element: <CollegeAnalyticsPage /> }],
               },
               { path: "/admin/settings", element: <AdminSettingsPage /> },
             ],

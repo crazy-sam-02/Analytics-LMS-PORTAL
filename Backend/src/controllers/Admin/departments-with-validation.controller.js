@@ -102,8 +102,6 @@ const getDepartmentDetail = asyncHandler(async (req, res) => {
  * Create department with validation
  */
 const createDepartmentHandler = asyncHandler(async (req, res) => {
-  const m = await models.init();
-  const db = m.dbClient;
   const collegeId = req.collegeId;
   const superAdminId = req.user.id;
 
@@ -139,8 +137,6 @@ const createDepartmentHandler = asyncHandler(async (req, res) => {
  * Update department with validation
  */
 const updateDepartmentHandler = asyncHandler(async (req, res) => {
-  const m = await models.init();
-  const db = m.dbClient;
   const collegeId = req.collegeId;
   const superAdminId = req.user.id;
   const { departmentId } = req.params;
@@ -175,8 +171,6 @@ const updateDepartmentHandler = asyncHandler(async (req, res) => {
  * Assign department head with validation
  */
 const assignDepartmentHeadHandler = asyncHandler(async (req, res) => {
-  const m = await models.init();
-  const db = m.dbClient;
   const collegeId = req.collegeId;
   const superAdminId = req.user.id;
   const { departmentId } = req.params;
@@ -220,8 +214,6 @@ const assignDepartmentHeadHandler = asyncHandler(async (req, res) => {
  * Remove department head
  */
 const removeDepartmentHeadHandler = asyncHandler(async (req, res) => {
-  const m = await models.init();
-  const db = m.dbClient;
   const collegeId = req.collegeId;
   const superAdminId = req.user.id;
   const { departmentId } = req.params;
@@ -251,8 +243,6 @@ const removeDepartmentHeadHandler = asyncHandler(async (req, res) => {
  * Toggle department status
  */
 const toggleDepartmentStatusHandler = asyncHandler(async (req, res) => {
-  const m = await models.init();
-  const db = m.dbClient;
   const collegeId = req.collegeId;
   const superAdminId = req.user.id;
   const { departmentId } = req.params;
@@ -284,8 +274,6 @@ const toggleDepartmentStatusHandler = asyncHandler(async (req, res) => {
  * Get department validation metrics
  */
 const getDepartmentMetrics = asyncHandler(async (req, res) => {
-  const m = await models.init();
-  const db = m.dbClient;
   const metrics = await getMetricsSnapshot();
   const deptMetrics = metrics.failures?.DepartmentValidation || {};
 

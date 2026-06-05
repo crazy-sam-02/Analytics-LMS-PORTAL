@@ -66,7 +66,6 @@ const adminLogin = asyncHandler(async (req, res) => {
 
   res.status(200).json({
     accessToken,
-    refreshToken,
     admin: {
       id: admin.id,
       employeeId: admin.employeeId,
@@ -138,7 +137,6 @@ const adminRefresh = asyncHandler(async (req, res) => {
 
   res.status(200).json({
     accessToken: newAccessToken,
-    refreshToken: newRefreshToken,
     sessionId: refreshRecord.id,
   });
 });

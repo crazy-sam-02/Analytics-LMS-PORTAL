@@ -2,6 +2,10 @@ const models = require("../../models");
 const { ApiError, asyncHandler } = require("../../utils/http");
 const { createAuditLog } = require("../../services/audit.service");
 const { getScopedDepartmentId } = require("../../utils/admin-scope");
+const {
+  assertAdminCanViewTest,
+  assertAdminCanControlTest,
+} = require("../../utils/admin-test-access");
 const { invalidatePrincipalAuthCache } = require("../../services/auth-revocation.service");
 
 const parseCsv = (csvText) => {
@@ -422,23 +426,27 @@ const assignTestToBatch = asyncHandler(async (req, res) => {
   const { batchId } = req.body;
 
   const [test, batch] = await Promise.all([
-    db.test.findFirst({ where: { id: testId, collegeId } }),
+    db.test.findFirst({
+      where: { id: testId, collegeId },
+      include: {
+        createdByAdmin: {
+          select: {
+            id: true,
+            role: true,
+          },
+        },
+      },
+    }),
     db.batch.findFirst({ where: { id: batchId, collegeId } }),
   ]);
 
   if (!test || !batch) {
     throw new ApiError(404, "Test or batch not found");
   }
+  await assertAdminCanViewTest({ db, req, test });
   assertAdminDepartmentScope(req, batch.departmentId, "Batch is outside the admin department scope");
 
-  if (test.isGlobal) {
-    throw new ApiError(
-      403,
-      "This test is managed by super admin and cannot be modified by admin",
-      { testId, scope: "SUPER_ADMIN" },
-      "SUPER_ADMIN_TEST_READ_ONLY"
-    );
-  }
+  assertAdminCanControlTest(req, test);
 
   await db.testBatch.upsert({
     where: {
@@ -487,23 +495,27 @@ const assignTestToDepartment = asyncHandler(async (req, res) => {
   const { departmentId } = req.body;
 
   const [test, department] = await Promise.all([
-    db.test.findFirst({ where: { id: testId, collegeId } }),
+    db.test.findFirst({
+      where: { id: testId, collegeId },
+      include: {
+        createdByAdmin: {
+          select: {
+            id: true,
+            role: true,
+          },
+        },
+      },
+    }),
     db.department.findFirst({ where: { id: departmentId, collegeId } }),
   ]);
 
   if (!test || !department) {
     throw new ApiError(404, "Test or department not found");
   }
+  await assertAdminCanViewTest({ db, req, test });
   assertAdminDepartmentScope(req, department.id, "Department is outside the admin department scope");
 
-  if (test.isGlobal) {
-    throw new ApiError(
-      403,
-      "This test is managed by super admin and cannot be modified by admin",
-      { testId, scope: "SUPER_ADMIN" },
-      "SUPER_ADMIN_TEST_READ_ONLY"
-    );
-  }
+  assertAdminCanControlTest(req, test);
 
   // Get all batches in this department
   const batches = await db.batch.findMany({

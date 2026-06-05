@@ -4,7 +4,16 @@ const { verifyAccessToken } = require("../utils/token");
 const memoryBlocklist = new Map();
 const MEMORY_MAX_ENTRIES = 10000;
 
+const isProduction = () => process.env.NODE_ENV === "production";
+
 const buildKey = (jti) => `auth:access:revoked:${jti}`;
+
+const createRedisRequiredError = () => {
+  const error = new Error("Redis is required for access-token revocation in production");
+  error.statusCode = 503;
+  error.code = "ACCESS_TOKEN_REVOCATION_REDIS_REQUIRED";
+  return error;
+};
 
 const getPayloadTtlSeconds = (payload = {}) => {
   const expMs = Number(payload.exp || 0) * 1000;
@@ -43,8 +52,12 @@ const revokeAccessTokenPayload = async (payload = {}) => {
       await redisClient.set(buildKey(jti), "1", "EX", ttlSeconds);
       return true;
     } catch {
-      // Fall through to memory blocklist.
+      if (isProduction()) throw createRedisRequiredError();
     }
+  }
+
+  if (isProduction()) {
+    throw createRedisRequiredError();
   }
 
   memoryBlocklist.set(jti, Date.now() + ttlSeconds * 1000);
@@ -83,8 +96,12 @@ const isAccessTokenRevoked = async (payload = {}) => {
     try {
       return Boolean(await redisClient.exists(buildKey(jti)));
     } catch {
-      // Fall through to memory blocklist.
+      if (isProduction()) throw createRedisRequiredError();
     }
+  }
+
+  if (isProduction()) {
+    throw createRedisRequiredError();
   }
 
   const expiresAt = memoryBlocklist.get(jti);

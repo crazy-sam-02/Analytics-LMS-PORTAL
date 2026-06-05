@@ -1,5 +1,4 @@
 const bcrypt = require("bcrypt");
-const crypto = require("crypto");
 const mongoose = require("mongoose");
 const models = require("../../models");
 const { createAuditLog } = require("../../services/audit.service");
@@ -8,7 +7,6 @@ const { bumpPrincipalTokenVersion, invalidatePrincipalAuthCache } = require("../
 const { ApiError, asyncHandler } = require("../../utils/http");
 const {
   ADMIN_ACCESS_PROFILES,
-  resolvePermissionsFromProfile,
   resolvePermissionsForRole,
 } = require("../../constants/admin-access-profiles");
 const { ROLES, normalizeRole } = require("../../constants/roles");

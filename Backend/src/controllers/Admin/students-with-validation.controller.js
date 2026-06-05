@@ -7,7 +7,6 @@
 
 const models = require("../../models");
 const { asyncHandler, ApiError } = require("../../utils/http");
-const { createAuditLog } = require("../../services/audit.service");
 const {
   createStudent,
   updateStudent,
@@ -133,8 +132,6 @@ const getStudents = asyncHandler(async (req, res) => {
  * Create single student with validation
  */
 const createStudentHandler = asyncHandler(async (req, res) => {
-  const m = await models.init();
-  const db = m.dbClient;
   const collegeId = req.collegeId;
   const adminId = req.admin.id;
 
@@ -175,8 +172,6 @@ const createStudentHandler = asyncHandler(async (req, res) => {
  * Bulk import students from CSV with validation
  */
 const bulkImportStudentsHandler = asyncHandler(async (req, res) => {
-  const m = await models.init();
-  const db = m.dbClient;
   const collegeId = req.collegeId;
   const adminId = req.admin.id;
 
@@ -226,8 +221,6 @@ const bulkImportStudentsHandler = asyncHandler(async (req, res) => {
  * Update student with validation
  */
 const updateStudentHandler = asyncHandler(async (req, res) => {
-  const m = await models.init();
-  const db = m.dbClient;
   const collegeId = req.collegeId;
   const adminId = req.admin.id;
   const { studentId } = req.params;
@@ -262,8 +255,6 @@ const updateStudentHandler = asyncHandler(async (req, res) => {
  * Toggle student status (active/inactive)
  */
 const toggleStudentStatusHandler = asyncHandler(async (req, res) => {
-  const m = await models.init();
-  const db = m.dbClient;
   const collegeId = req.collegeId;
   const adminId = req.admin.id;
   const { studentId } = req.params;
@@ -291,8 +282,6 @@ const toggleStudentStatusHandler = asyncHandler(async (req, res) => {
  * Get validation metrics for student operations
  */
 const getStudentMetrics = asyncHandler(async (req, res) => {
-  const m = await models.init();
-  const db = m.dbClient;
   const metrics = await getMetricsSnapshot();
   const studentMetrics = metrics.failures?.UserValidation || {};
 

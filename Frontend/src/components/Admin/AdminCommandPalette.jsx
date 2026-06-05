@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { adminApi } from "@/services/api";
 import {
@@ -92,7 +92,7 @@ export default function AdminCommandPalette({ open, onOpenChange, basePath = "/a
     };
   }, [open, query]);
 
-  const recentSearches = useMemo(() => readRecentSearches(), [open]);
+  const recentSearches = readRecentSearches();
 
   const navigateToResult = (item) => {
     persistRecentSearch(query.trim());

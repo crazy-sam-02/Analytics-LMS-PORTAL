@@ -48,7 +48,7 @@ const adminLogin = asyncHandler(async (req, res) => {
 
   const permissions = resolveAdminPermissions(admin);
   const accessToken = createAccessToken({ ...admin, permissions });
-  const { refreshToken } = await createRefreshTokenRecord({
+  await createRefreshTokenRecord({
     db,
     modelName: "adminRefreshToken",
     scope: "admin",
@@ -58,7 +58,6 @@ const adminLogin = asyncHandler(async (req, res) => {
 
   res.status(200).json({
     accessToken,
-    refreshToken,
     admin: {
       id: admin.id,
       employeeId: admin.employeeId,
@@ -76,8 +75,6 @@ const adminLogin = asyncHandler(async (req, res) => {
  * Create admin with validation
  */
 const createAdminHandler = asyncHandler(async (req, res) => {
-  const m = await models.init();
-  const db = m.dbClient;
   const collegeId = req.collegeId;
   const superAdminId = req.user.id;
 
@@ -123,8 +120,6 @@ const createAdminHandler = asyncHandler(async (req, res) => {
  * Update admin with validation
  */
 const updateAdminHandler = asyncHandler(async (req, res) => {
-  const m = await models.init();
-  const db = m.dbClient;
   const collegeId = req.collegeId;
   const superAdminId = req.user.id;
   const { adminId } = req.params;
@@ -165,8 +160,6 @@ const updateAdminHandler = asyncHandler(async (req, res) => {
  * Assign permissions to admin
  */
 const assignPermissionsHandler = asyncHandler(async (req, res) => {
-  const m = await models.init();
-  const db = m.dbClient;
   const collegeId = req.collegeId;
   const superAdminId = req.user.id;
   const { adminId } = req.params;
@@ -203,8 +196,6 @@ const assignPermissionsHandler = asyncHandler(async (req, res) => {
  * Toggle admin status
  */
 const toggleAdminStatusHandler = asyncHandler(async (req, res) => {
-  const m = await models.init();
-  const db = m.dbClient;
   const collegeId = req.collegeId;
   const superAdminId = req.user.id;
   const { adminId } = req.params;
@@ -237,8 +228,6 @@ const toggleAdminStatusHandler = asyncHandler(async (req, res) => {
  * Get admin validation metrics
  */
 const getAdminMetrics = asyncHandler(async (req, res) => {
-  const m = await models.init();
-  const db = m.dbClient;
   const metrics = await getMetricsSnapshot();
   const adminMetrics = metrics.failures?.UserValidation || {};
 

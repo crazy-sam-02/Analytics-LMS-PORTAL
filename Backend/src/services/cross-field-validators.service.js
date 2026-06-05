@@ -176,6 +176,7 @@ async function validateNoDuplicateQuestions(questions) {
         count: normalized.length,
         unique: unique.size,
         duplicateCount: normalized.length - unique.size,
+        duplicates: [...new Set(duplicates)].slice(0, 10),
       },
       "DUPLICATE_QUESTIONS"
     );

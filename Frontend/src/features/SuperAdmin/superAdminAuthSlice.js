@@ -12,21 +12,16 @@ export const loginSuperAdmin = createAsyncThunk("superAdminAuth/login", async (p
   const data = await superAdminApi.login(payload);
   superAdminTokenStorage.setTokens({
     accessToken: data.accessToken,
-    refreshToken: data.refreshToken,
   });
   return data.superAdmin;
 });
 
 export const fetchCurrentSuperAdmin = createAsyncThunk("superAdminAuth/me", async () => {
-  if (!superAdminTokenStorage.getAccess() && !superAdminTokenStorage.getRefresh()) {
-    throw new Error("No saved super admin session");
-  }
-
   return superAdminApi.me();
 });
 
 export const logoutSuperAdmin = createAsyncThunk("superAdminAuth/logout", async () => {
-  await superAdminApi.logout(superAdminTokenStorage.getRefresh());
+  await superAdminApi.logout();
   superAdminTokenStorage.clear();
   return null;
 });

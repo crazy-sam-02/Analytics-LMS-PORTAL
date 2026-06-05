@@ -72,7 +72,6 @@ const performSuperAdminLogin = async (req, res) => {
 
   res.status(200).json({
     accessToken,
-    refreshToken,
     superAdmin: toPublicSuperAdmin(updatedSuperAdmin),
   });
 };
@@ -127,7 +126,6 @@ const superAdminRefresh = asyncHandler(async (req, res) => {
 
   res.status(200).json({
     accessToken,
-    refreshToken: newRefreshToken,
     sessionId: refreshRecord.id,
   });
 });

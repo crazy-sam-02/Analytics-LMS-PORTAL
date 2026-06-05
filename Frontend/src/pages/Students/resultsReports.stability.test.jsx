@@ -76,7 +76,7 @@ describe("Student results and reports pages", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("Result Summary")).toBeInTheDocument();
+      expect(screen.getAllByText("Result Summary").length).toBeGreaterThan(0);
     });
   });
 

@@ -18,21 +18,21 @@ export default function ProfilePage() {
 
   const profileQuery = useQuery(profileQueryOptions());
   const user = profileQuery.data;
-  const batchLabel = useMemo(() => {
+  const batchLabel = (() => {
     if (Array.isArray(user?.batches) && user.batches.length > 0) {
       return user.batches.map((batch) => batch?.name).filter(Boolean).join(", ") || "-";
     }
 
     return user?.batch?.name || user?.batch || "-";
-  }, [user?.batch, user?.batches]);
+  })();
 
-  const yearLabel = useMemo(() => {
+  const yearLabel = (() => {
     if (user?.year === null || typeof user?.year === "undefined" || user?.year === "") {
       return "-";
     }
 
     return `${user.year} YEAR`;
-  }, [user?.year]);
+  })();
 
   const uploadMutation = useMutation({
     mutationFn: (file) => studentApi.uploadMyAvatar(file),

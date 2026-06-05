@@ -8,6 +8,8 @@ const AUTH_CACHE_TTL_SECONDS = 120;
 const memoryCache = new Map();
 const MEMORY_MAX_ENTRIES = 2000;
 
+const isProduction = () => process.env.NODE_ENV === "production";
+
 const buildKey = (role, userId) => `auth:${role}:${userId}`;
 
 /**
@@ -15,7 +17,9 @@ const buildKey = (role, userId) => `auth:${role}:${userId}`;
  */
 const sanitizeForCache = (user) => {
   if (!user) return null;
-  const { passwordHash, password, ...safe } = user;
+  const safe = { ...user };
+  delete safe.passwordHash;
+  delete safe.password;
   return safe;
 };
 
@@ -53,8 +57,12 @@ const getCachedUser = async (role, userId) => {
       }
       return null;
     } catch {
-      // Fall through to memory
+      if (isProduction()) return null;
     }
+  }
+
+  if (isProduction()) {
+    return null;
   }
 
   const entry = memoryCache.get(key);
@@ -81,8 +89,12 @@ const setCachedUser = async (role, userId, user) => {
       await redisClient.set(key, JSON.stringify(safe), "EX", AUTH_CACHE_TTL_SECONDS);
       return;
     } catch {
-      // Fall through to memory
+      if (isProduction()) return;
     }
+  }
+
+  if (isProduction()) {
+    return;
   }
 
   memoryCache.set(key, {
@@ -99,7 +111,9 @@ const invalidateCachedUser = async (role, userId) => {
   if (!userId) return;
 
   const key = buildKey(role, userId);
-  memoryCache.delete(key);
+  if (!isProduction()) {
+    memoryCache.delete(key);
+  }
 
   if (isRedisAvailable()) {
     try {
