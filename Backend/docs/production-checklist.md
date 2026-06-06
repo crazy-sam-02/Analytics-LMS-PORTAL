@@ -21,7 +21,7 @@ This project is deployment-capable only after the production checks below pass a
 3. Set `METRICS_TOKEN` to a strong random value or explicitly set `METRICS_ENABLED=false`.
 4. Set `FRONTEND_ORIGIN` to the real HTTPS origin only.
 5. Confirm `MONGODB_URI` uses `MONGO_APP_USERNAME`, not `MONGO_INITDB_ROOT_USERNAME`, and includes `replicaSet=rs0`.
-6. Set `RESEND_API_KEY`, keep `RESEND_FROM_EMAIL=noreply@analyticsedify.com`, set `PASSWORD_RESET_DELIVERY_MODE=resend`, and confirm all password-reset frontend URLs use `https://analyticsedify.com`; never enable `PASSWORD_RESET_RETURN_TOKEN` in production.
+6. Set `RESEND_API_KEY`, keep `RESEND_FROM_EMAIL=noreply@analyticsedify.com`, set `PASSWORD_RESET_DELIVERY_MODE=resend`, and confirm all password-reset frontend URLs use `https://lms.analyticsedify.com`; never enable `PASSWORD_RESET_RETURN_TOKEN` in production.
 7. Keep `REDIS_MAXMEMORY_POLICY=noeviction`; tune `REDIS_MAXMEMORY` after the 500 and 1000 user load tests.
 8. Create the initial SuperAdmin with `npm run create -- --name="Prionex Owner" --email="owner@prionex.com" --password="StrongPassword123!"`; do not store SuperAdmin credentials in environment files.
 9. Run `npm run verify` and confirm at least one active SuperAdmin and no more than five total SuperAdmins.
@@ -44,7 +44,7 @@ This project is deployment-capable only after the production checks below pass a
 
 **NGINX And SSL**
 
-- Replace `lms.example.com` in `deploy/nginx/lms-portal.conf`.
+- Replace `lms.analyticsedify.com` in `deploy/nginx/lms-portal.conf`.
 - Install the file in `/etc/nginx/sites-available/lms-portal`.
 - Symlink it to `/etc/nginx/sites-enabled/lms-portal`.
 - Issue certificates with Certbot and verify `nginx -t`.
