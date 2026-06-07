@@ -1,4 +1,4 @@
-name: CI
+kname: CI
 
 on:
   push:
@@ -10,6 +10,17 @@ jobs:
     defaults:
       run:
         working-directory: Backend
+    env:
+      NODE_ENV: test
+      MONGODB_URI: mongodb://localhost:27017/lms_ci_test
+      MONGODB_DB_NAME: lms_ci_test
+      JWT_ACCESS_SECRET: ci_access_secret_123456789012345678901234567890
+      JWT_REFRESH_SECRET: ci_refresh_secret_123456789012345678901234567890
+      FRONTEND_ORIGIN: http://localhost:5173
+      REDIS_ENABLED: false
+      REDIS_QUEUE_ENABLED: false
+      PASSWORD_RESET_DELIVERY_MODE: response
+      PASSWORD_RESET_RETURN_TOKEN: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
