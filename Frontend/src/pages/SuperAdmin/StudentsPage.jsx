@@ -494,51 +494,7 @@ export default function StudentsPage() {
         </CardContent>
       </Card>
 
-      <Card className="rounded-2xl border-border">
-        <CardHeader>
-          <CardTitle>Promote Student Years</CardTitle>
-          <CardDescription>Select a college and confirm before applying the year update.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="grid gap-3 md:grid-cols-3">
-            <select
-              className="h-10 rounded-md border border-border px-3 text-sm"
-              value={yearPromotionCollegeId}
-              onChange={(event) => setYearPromotionCollegeId(event.target.value)}
-            >
-              <option value="">Select college</option>
-              {colleges.filter((college) => college?.isActive !== false).map((college) => (
-                <option key={college.id} value={college.id}>{college.name}</option>
-              ))}
-            </select>
-            <Input
-              placeholder="Type PROMOTE STUDENTS YEAR"
-              value={yearPromotionConfirmation}
-              onChange={(event) => setYearPromotionConfirmation(event.target.value)}
-            />
-            <div className="flex items-center gap-2 rounded-md border border-border px-3 py-2">
-              <Checkbox
-                checked={yearPromotionVerified}
-                onCheckedChange={(checked) => setYearPromotionVerified(Boolean(checked))}
-              />
-              <span className="text-sm text-text-secondary">I understand prior 4th-year accounts will be deactivated.</span>
-            </div>
-          </div>
-
-          <Button
-            className="bg-danger/90 hover:bg-danger"
-            disabled={
-              promoteStudentsYearMutation.isPending ||
-              !yearPromotionCollegeId ||
-              !yearPromotionVerified ||
-              yearPromotionConfirmation.trim() !== YEAR_PROMOTION_CONFIRMATION
-            }
-            onClick={() => promoteStudentsYearMutation.mutate({ collegeId: yearPromotionCollegeId, confirmationText: yearPromotionConfirmation })}
-          >
-            {promoteStudentsYearMutation.isPending ? "Updating..." : "Promote Years for Selected College"}
-          </Button>
-        </CardContent>
-      </Card>
+      
 
       <Card className="rounded-2xl border-border">
         <CardHeader>
@@ -670,6 +626,52 @@ export default function StudentsPage() {
               </div>
             ))}
           </div>
+        </CardContent>
+      </Card>
+
+      <Card className="rounded-2xl border-border">
+        <CardHeader>
+          <CardTitle>Promote Student Years</CardTitle>
+          <CardDescription>Select a college and confirm before applying the year update.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid gap-3 md:grid-cols-3">
+            <select
+              className="h-10 rounded-md border border-border px-3 text-sm"
+              value={yearPromotionCollegeId}
+              onChange={(event) => setYearPromotionCollegeId(event.target.value)}
+            >
+              <option value="">Select college</option>
+              {colleges.filter((college) => college?.isActive !== false).map((college) => (
+                <option key={college.id} value={college.id}>{college.name}</option>
+              ))}
+            </select>
+            <Input
+              placeholder="Type PROMOTE STUDENTS YEAR"
+              value={yearPromotionConfirmation}
+              onChange={(event) => setYearPromotionConfirmation(event.target.value)}
+            />
+            <div className="flex items-center gap-2 rounded-md border border-border px-3 py-2">
+              <Checkbox
+                checked={yearPromotionVerified}
+                onCheckedChange={(checked) => setYearPromotionVerified(Boolean(checked))}
+              />
+              <span className="text-sm text-text-secondary">I understand prior 4th-year accounts will be deactivated.</span>
+            </div>
+          </div>
+
+          <Button
+            className="bg-danger/90 hover:bg-danger"
+            disabled={
+              promoteStudentsYearMutation.isPending ||
+              !yearPromotionCollegeId ||
+              !yearPromotionVerified ||
+              yearPromotionConfirmation.trim() !== YEAR_PROMOTION_CONFIRMATION
+            }
+            onClick={() => promoteStudentsYearMutation.mutate({ collegeId: yearPromotionCollegeId, confirmationText: yearPromotionConfirmation })}
+          >
+            {promoteStudentsYearMutation.isPending ? "Updating..." : "Promote Years for Selected College"}
+          </Button>
         </CardContent>
       </Card>
 
