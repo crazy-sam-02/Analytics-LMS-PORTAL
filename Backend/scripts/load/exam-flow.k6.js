@@ -8,6 +8,8 @@ const STUDENT_IDENTIFIER = __ENV.STUDENT_IDENTIFIER || "";
 const STUDENT_PASSWORD = __ENV.STUDENT_PASSWORD || "";
 const TEST_ID = __ENV.TEST_ID || "";
 const THINK_TIME_SECONDS = Number(__ENV.THINK_TIME_SECONDS || 1);
+const FAILURE_BACKOFF_SECONDS = Number(__ENV.FAILURE_BACKOFF_SECONDS || Math.max(THINK_TIME_SECONDS, 5));
+const ACCESS_TOKEN_TTL_SECONDS = Number(__ENV.ACCESS_TOKEN_TTL_SECONDS || 14 * 60);
 const EXPECT_STATUS = (__ENV.EXPECT_STATUS || "200,201").split(",").map((item) => Number(item.trim()));
 const RUN_SUBMIT = String(__ENV.RUN_SUBMIT || "false").toLowerCase() === "true";
 const DEBUG_FAILURES = String(__ENV.DEBUG_FAILURES || "true").toLowerCase() !== "false";
@@ -101,6 +103,7 @@ const parseStudents = () => {
 };
 
 const students = parseStudents();
+let cachedSession = null;
 
 const pickStudent = () => students[(__VU - 1) % students.length];
 
@@ -129,6 +132,21 @@ const safeJson = (response) => {
   } catch {
     return {};
   }
+};
+
+const getRetryAfterSeconds = (response) => {
+  const headerValue = Number(response.headers?.["Retry-After"] || response.headers?.["retry-after"] || 0);
+  if (Number.isFinite(headerValue) && headerValue > 0) {
+    return headerValue;
+  }
+
+  const bodyValue = Number(safeJson(response)?.details?.retryAfterSeconds || 0);
+  return Number.isFinite(bodyValue) && bodyValue > 0 ? bodyValue : 0;
+};
+
+const sleepAfterFailure = (response) => {
+  const retryAfterSeconds = response ? getRetryAfterSeconds(response) : 0;
+  sleep(Math.min(Math.max(retryAfterSeconds, FAILURE_BACKOFF_SECONDS), 60));
 };
 
 const getFirstQuestionId = (payload) => {
@@ -179,12 +197,16 @@ const selectStartableTestId = (tests) => {
   return selected?.id || null;
 };
 
-export default function examFlow() {
-  if (students.length === 0) {
-    fail("Provide STUDENTS_JSON or STUDENT_IDENTIFIER/STUDENT_PASSWORD for load testing.");
+const getSession = (student) => {
+  const now = Date.now();
+  if (
+    cachedSession?.accessToken &&
+    cachedSession.identifier === student.identifier &&
+    cachedSession.expiresAt > now
+  ) {
+    return cachedSession;
   }
 
-  const student = pickStudent();
   const loginResponse = http.post(
     `${BASE_URL}/api/auth/login`,
     JSON.stringify({ identifier: student.identifier, password: student.password }),
@@ -192,22 +214,55 @@ export default function examFlow() {
   );
 
   if (!expectOk(loginResponse, "login")) {
-    return;
+    sleepAfterFailure(loginResponse);
+    return null;
   }
 
   const loginPayload = safeJson(loginResponse);
   const token = loginPayload.accessToken;
   if (!token) {
     apiFailures.add(1, { route: "login", status: "missing_token" });
+    sleepAfterFailure();
+    return null;
+  }
+
+  cachedSession = {
+    identifier: student.identifier,
+    accessToken: token,
+    expiresAt: now + ACCESS_TOKEN_TTL_SECONDS * 1000,
+  };
+
+  return cachedSession;
+};
+
+export default function examFlow() {
+  if (students.length === 0) {
+    fail("Provide STUDENTS_JSON or STUDENT_IDENTIFIER/STUDENT_PASSWORD for load testing.");
+  }
+
+  const student = pickStudent();
+  const session = getSession(student);
+  if (!session?.accessToken) {
     return;
   }
 
+  const token = session.accessToken;
   const listResponse = http.get(`${BASE_URL}/api/tests/ongoing`, { headers: requestHeaders(token) });
-  expectOk(listResponse, "ongoing_tests");
+  if (!expectOk(listResponse, "ongoing_tests")) {
+    if (listResponse.status === 401 || listResponse.status === 403) {
+      cachedSession = null;
+    }
+    sleepAfterFailure(listResponse);
+    return;
+  }
 
   const selectedTestId = selectStartableTestId(safeJson(listResponse));
   if (!selectedTestId) {
     apiFailures.add(1, { route: "test_selection", status: "missing_test" });
+    if (DEBUG_FAILURES) {
+      console.error("test_selection failed: no startable ongoing test is visible to this student");
+    }
+    sleepAfterFailure();
     return;
   }
 
@@ -221,6 +276,10 @@ export default function examFlow() {
   const started = expectOk(startResponse, "start_test");
   startSuccessRate.add(started);
   if (!started) {
+    if (startResponse.status === 401 || startResponse.status === 403) {
+      cachedSession = null;
+    }
+    sleepAfterFailure(startResponse);
     return;
   }
 
@@ -230,6 +289,7 @@ export default function examFlow() {
 
   if (!submissionId) {
     apiFailures.add(1, { route: "start_test", status: "missing_submission" });
+    sleepAfterFailure();
     return;
   }
 

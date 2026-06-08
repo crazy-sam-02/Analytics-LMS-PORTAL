@@ -43,6 +43,8 @@ npm run load:exam-flow:500
 
 Keep `RUN_SUBMIT=false` for the first large run so repeated test submissions do not consume real attempts. Use a disposable test and disposable students when testing submit behavior.
 
+The exam-flow script logs in once per virtual user, reuses that access token for about 14 minutes, and backs off when a rate-limit response includes `Retry-After`. If you see `api-general` 429 responses during a very small run, first confirm every load-test student can see a startable ongoing test; otherwise the script will repeatedly check `/api/tests/ongoing` and mostly test rate limiting instead of exam throughput.
+
 You can also run a custom profile:
 
 ```powershell
