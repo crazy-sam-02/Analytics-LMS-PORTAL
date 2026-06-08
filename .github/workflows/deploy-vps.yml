@@ -9,11 +9,14 @@ jobs:
 
     steps:
       - name: Configure SSH
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/lms_key
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/lms_key
           chmod 600 ~/.ssh/lms_key
-          ssh-keyscan -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
+          ssh-keyscan -T 20 -H "$VPS_HOST" >> ~/.ssh/known_hosts
 
       - name: Deploy to VPS
         run: |
