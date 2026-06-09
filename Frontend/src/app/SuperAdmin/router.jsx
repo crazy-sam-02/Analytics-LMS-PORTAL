@@ -1,25 +1,76 @@
-import { useEffect } from "react";
+import { Suspense, createElement, lazy, useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { Navigate, Outlet, RouterProvider, createBrowserRouter } from "react-router-dom";
+import { injectReducer } from "@/app/store";
 import { fetchCurrentSuperAdmin } from "@/features/SuperAdmin/superAdminAuthSlice";
-import SuperAdminPortalLayout from "@/components/SuperAdmin/SuperAdminPortalLayout";
 import SuperAdminLoginPage from "@/pages/SuperAdmin/LoginPage";
-import PasswordResetPage from "@/pages/Auth/PasswordResetPage";
-import SuperAdminDashboardPage from "@/pages/SuperAdmin/DashboardPage";
-import CollegesPage from "@/pages/SuperAdmin/CollegesPage";
-import SystemAdministratorsPage from "@/pages/SuperAdmin/SystemAdministratorsPage";
-import AdminsPage from "@/pages/SuperAdmin/AdminsPage";
-import StudentsPage from "@/pages/SuperAdmin/StudentsPage";
-import DepartmentsPage from "@/pages/SuperAdmin/DepartmentsPage";
-import TestsPage from "@/pages/SuperAdmin/TestsPage";
-import BatchesPage from "@/pages/SuperAdmin/BatchesPage";
-import EventsPage from "@/pages/SuperAdmin/EventsPage";
-import ReportsPage from "@/pages/SuperAdmin/ReportsPage";
-import AnalyticsPage from "@/pages/SuperAdmin/AnalyticsPage";
-import SettingsPage from "@/pages/SuperAdmin/SettingsPage";
-import QuestionBankPage from "@/pages/SuperAdmin/QuestionBankPage";
-import LearningResourcesPage from "@/pages/SuperAdmin/LearningResourcesPage";
-import { superAdminApi } from "@/services/api";
+
+const injectSuperAdminReducers = async () => {
+  const [dashboard, panel, ui, questionBank, learningResources] = await Promise.all([
+    import("@/features/SuperAdmin/superAdminDashboardSlice"),
+    import("@/features/SuperAdmin/superAdminPanelSlice"),
+    import("@/features/SuperAdmin/superAdminUiSlice"),
+    import("@/features/SuperAdmin/superQuestionBankSlice"),
+    import("@/features/LearningResources/learningResourcesSlice"),
+  ]);
+
+  injectReducer("superAdminDashboard", dashboard.default);
+  injectReducer("superAdminPanel", panel.default);
+  injectReducer("superAdminUi", ui.default);
+  injectReducer("superQuestionBank", questionBank.default);
+  injectReducer("learningResources", learningResources.default);
+};
+
+const lazyWithSuperAdminReducers = (loader) => lazy(async () => {
+  const [module] = await Promise.all([loader(), injectSuperAdminReducers()]);
+  return module;
+});
+
+const SuperAdminPortalLayout = lazyWithSuperAdminReducers(() => import("@/components/SuperAdmin/SuperAdminPortalLayout"));
+const SuperAdminDashboardPage = lazyWithSuperAdminReducers(() => import("@/pages/SuperAdmin/DashboardPage"));
+const CollegesPage = lazyWithSuperAdminReducers(() => import("@/pages/SuperAdmin/CollegesPage"));
+const SystemAdministratorsPage = lazyWithSuperAdminReducers(() => import("@/pages/SuperAdmin/SystemAdministratorsPage"));
+const AdminsPage = lazyWithSuperAdminReducers(() => import("@/pages/SuperAdmin/AdminsPage"));
+const StudentsPage = lazyWithSuperAdminReducers(() => import("@/pages/SuperAdmin/StudentsPage"));
+const DepartmentsPage = lazyWithSuperAdminReducers(() => import("@/pages/SuperAdmin/DepartmentsPage"));
+const TestsPage = lazyWithSuperAdminReducers(() => import("@/pages/SuperAdmin/TestsPage"));
+const BatchesPage = lazyWithSuperAdminReducers(() => import("@/pages/SuperAdmin/BatchesPage"));
+const EventsPage = lazyWithSuperAdminReducers(() => import("@/pages/SuperAdmin/EventsPage"));
+const ReportsPage = lazyWithSuperAdminReducers(() => import("@/pages/SuperAdmin/ReportsPage"));
+const AnalyticsPage = lazyWithSuperAdminReducers(() => import("@/pages/SuperAdmin/AnalyticsPage"));
+const SettingsPage = lazyWithSuperAdminReducers(() => import("@/pages/SuperAdmin/SettingsPage"));
+const QuestionBankPage = lazyWithSuperAdminReducers(() => import("@/pages/SuperAdmin/QuestionBankPage"));
+const LearningResourcesPage = lazyWithSuperAdminReducers(() => import("@/pages/SuperAdmin/LearningResourcesPage"));
+
+const SuperAdminPasswordResetPage = lazy(async () => {
+  const [{ default: PasswordResetPage }, { superAdminApi }] = await Promise.all([
+    import("@/pages/Auth/PasswordResetPage"),
+    import("@/services/api"),
+  ]);
+
+  return {
+    default: function SuperAdminPasswordResetRoute() {
+      return (
+        <PasswordResetPage
+          portalName="Super Admin"
+          portalLabel="Super admin workspace"
+          loginPath="/super-admin/login"
+          mainPath="/super-admin"
+          requestReset={superAdminApi.forgotPassword}
+          completeReset={superAdminApi.resetPassword}
+        />
+      );
+    },
+  };
+});
+
+function PageRoute({ Page, fallback = <div className="grid min-h-[40vh] place-items-center text-text-secondary">Loading...</div> }) {
+  return (
+    <Suspense fallback={fallback}>
+      {createElement(Page)}
+    </Suspense>
+  );
+}
 
 function SuperAdminBootstrap() {
   const dispatch = useDispatch();
@@ -56,51 +107,33 @@ const router = createBrowserRouter([
       },
       {
         path: "/super-admin/forgot-password",
-        element: (
-          <PasswordResetPage
-            portalName="Super Admin"
-            portalLabel="Super admin workspace"
-            loginPath="/super-admin/login"
-            mainPath="/super-admin"
-            requestReset={superAdminApi.forgotPassword}
-            completeReset={superAdminApi.resetPassword}
-          />
-        ),
+        element: <PageRoute Page={SuperAdminPasswordResetPage} />,
       },
       {
         path: "/super-admin/reset-password",
-        element: (
-          <PasswordResetPage
-            portalName="Super Admin"
-            portalLabel="Super admin workspace"
-            loginPath="/super-admin/login"
-            mainPath="/super-admin"
-            requestReset={superAdminApi.forgotPassword}
-            completeReset={superAdminApi.resetPassword}
-          />
-        ),
+        element: <PageRoute Page={SuperAdminPasswordResetPage} />,
       },
       {
         element: <SuperAdminProtectedRoute />,
         children: [
           {
-            element: <SuperAdminPortalLayout />,
+            element: <PageRoute Page={SuperAdminPortalLayout} fallback={<div className="grid min-h-screen place-items-center text-text-secondary">Loading super admin workspace...</div>} />,
             children: [
               { path: "/super-admin", element: <Navigate to="/super-admin/dashboard" replace /> },
-              { path: "/super-admin/dashboard", element: <SuperAdminDashboardPage /> },
-              { path: "/super-admin/colleges", element: <CollegesPage /> },
-              { path: "/super-admin/system-admins", element: <SystemAdministratorsPage /> },
-              { path: "/super-admin/admins", element: <AdminsPage /> },
-              { path: "/super-admin/students", element: <StudentsPage /> },
-              { path: "/super-admin/departments", element: <DepartmentsPage /> },
-              { path: "/super-admin/tests", element: <TestsPage /> },
-              { path: "/super-admin/question-bank", element: <QuestionBankPage /> },
-              { path: "/super-admin/resources", element: <LearningResourcesPage /> },
-              { path: "/super-admin/batches", element: <BatchesPage /> },
-              { path: "/super-admin/events", element: <EventsPage /> },
-              { path: "/super-admin/reports", element: <ReportsPage /> },
-              { path: "/super-admin/analytics", element: <AnalyticsPage /> },
-              { path: "/super-admin/settings", element: <SettingsPage /> },
+              { path: "/super-admin/dashboard", element: <PageRoute Page={SuperAdminDashboardPage} /> },
+              { path: "/super-admin/colleges", element: <PageRoute Page={CollegesPage} /> },
+              { path: "/super-admin/system-admins", element: <PageRoute Page={SystemAdministratorsPage} /> },
+              { path: "/super-admin/admins", element: <PageRoute Page={AdminsPage} /> },
+              { path: "/super-admin/students", element: <PageRoute Page={StudentsPage} /> },
+              { path: "/super-admin/departments", element: <PageRoute Page={DepartmentsPage} /> },
+              { path: "/super-admin/tests", element: <PageRoute Page={TestsPage} /> },
+              { path: "/super-admin/question-bank", element: <PageRoute Page={QuestionBankPage} /> },
+              { path: "/super-admin/resources", element: <PageRoute Page={LearningResourcesPage} /> },
+              { path: "/super-admin/batches", element: <PageRoute Page={BatchesPage} /> },
+              { path: "/super-admin/events", element: <PageRoute Page={EventsPage} /> },
+              { path: "/super-admin/reports", element: <PageRoute Page={ReportsPage} /> },
+              { path: "/super-admin/analytics", element: <PageRoute Page={AnalyticsPage} /> },
+              { path: "/super-admin/settings", element: <PageRoute Page={SettingsPage} /> },
             ],
           },
         ],

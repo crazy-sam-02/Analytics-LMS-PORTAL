@@ -60,13 +60,19 @@ const replaceSeoBlock = (html, seo) =>
     renderSeoBlock(seo),
   );
 
+const deferStylesheets = (html) =>
+  html.replace(
+    /<link rel="stylesheet" crossorigin href="([^"]+)">/g,
+    `<link rel="preload" crossorigin href="$1" as="style" onload="this.onload=null;this.rel='stylesheet'">\n    <noscript><link rel="stylesheet" crossorigin href="$1"></noscript>`,
+  );
+
 const sourceHtml = await readFile(indexPath, "utf8");
-await writeFile(indexPath, replaceSeoBlock(sourceHtml, LOGIN_SEO.student));
+await writeFile(indexPath, deferStylesheets(replaceSeoBlock(sourceHtml, LOGIN_SEO.student)));
 
 await Promise.all(
   routes.map(async ([route, seo]) => {
     const routeDir = path.join(distRoot, route.replace(/^\//, ""));
     await mkdir(routeDir, { recursive: true });
-    await writeFile(path.join(routeDir, "index.html"), replaceSeoBlock(sourceHtml, seo));
+    await writeFile(path.join(routeDir, "index.html"), deferStylesheets(replaceSeoBlock(sourceHtml, seo)));
   }),
 );

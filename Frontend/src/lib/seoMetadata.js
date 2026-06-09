@@ -1,30 +1,50 @@
 export const SITE_URL = "https://lms.analyticsedify.com";
 export const LOGO_URL = `${SITE_URL}/analytics-logo-final.png`;
 export const TWITTER_HANDLE = "@analyticsedify";
+export const COMPANY_LEGAL_NAME = "Analytics Edifying Solutions Private Limited";
+export const COMPANY_INCORPORATED_DATE = "2017-07-20";
 
 export const STUDENT_LOGIN_STRUCTURED_DATA = {
   "@context": "https://schema.org",
   "@type": "EducationalOrganization",
   name: "Analytics Edify",
+  legalName: COMPANY_LEGAL_NAME,
+  alternateName: ["Analytics LMS", "Analytics Edify LMS"],
   url: SITE_URL,
   logo: LOGO_URL,
+  foundingDate: COMPANY_INCORPORATED_DATE,
+  address: {
+    "@type": "PostalAddress",
+    addressLocality: "Chennai",
+    addressRegion: "Tamil Nadu",
+    addressCountry: "IN",
+  },
+  areaServed: {
+    "@type": "Country",
+    name: "India",
+  },
+  identifier: {
+    "@type": "PropertyValue",
+    propertyID: "Registrar of Companies",
+    value: "Chennai, Tamil Nadu",
+  },
   description:
-    "Analytics Edify LMS — aptitude, coding, communication, and placement training for college students.",
+    "Analytics Edify LMS is operated by Analytics Edifying Solutions Private Limited, an Indian private limited company incorporated on July 20, 2017 and registered with the Registrar of Companies in Chennai, Tamil Nadu. It provides aptitude, coding, communication, and placement training for college students.",
   sameAs: ["https://analyticsedify.com"],
 };
 
 export const LOGIN_SEO = {
   student: {
-    title: "Student Login | Analytics LMS",
+    title: "Student Login | Analytics Edify LMS",
     description:
-      "Log in to your Analytics LMS student portal to access courses, tests, and placement resources.",
+      "Student portal for Analytics Edify LMS by Analytics Edifying Solutions Private Limited, Chennai, for courses, tests, and placement prep.",
     keywords:
-      "Analytics LMS student login, Analytics LMS student portal, LMS student login, online test portal",
+      "Analytics Edifying Solutions Private Limited, Analytics Edify LMS, Analytics LMS student login, Chennai LMS, Tamil Nadu LMS, student portal, online test portal, placement preparation",
     canonicalUrl: `${SITE_URL}/login`,
     robots: "index, follow",
-    ogTitle: "Student Login | Analytics LMS",
+    ogTitle: "Student Login | Analytics Edify LMS",
     ogDescription:
-      "Access your courses, aptitude tests, and placement prep on Analytics LMS.",
+      "Access courses, aptitude tests, and placement preparation from Analytics Edify LMS, operated by Analytics Edifying Solutions Private Limited.",
     ogUrl: `${SITE_URL}/login`,
     structuredData: STUDENT_LOGIN_STRUCTURED_DATA,
   },

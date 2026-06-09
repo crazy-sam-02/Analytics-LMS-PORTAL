@@ -147,6 +147,10 @@ export default function EventsPage() {
               <img
                 src={getEventImageUrl(event, { width: 960, height: 540, crop: "fill" })}
                 alt={sanitizeText(event.title || event.name || "Event")}
+                width="960"
+                height="540"
+                loading="lazy"
+                decoding="async"
                 className="h-44 w-full rounded-xl object-cover"
               />
             ) : (
@@ -204,6 +208,10 @@ export default function EventsPage() {
                 <img
                   src={getEventImageUrl(selectedEvent, { width: 1280, height: 720, crop: "fill" })}
                   alt={sanitizeText(selectedEvent.title || "Event Details")}
+                  width="1280"
+                  height="720"
+                  loading="lazy"
+                  decoding="async"
                   className="h-56 w-full rounded-2xl object-cover"
                 />
               ) : null}

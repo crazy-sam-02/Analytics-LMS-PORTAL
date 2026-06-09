@@ -1,7 +1,14 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import "@fontsource-variable/geist";
+
+@font-face {
+  font-family: "Geist Variable";
+  src: url("/fonts/geist-latin-wght-normal.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
 
 @custom-variant dark (&:is(.dark *));
 
@@ -140,7 +147,7 @@
     }
   body {
     @apply bg-background text-foreground antialiased;
-    letter-spacing: -0.01em;
+    letter-spacing: 0;
     }
   html {
     @apply font-sans;

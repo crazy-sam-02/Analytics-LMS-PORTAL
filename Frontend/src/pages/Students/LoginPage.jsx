@@ -50,18 +50,14 @@ export default function LoginPage() {
           <div className="absolute bottom-33 left-[-10%] h-px w-[120%] rotate-[-28deg] bg-linear-to-r from-transparent via-cyan-300/70 to-transparent shadow-[0_0_22px_rgba(34,211,238,0.8)]" />
           <div className="absolute bottom-18 left-[6%] h-px w-[110%] rotate-[-28deg] bg-linear-to-r from-transparent via-violet-300/65 to-transparent shadow-[0_0_20px_rgba(167,139,250,0.7)]" />
           <div className="absolute top-29 left-[12%] h-px w-[96%] rotate-[-31deg] bg-linear-to-r from-transparent via-blue-200/40 to-transparent" />
-          <img
-            src="/favicon.svg"
-            alt=""
-            aria-hidden="true"
-            className="pointer-events-none absolute left-1/2 top-1/2 h-[440px] w-[440px] -translate-x-1/2 -translate-y-1/2 opacity-[0.07] brightness-0 invert"
-          />
-
           <div className="relative z-10 flex h-full flex-col justify-between">
             <div>
               <img
-                src="/analytics-logo-final.png"
+                src="/analytics-logo-final.webp"
                 alt="Analytics Logo"
+                width="1976"
+                height="630"
+                decoding="async"
                 className="h-11 w-auto max-w-72 object-contain brightness-0 invert"
               />
             </div>

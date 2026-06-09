@@ -354,6 +354,9 @@ export default function EventsPage() {
               <img
                 src={eventImagePreview}
                 alt="Global event preview"
+                width="640"
+                height="320"
+                decoding="async"
                 className="h-44 w-full rounded-xl border border-border object-cover sm:h-52"
               />
             ) : null}
@@ -480,6 +483,10 @@ export default function EventsPage() {
                     <img
                       src={optimizeCloudinaryImage(event.imageUrl, { width: 640, height: 320, crop: "fill" })}
                       alt={`${event.title} cover`}
+                      width="640"
+                      height="320"
+                      loading="lazy"
+                      decoding="async"
                       className={`mb-3 h-28 w-full rounded-lg object-cover ${isExpired ? "grayscale opacity-65" : ""}`}
                     />
                   ) : null}

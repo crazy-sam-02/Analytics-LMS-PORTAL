@@ -45,8 +45,11 @@ function Sidebar({ collapsed, mobile = false, onNavigate, upcomingCount = 0 }) {
       >
         <div className="flex w-full items-center justify-center">
           <img
-            src="/analytics-logo-final.png"
+            src="/analytics-logo-final.webp"
             alt="Analytics Logo"
+            width="1976"
+            height="630"
+            decoding="async"
             className={`h-8 object-contain brightness-0 invert ${collapsed ? "w-10" : "w-full max-w-44"}`}
           />
         </div>

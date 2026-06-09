@@ -1,31 +1,18 @@
-import { Suspense, lazy, useEffect } from "react";
+import { Suspense, createElement, lazy, useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { Navigate, Outlet, RouterProvider, createBrowserRouter } from "react-router-dom";
 import {
   accountInactiveDetected,
   applyRefreshPayload,
-  logoutStudent,
   markInitialized,
   refreshSession,
   sessionExpired,
   setSessionConflict,
 } from "@/features/Students/authSlice";
-import AppShell from "@/components/Studetns/AppShell";
+import { injectReducer } from "@/app/store";
 import OfflineBanner from "@/components/common/OfflineBanner";
 import LoginPage from "@/pages/Students/LoginPage";
-import PasswordResetPage from "@/pages/Auth/PasswordResetPage";
-import MyTestsPage from "@/pages/Students/MyTestsPage";
-import OngoingTestsPage from "@/pages/Students/OngoingTestsPage";
-import UpcomingTestsPage from "@/pages/Students/UpcomingTestsPage";
-import ReportsPage from "@/pages/Students/ReportsPage";
-import LeaderboardPage from "@/pages/Students/LeaderboardPage";
-import SubmissionPage from "@/pages/Students/SubmissionPage";
-import ResultsPage from "@/pages/Students/ResultsPage";
-import ResumeAttemptPage from "@/pages/Students/ResumeAttemptPage";
 import { registerAuthInterceptorHandlers } from "@/services/httpClient";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
-import { studentApi } from "@/services/studentApi";
 
 const STUDENT_ACCESS_TOKEN_KEY = "student_access_token";
 const STUDENT_REFRESH_TOKEN_KEY = "student_refresh_token";
@@ -79,20 +66,70 @@ const clearStudentAuth = () => {
   safeWriteStorage(STUDENT_USER_KEY, null);
 };
 
-const TestEnvironmentPage = lazy(() => import("@/pages/Students/TestEnvironmentPage"));
-const EventsPage = lazy(() => import("@/pages/Students/EventsPage"));
-const LearningResourcesPage = lazy(() => import("@/pages/Students/LearningResourcesPage"));
-const ProfilePage = lazy(() => import("@/pages/Students/ProfilePage"));
-const SettingsPage = lazy(() => import("@/pages/Students/SettingsPage"));
+const injectStudentReducers = async () => {
+  const [portal, test, ui, learningResources] = await Promise.all([
+    import("@/features/Students/portalSlice"),
+    import("@/features/Students/testSlice"),
+    import("@/features/Students/uiSlice"),
+    import("@/features/LearningResources/learningResourcesSlice"),
+  ]);
 
-function PageRoute({ children }) {
-  return <Suspense fallback={<div className="grid min-h-[40vh] place-items-center text-text-secondary">Loading...</div>}>{children}</Suspense>;
-}
+  injectReducer("portal", portal.default);
+  injectReducer("test", test.default);
+  injectReducer("ui", ui.default);
+  injectReducer("learningResources", learningResources.default);
+};
 
-function TestEnvironmentRoute() {
+const lazyWithStudentReducers = (loader) => lazy(async () => {
+  const [module] = await Promise.all([loader(), injectStudentReducers()]);
+  return module;
+});
+
+const AppShell = lazyWithStudentReducers(() => import("@/components/Studetns/AppShell"));
+const MyTestsPage = lazyWithStudentReducers(() => import("@/pages/Students/MyTestsPage"));
+const OngoingTestsPage = lazyWithStudentReducers(() => import("@/pages/Students/OngoingTestsPage"));
+const UpcomingTestsPage = lazyWithStudentReducers(() => import("@/pages/Students/UpcomingTestsPage"));
+const ReportsPage = lazyWithStudentReducers(() => import("@/pages/Students/ReportsPage"));
+const LeaderboardPage = lazyWithStudentReducers(() => import("@/pages/Students/LeaderboardPage"));
+const SubmissionPage = lazyWithStudentReducers(() => import("@/pages/Students/SubmissionPage"));
+const ResultsPage = lazyWithStudentReducers(() => import("@/pages/Students/ResultsPage"));
+const ResumeAttemptPage = lazyWithStudentReducers(() => import("@/pages/Students/ResumeAttemptPage"));
+const TestEnvironmentPage = lazyWithStudentReducers(() => import("@/pages/Students/TestEnvironmentPage"));
+const EventsPage = lazyWithStudentReducers(() => import("@/pages/Students/EventsPage"));
+const LearningResourcesPage = lazyWithStudentReducers(() => import("@/pages/Students/LearningResourcesPage"));
+const ProfilePage = lazyWithStudentReducers(() => import("@/pages/Students/ProfilePage"));
+const SettingsPage = lazyWithStudentReducers(() => import("@/pages/Students/SettingsPage"));
+const SessionConflictDialog = lazy(() => import("@/components/Students/SessionConflictDialog"));
+
+const StudentPasswordResetPage = lazy(async () => {
+  const [{ default: PasswordResetPage }, { studentApi }] = await Promise.all([
+    import("@/pages/Auth/PasswordResetPage"),
+    import("@/services/studentApi"),
+  ]);
+
+  return {
+    default: function StudentPasswordResetRoute() {
+      return (
+        <PasswordResetPage
+          portalName="Student"
+          portalLabel="Student portal"
+          loginPath="/login"
+          mainPath="/"
+          requestReset={studentApi.forgotPassword}
+          completeReset={studentApi.resetPassword}
+          buildForgotPayload={(identifier) => ({ identifier })}
+          identifierLabel="Email or student ID"
+          identifierPlaceholder="student@example.edu or STU123"
+        />
+      );
+    },
+  };
+});
+
+function PageRoute({ Page, fallback = <div className="grid min-h-[40vh] place-items-center text-text-secondary">Loading...</div> }) {
   return (
-    <Suspense fallback={<div className="grid min-h-screen place-items-center text-text-secondary">Loading secure test environment...</div>}>
-      <TestEnvironmentPage />
+    <Suspense fallback={fallback}>
+      {createElement(Page)}
     </Suspense>
   );
 }
@@ -171,20 +208,9 @@ function AuthBootstrap() {
       <OfflineBanner />
       <Outlet />
       {sessionConflict ? (
-        <Dialog open={sessionConflict} onOpenChange={(open) => dispatch(setSessionConflict(open))}>
-          <DialogContent showCloseButton={false} className="max-w-md">
-            <DialogHeader>
-              <DialogTitle>Session changed in another tab</DialogTitle>
-              <DialogDescription>
-                Your session was updated elsewhere. Please continue with the latest session or logout.
-              </DialogDescription>
-            </DialogHeader>
-            <DialogFooter className="justify-end">
-              <Button variant="outline" onClick={() => dispatch(setSessionConflict(false))}>Continue Here</Button>
-              <Button onClick={() => dispatch(logoutStudent())}>Logout</Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+        <Suspense fallback={null}>
+          <SessionConflictDialog />
+        </Suspense>
       ) : null}
     </>
   );
@@ -210,59 +236,41 @@ const router = createBrowserRouter([
       },
       {
         path: "/forgot-password",
-        element: (
-          <PasswordResetPage
-            portalName="Student"
-            portalLabel="Student portal"
-            loginPath="/login"
-            mainPath="/"
-            requestReset={studentApi.forgotPassword}
-            completeReset={studentApi.resetPassword}
-            buildForgotPayload={(identifier) => ({ identifier })}
-            identifierLabel="Email or student ID"
-            identifierPlaceholder="student@example.edu or STU123"
-          />
-        ),
+        element: <PageRoute Page={StudentPasswordResetPage} />,
       },
       {
         path: "/reset-password",
-        element: (
-          <PasswordResetPage
-            portalName="Student"
-            portalLabel="Student portal"
-            loginPath="/login"
-            mainPath="/"
-            requestReset={studentApi.forgotPassword}
-            completeReset={studentApi.resetPassword}
-            buildForgotPayload={(identifier) => ({ identifier })}
-            identifierLabel="Email or student ID"
-            identifierPlaceholder="student@example.edu or STU123"
-          />
-        ),
+        element: <PageRoute Page={StudentPasswordResetPage} />,
       },
       {
         element: <ProtectedRoute />,
         children: [
           {
-            element: <AppShell />,
+            element: <PageRoute Page={AppShell} fallback={<div className="grid min-h-screen place-items-center text-text-secondary">Loading portal...</div>} />,
             children: [
               { path: "/", element: <Navigate to="/resume" replace /> },
-              { path: "/resume", element: <ResumeAttemptPage /> },
-              { path: "/tests", element: <MyTestsPage /> },
-              { path: "/tests/ongoing", element: <OngoingTestsPage /> },
-              { path: "/tests/upcoming", element: <UpcomingTestsPage /> },
-              { path: "/reports", element: <ReportsPage /> },
-              { path: "/leaderboard", element: <LeaderboardPage /> },
-              { path: "/resources", element: <PageRoute><LearningResourcesPage /></PageRoute> },
-              { path: "/events", element: <PageRoute><EventsPage /></PageRoute> },
-              { path: "/profile", element: <PageRoute><ProfilePage /></PageRoute> },
-              { path: "/settings", element: <PageRoute><SettingsPage /></PageRoute> },
-                { path: "/results/:attemptId", element: <ResultsPage /> },
+              { path: "/resume", element: <PageRoute Page={ResumeAttemptPage} /> },
+              { path: "/tests", element: <PageRoute Page={MyTestsPage} /> },
+              { path: "/tests/ongoing", element: <PageRoute Page={OngoingTestsPage} /> },
+              { path: "/tests/upcoming", element: <PageRoute Page={UpcomingTestsPage} /> },
+              { path: "/reports", element: <PageRoute Page={ReportsPage} /> },
+              { path: "/leaderboard", element: <PageRoute Page={LeaderboardPage} /> },
+              { path: "/resources", element: <PageRoute Page={LearningResourcesPage} /> },
+              { path: "/events", element: <PageRoute Page={EventsPage} /> },
+              { path: "/profile", element: <PageRoute Page={ProfilePage} /> },
+              { path: "/settings", element: <PageRoute Page={SettingsPage} /> },
+              { path: "/results/:attemptId", element: <PageRoute Page={ResultsPage} /> },
             ],
           },
-          { path: "/tests/:testId/take", element: <TestEnvironmentRoute /> },
-          { path: "/test/:attemptId", element: <TestEnvironmentRoute /> },
-          { path: "/submission/:submissionId", element: <SubmissionPage /> },
+          {
+            path: "/tests/:testId/take",
+            element: <PageRoute Page={TestEnvironmentPage} fallback={<div className="grid min-h-screen place-items-center text-text-secondary">Loading secure test environment...</div>} />,
+          },
+          {
+            path: "/test/:attemptId",
+            element: <PageRoute Page={TestEnvironmentPage} fallback={<div className="grid min-h-screen place-items-center text-text-secondary">Loading secure test environment...</div>} />,
+          },
+          { path: "/submission/:submissionId", element: <PageRoute Page={SubmissionPage} /> },
         ],
       },
       { path: "*", element: <Navigate to="/login" replace /> },

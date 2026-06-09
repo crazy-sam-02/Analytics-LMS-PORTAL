@@ -1,32 +1,87 @@
-import { useEffect } from "react";
+import { Suspense, createElement, lazy, useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { Navigate, Outlet, RouterProvider, createBrowserRouter } from "react-router-dom";
+import { injectReducer } from "@/app/store";
 import { fetchCurrentAdmin } from "@/features/Admin/adminAuthSlice";
-import AdminPortalLayout from "@/components/Admin/AdminPortalLayout";
 import AdminLoginPage from "@/pages/Admin/LoginPage";
-import PasswordResetPage from "@/pages/Auth/PasswordResetPage";
-import AdminDashboardPage from "@/pages/Admin/DashboardPage";
-import ManageTestsPage from "@/pages/Admin/ManageTestsPage";
-import LiveMonitoringPage from "@/pages/Admin/LiveMonitoringPage";
-import QuestionBankPage from "@/pages/Admin/QuestionBankPage";
-import BatchesPage from "@/pages/Admin/BatchesPage";
-import StudentsPage from "@/pages/Admin/StudentsPage";
-import EventsPage from "@/pages/Admin/EventsPage";
-import ReportsPage from "@/pages/Admin/ReportsPage";
-import AdminSettingsPage from "@/pages/Admin/SettingsPage";
-import LearningResourcesPage from "@/pages/Admin/LearningResourcesPage";
-import CollegeAnalyticsPage from "@/pages/CollegeAdmin/CollegeAnalyticsPage";
-import PermissionDenied from "@/components/Admin/PermissionDenied";
 import { ADMIN_PERMISSIONS } from "@/features/Admin/adminPermissions";
 import { isCollegeAdminRole } from "@/features/Admin/adminRole";
 import HardRedirect from "@/components/common/HardRedirect";
-import { adminApi } from "@/services/api";
+
+const injectAdminReducers = async () => {
+  const [adminDashboard, adminPanel, testCreation, adminUi, questionBank, reports, learningResources] = await Promise.all([
+    import("@/features/Admin/adminDashboardSlice"),
+    import("@/features/Admin/adminPanelSlice"),
+    import("@/features/Admin/testCreationSlice"),
+    import("@/features/Admin/adminUiSlice"),
+    import("@/features/Admin/questionBankSlice"),
+    import("@/features/Admin/reportsSlice"),
+    import("@/features/LearningResources/learningResourcesSlice"),
+  ]);
+
+  injectReducer("adminDashboard", adminDashboard.default);
+  injectReducer("adminPanel", adminPanel.default);
+  injectReducer("testCreation", testCreation.default);
+  injectReducer("adminUi", adminUi.default);
+  injectReducer("questionBank", questionBank.default);
+  injectReducer("reports", reports.default);
+  injectReducer("learningResources", learningResources.default);
+};
+
+const lazyWithAdminReducers = (loader) => lazy(async () => {
+  const [module] = await Promise.all([loader(), injectAdminReducers()]);
+  return module;
+});
+
+const AdminPortalLayout = lazyWithAdminReducers(() => import("@/components/Admin/AdminPortalLayout"));
+const AdminDashboardPage = lazyWithAdminReducers(() => import("@/pages/Admin/DashboardPage"));
+const ManageTestsPage = lazyWithAdminReducers(() => import("@/pages/Admin/ManageTestsPage"));
+const LiveMonitoringPage = lazyWithAdminReducers(() => import("@/pages/Admin/LiveMonitoringPage"));
+const QuestionBankPage = lazyWithAdminReducers(() => import("@/pages/Admin/QuestionBankPage"));
+const BatchesPage = lazyWithAdminReducers(() => import("@/pages/Admin/BatchesPage"));
+const StudentsPage = lazyWithAdminReducers(() => import("@/pages/Admin/StudentsPage"));
+const EventsPage = lazyWithAdminReducers(() => import("@/pages/Admin/EventsPage"));
+const ReportsPage = lazyWithAdminReducers(() => import("@/pages/Admin/ReportsPage"));
+const AdminSettingsPage = lazyWithAdminReducers(() => import("@/pages/Admin/SettingsPage"));
+const LearningResourcesPage = lazyWithAdminReducers(() => import("@/pages/Admin/LearningResourcesPage"));
+const CollegeAnalyticsPage = lazyWithAdminReducers(() => import("@/pages/CollegeAdmin/CollegeAnalyticsPage"));
+const PermissionDenied = lazy(() => import("@/components/Admin/PermissionDenied"));
+
+const AdminPasswordResetPage = lazy(async () => {
+  const [{ default: PasswordResetPage }, { adminApi }] = await Promise.all([
+    import("@/pages/Auth/PasswordResetPage"),
+    import("@/services/api"),
+  ]);
+
+  return {
+    default: function AdminPasswordResetRoute() {
+      return (
+        <PasswordResetPage
+          portalName="Admin"
+          portalLabel="Admin workspace"
+          loginPath="/admin/login"
+          mainPath="/admin"
+          requestReset={adminApi.forgotPassword}
+          completeReset={adminApi.resetPassword}
+        />
+      );
+    },
+  };
+});
+
+function PageRoute({ Page, fallback = <div className="grid min-h-[40vh] place-items-center text-text-secondary">Loading...</div> }) {
+  return (
+    <Suspense fallback={fallback}>
+      {createElement(Page)}
+    </Suspense>
+  );
+}
 
 function PermissionRoute({ permission, permissions, action }) {
   const effectivePermissions = useSelector((state) => state.adminAuth.permissions || []);
   const required = permissions || (permission ? [permission] : []);
   const allowed = required.length === 0 || required.some((item) => effectivePermissions.includes(item));
-  return allowed ? <Outlet /> : <PermissionDenied action={action} />;
+  return allowed ? <Outlet /> : <PageRoute Page={() => <PermissionDenied action={action} />} />;
 }
 
 function AdminAuthBootstrap() {
@@ -76,72 +131,54 @@ const router = createBrowserRouter([
       },
       {
         path: "/admin/forgot-password",
-        element: (
-          <PasswordResetPage
-            portalName="Admin"
-            portalLabel="Admin workspace"
-            loginPath="/admin/login"
-            mainPath="/admin"
-            requestReset={adminApi.forgotPassword}
-            completeReset={adminApi.resetPassword}
-          />
-        ),
+        element: <PageRoute Page={AdminPasswordResetPage} />,
       },
       {
         path: "/admin/reset-password",
-        element: (
-          <PasswordResetPage
-            portalName="Admin"
-            portalLabel="Admin workspace"
-            loginPath="/admin/login"
-            mainPath="/admin"
-            requestReset={adminApi.forgotPassword}
-            completeReset={adminApi.resetPassword}
-          />
-        ),
+        element: <PageRoute Page={AdminPasswordResetPage} />,
       },
       {
         element: <AdminProtectedRoute />,
         children: [
           {
-            element: <AdminPortalLayout />,
+            element: <PageRoute Page={AdminPortalLayout} fallback={<div className="grid min-h-screen place-items-center text-text-secondary">Loading admin workspace...</div>} />,
             children: [
               { path: "/admin", element: <Navigate to="/admin/dashboard" replace /> },
-              { path: "/admin/dashboard", element: <AdminDashboardPage /> },
-              { path: "/admin/tests", element: <ManageTestsPage /> },
+              { path: "/admin/dashboard", element: <PageRoute Page={AdminDashboardPage} /> },
+              { path: "/admin/tests", element: <PageRoute Page={ManageTestsPage} /> },
               {
                 element: <PermissionRoute permissions={[ADMIN_PERMISSIONS.VIEW_TESTS, ADMIN_PERMISSIONS.EDIT_TEST]} action="monitor live tests" />,
-                children: [{ path: "/admin/tests/:testId/monitoring", element: <LiveMonitoringPage /> }],
+                children: [{ path: "/admin/tests/:testId/monitoring", element: <PageRoute Page={LiveMonitoringPage} /> }],
               },
               {
                 element: <PermissionRoute permission={ADMIN_PERMISSIONS.MANAGE_QUESTIONS} action="access question bank" />,
-                children: [{ path: "/admin/question-bank", element: <QuestionBankPage /> }],
+                children: [{ path: "/admin/question-bank", element: <PageRoute Page={QuestionBankPage} /> }],
               },
               {
                 element: <PermissionRoute permission={ADMIN_PERMISSIONS.VIEW_RESOURCES} action="access learning resources" />,
-                children: [{ path: "/admin/resources", element: <LearningResourcesPage /> }],
+                children: [{ path: "/admin/resources", element: <PageRoute Page={LearningResourcesPage} /> }],
               },
               {
                 element: <PermissionRoute permission={ADMIN_PERMISSIONS.MANAGE_BATCHES} action="manage batches" />,
-                children: [{ path: "/admin/batches", element: <BatchesPage /> }],
+                children: [{ path: "/admin/batches", element: <PageRoute Page={BatchesPage} /> }],
               },
               {
                 element: <PermissionRoute permission={ADMIN_PERMISSIONS.MANAGE_STUDENTS} action="manage students" />,
-                children: [{ path: "/admin/students", element: <StudentsPage /> }],
+                children: [{ path: "/admin/students", element: <PageRoute Page={StudentsPage} /> }],
               },
               {
                 element: <PermissionRoute permission={ADMIN_PERMISSIONS.MANAGE_EVENTS} action="manage events" />,
-                children: [{ path: "/admin/events", element: <EventsPage /> }],
+                children: [{ path: "/admin/events", element: <PageRoute Page={EventsPage} /> }],
               },
               {
                 element: <PermissionRoute permission={ADMIN_PERMISSIONS.VIEW_REPORTS} action="view reports" />,
-                children: [{ path: "/admin/reports", element: <ReportsPage /> }],
+                children: [{ path: "/admin/reports", element: <PageRoute Page={ReportsPage} /> }],
               },
               {
                 element: <PermissionRoute permission={ADMIN_PERMISSIONS.VIEW_ANALYTICS} action="view analytics" />,
-                children: [{ path: "/admin/analytics", element: <CollegeAnalyticsPage /> }],
+                children: [{ path: "/admin/analytics", element: <PageRoute Page={CollegeAnalyticsPage} /> }],
               },
-              { path: "/admin/settings", element: <AdminSettingsPage /> },
+              { path: "/admin/settings", element: <PageRoute Page={AdminSettingsPage} /> },
             ],
           },
         ],
