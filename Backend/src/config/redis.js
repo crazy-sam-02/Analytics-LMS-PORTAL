@@ -18,6 +18,44 @@ const baseRedisOptions = {
   retryStrategy: createRetryStrategy(env.redis.maxRetryDelayMs),
 };
 
+const safeDecode = (value) => {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+};
+
+const buildRedisUrlOptions = (redisUrl = env.redisUrl) => {
+  try {
+    const parsed = new URL(redisUrl);
+    const dbPath = parsed.pathname && parsed.pathname !== "/" ? parsed.pathname.slice(1) : "";
+    const db = dbPath ? Number(dbPath) : undefined;
+    const options = {
+      host: parsed.hostname,
+      port: Number(parsed.port || 6379),
+    };
+
+    if (parsed.username) {
+      options.username = safeDecode(parsed.username);
+    }
+    if (parsed.password) {
+      options.password = safeDecode(parsed.password);
+    }
+    if (Number.isInteger(db) && db >= 0) {
+      options.db = db;
+    }
+    if (parsed.protocol === "rediss:") {
+      options.tls = {};
+    }
+
+    return options;
+  } catch (error) {
+    console.error("Invalid REDIS_URL for Redis queue connection:", error?.message || "invalid url");
+    return null;
+  }
+};
+
 let redisClient = null;
 let redisReady = false;
 let lastRedisError = null;
@@ -105,7 +143,13 @@ const getRedisQueueConnection = () => {
     return null;
   }
 
+  const urlOptions = buildRedisUrlOptions();
+  if (!urlOptions) {
+    return null;
+  }
+
   return {
+    ...urlOptions,
     ...baseRedisOptions,
     maxRetriesPerRequest: null,
     enableOfflineQueue: true,
@@ -119,4 +163,5 @@ module.exports = {
   getRedisHealthSnapshot,
   shutdownRedis,
   getRedisQueueConnection,
+  buildRedisUrlOptions,
 };
