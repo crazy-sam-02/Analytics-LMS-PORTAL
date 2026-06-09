@@ -5,6 +5,12 @@ const { ApiError } = require("../utils/http");
 const { createAuditLog } = require("./audit.service");
 const { getPagination } = require("../utils/pagination");
 const { invalidatePrincipalAuthCache } = require("./auth-revocation.service");
+const {
+  buildDepartmentLookupIndex,
+  getInvalidDepartmentReason,
+  resolveBatchLookup,
+  resolveDepartmentLookup,
+} = require("../utils/student-import");
 
 let Queue = null;
 let Worker = null;
@@ -124,6 +130,13 @@ const processBulkImportJob = async ({ jobId, collegeId, adminId, adminDepartment
   try {
     await db.reportJob.update({ where: { id: jobId }, data: { status: "PROCESSING" } });
 
+    const [departments, batches] = await Promise.all([
+      db.department.findMany({ where: { collegeId } }),
+      db.batch.findMany({ where: { collegeId } }),
+    ]);
+    const departmentIndex = buildDepartmentLookupIndex(departments);
+    const scopedDepartment = adminDepartmentId ? resolveDepartmentLookup(adminDepartmentId, departmentIndex) : null;
+
     for (const row of rows) {
       const fullName = getRowValue(row, ["fullName", "full_name", "name", "studentName", "student_name"]);
       const email = getRowValue(row, ["email", "emailAddress", "email_address", "eMail", "mail"]);
@@ -133,7 +146,7 @@ const processBulkImportJob = async ({ jobId, collegeId, adminId, adminDepartment
       const departmentLookup = getRowValue(row, ["departmentId", "department_id", "department", "departmentName", "department_name", "branch", "branchName"]);
       const batchLookup = getRowValue(row, ["batchId", "batch_id", "batch", "batchName", "batch_name", "section"]);
 
-      if (!fullName || !email || !departmentLookup || !enrollNumber || !year) {
+      if (!fullName || !email || (!departmentLookup && !adminDepartmentId) || !enrollNumber || !year) {
         result.failed += 1;
         result.errors.push({ row: row.__row, reason: "Missing required columns: fullName, email, enrollNumber, department, year" });
         continue;
@@ -150,11 +163,13 @@ const processBulkImportJob = async ({ jobId, collegeId, adminId, adminDepartment
         continue;
       }
 
-      const departmentById = await db.department.findFirst({ where: { id: departmentLookup, collegeId } });
-      const department = departmentById || await db.department.findFirst({ where: { collegeId, name: { equals: departmentLookup, mode: "insensitive" } } });
+      const department = departmentLookup
+        ? resolveDepartmentLookup(departmentLookup, departmentIndex)
+        : scopedDepartment;
+
       if (!department) {
         result.failed += 1;
-        result.errors.push({ row: row.__row, reason: "Invalid department" });
+        result.errors.push({ row: row.__row, reason: getInvalidDepartmentReason(departmentLookup, departments) });
         continue;
       }
 
@@ -164,11 +179,7 @@ const processBulkImportJob = async ({ jobId, collegeId, adminId, adminDepartment
         continue;
       }
 
-      let batch = null;
-      if (batchLookup) {
-        const batchById = await db.batch.findFirst({ where: { id: batchLookup, collegeId, departmentId: department.id } });
-        batch = batchById || await db.batch.findFirst({ where: { collegeId, departmentId: department.id, name: { equals: batchLookup, mode: "insensitive" } } });
-      }
+      const batch = resolveBatchLookup(batchLookup, batches, department.id);
 
       const generatedPassword = createStudentPassword(fullName, enrollNumber);
       const passwordHash = await bcrypt.hash(generatedPassword, 10);
