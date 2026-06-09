@@ -14,6 +14,144 @@ const normalizeCell = (value) => {
 
 const isRowEmpty = (cells = []) => cells.every((value) => normalizeCell(value) === "");
 
+const getXmlNodes = (node, localName) => {
+  const namespaced = Array.from(node.getElementsByTagNameNS?.("*", localName) || []);
+  return namespaced.length > 0 ? namespaced : Array.from(node.getElementsByTagName(localName));
+};
+
+const parseXml = (xmlText) => new DOMParser().parseFromString(xmlText, "application/xml");
+
+const normalizeZipPath = (value) => {
+  const parts = String(value || "")
+    .replace(/\\/g, "/")
+    .replace(/^\/+/, "")
+    .split("/");
+  const resolved = [];
+
+  parts.forEach((part) => {
+    if (!part || part === ".") return;
+    if (part === "..") {
+      resolved.pop();
+      return;
+    }
+    resolved.push(part);
+  });
+
+  return resolved.join("/");
+};
+
+const resolveZipTarget = (basePath, target) => {
+  if (String(target || "").startsWith("/")) {
+    return normalizeZipPath(target);
+  }
+  return normalizeZipPath(`${basePath}/${target}`);
+};
+
+const columnIndexFromRef = (cellRef, fallbackIndex) => {
+  const letters = String(cellRef || "").match(/^[A-Z]+/i)?.[0];
+  if (!letters) {
+    return fallbackIndex;
+  }
+
+  return letters
+    .toUpperCase()
+    .split("")
+    .reduce((total, letter) => total * 26 + letter.charCodeAt(0) - 64, 0) - 1;
+};
+
+const readZipText = (entries, path, decoder) => {
+  const bytes = entries[normalizeZipPath(path)];
+  return bytes ? decoder.decode(bytes) : "";
+};
+
+const readSharedStrings = (entries, decoder) => {
+  const xmlText = readZipText(entries, "xl/sharedStrings.xml", decoder);
+  if (!xmlText) {
+    return [];
+  }
+
+  const doc = parseXml(xmlText);
+  return getXmlNodes(doc, "si").map((item) => getXmlNodes(item, "t").map((node) => node.textContent || "").join(""));
+};
+
+const getCellText = (cell, sharedStrings) => {
+  const type = cell.getAttribute("t");
+  const valueText = getXmlNodes(cell, "v")[0]?.textContent ?? "";
+
+  if (type === "inlineStr") {
+    return getXmlNodes(cell, "t").map((node) => node.textContent || "").join("");
+  }
+
+  if (type === "s") {
+    return sharedStrings[Number(valueText)] ?? "";
+  }
+
+  if (type === "b") {
+    return valueText === "1" ? "TRUE" : valueText === "0" ? "FALSE" : valueText;
+  }
+
+  return valueText;
+};
+
+const readSheetXmlRows = (xmlText, sharedStrings) => {
+  if (!xmlText) {
+    return [];
+  }
+
+  const doc = parseXml(xmlText);
+  return getXmlNodes(doc, "row").map((rowNode) => {
+    const row = [];
+    getXmlNodes(rowNode, "c").forEach((cell, fallbackIndex) => {
+      const colIndex = columnIndexFromRef(cell.getAttribute("r"), fallbackIndex);
+      row[colIndex] = getCellText(cell, sharedStrings);
+    });
+    return row;
+  });
+};
+
+const readXmlWorkbookSheets = async (file) => {
+  const { unzipSync } = await import("fflate");
+  const entries = unzipSync(new Uint8Array(await file.arrayBuffer()));
+  const decoder = new TextDecoder("utf-8");
+  const workbookXml = readZipText(entries, "xl/workbook.xml", decoder);
+  const workbookRelsXml = readZipText(entries, "xl/_rels/workbook.xml.rels", decoder);
+
+  if (!workbookXml || !workbookRelsXml) {
+    return [];
+  }
+
+  const workbookDoc = parseXml(workbookXml);
+  const relsDoc = parseXml(workbookRelsXml);
+  const rels = new Map(
+    getXmlNodes(relsDoc, "Relationship")
+      .map((rel) => [rel.getAttribute("Id"), rel.getAttribute("Target")])
+      .filter(([id, target]) => id && target)
+  );
+  const sharedStrings = readSharedStrings(entries, decoder);
+
+  const sheets = getXmlNodes(workbookDoc, "sheet").map((sheetNode) => {
+    const relId = sheetNode.getAttribute("r:id") || sheetNode.getAttributeNS?.("http://schemas.openxmlformats.org/officeDocument/2006/relationships", "id");
+    const target = rels.get(relId);
+    const sheetPath = target ? resolveZipTarget("xl", target) : "";
+    return {
+      name: sheetNode.getAttribute("name") || "Sheet",
+      rows: readSheetXmlRows(readZipText(entries, sheetPath, decoder), sharedStrings),
+    };
+  });
+
+  if (sheets.length > 0) {
+    return sheets;
+  }
+
+  return Object.keys(entries)
+    .filter((path) => /^xl\/worksheets\/sheet\d+\.xml$/i.test(path))
+    .sort()
+    .map((path, index) => ({
+      name: `Sheet ${index + 1}`,
+      rows: readSheetXmlRows(readZipText(entries, path, decoder), sharedStrings),
+    }));
+};
+
 const toSheetData = (readResult) => {
   if (!Array.isArray(readResult)) {
     return [];
@@ -53,7 +191,7 @@ const getHeaderRowIndex = (rows) => {
   return firstMultiColumnHeader >= 0 ? firstMultiColumnHeader : firstNonEmpty;
 };
 
-const readRowsFromSheets = (sheets) => {
+const getRowsFromSheets = (sheets) => {
   let sawHeader = false;
   let sawDataRows = false;
 
@@ -83,21 +221,21 @@ const readRowsFromSheets = (sheets) => {
       });
 
     if (rows.length > 0) {
-      return rows;
+      return { rows };
     }
 
     sawDataRows = true;
   }
 
   if (!sawHeader) {
-    throw new Error("Selected spreadsheet is missing header columns");
+    return { error: "Selected spreadsheet is missing header columns" };
   }
 
   if (!sawDataRows) {
-    throw new Error("Selected spreadsheet has no data rows");
+    return { error: "Selected spreadsheet has no data rows" };
   }
 
-  throw new Error("Selected spreadsheet has no rows");
+  return { error: "Selected spreadsheet has no rows" };
 };
 
 export const parseSpreadsheetRows = async (file) => {
@@ -112,10 +250,22 @@ export const parseSpreadsheetRows = async (file) => {
 
   const { default: readXlsxFile } = await import("read-excel-file/browser");
   const sheets = toSheetData(await readXlsxFile(file));
-
-  if (sheets.length === 0 || sheets.every((sheet) => !Array.isArray(sheet.rows) || sheet.rows.length === 0)) {
-    throw new Error("Selected spreadsheet has no data rows");
+  const primaryResult = getRowsFromSheets(sheets);
+  if (primaryResult.rows) {
+    return primaryResult.rows;
   }
 
-  return readRowsFromSheets(sheets);
+  try {
+    const xmlResult = getRowsFromSheets(await readXmlWorkbookSheets(file));
+    if (xmlResult.rows) {
+      return xmlResult.rows;
+    }
+
+    throw new Error(xmlResult.error || primaryResult.error || "Selected spreadsheet has no data rows");
+  } catch (error) {
+    if (error?.message && !/Selected spreadsheet/.test(error.message)) {
+      throw new Error(`${primaryResult.error || "Selected spreadsheet has no data rows"}. Save the file as a standard .xlsx workbook and make sure the cells contain typed values.`);
+    }
+    throw error;
+  }
 };
