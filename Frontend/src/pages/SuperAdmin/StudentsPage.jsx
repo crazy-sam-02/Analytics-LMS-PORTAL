@@ -32,6 +32,11 @@ const getRowValue = (row, aliases = []) => {
   return "";
 };
 
+const toCsvCell = (value) => {
+  const cell = String(value ?? "").trim();
+  return /[",\r\n]/.test(cell) ? `"${cell.replace(/"/g, "\"\"")}"` : cell;
+};
+
 const unwrapItems = (response) => {
   if (Array.isArray(response)) return response;
   if (Array.isArray(response?.data)) return response.data;
@@ -127,28 +132,27 @@ export default function StudentsPage() {
     enabled: Boolean(filters.collegeId),
   });
 
-  const toCell = (value) => String(value ?? "").replace(/,/g, " ").trim();
-
   const rowsToCsv = (rows) => {
     const header = ["fullName", "email", "studentId", "enrollNumber", "department", "year", "batch"];
     const lines = rows.map((row) => {
+      const studentId = getRowValue(row, ["studentId", "student_id", "rollNo", "rollNumber", "roll"]);
       const normalized = {
-        fullName: getRowValue(row, ["fullName", "fullname", "name", "studentName"]),
-        email: getRowValue(row, ["email", "emailAddress"]),
-        studentId: getRowValue(row, ["studentId", "student_id", "rollNo", "rollNumber"]),
-        enrollNumber: getRowValue(row, ["enrollNumber", "enroll_number", "enrollmentNumber", "enrollment_no"]),
-        department: getRowValue(row, ["department", "departmentName", "departmentId", "department_id"]),
-        year: getRowValue(row, ["year", "studentYear", "student_year", "academicYear"]),
-        batch: getRowValue(row, ["batch", "batchName", "batchId", "batch_id"]),
+        fullName: getRowValue(row, ["fullName", "full_name", "name", "studentName", "student_name"]),
+        email: getRowValue(row, ["email", "emailAddress", "email_address", "eMail", "mail"]),
+        studentId,
+        enrollNumber: getRowValue(row, ["enrollNumber", "enroll_number", "enrollmentNumber", "enrollment_no", "enrollmentNo"]) || studentId,
+        department: getRowValue(row, ["department", "departmentName", "department_name", "departmentId", "department_id", "branch", "branchName"]),
+        year: getRowValue(row, ["year", "studentYear", "student_year", "academicYear", "academic_year", "yearOfStudy", "year_of_study"]),
+        batch: getRowValue(row, ["batch", "batchName", "batch_name", "batchId", "batch_id", "section"]),
       };
       return [
-        toCell(normalized.fullName),
-        toCell(normalized.email),
-        toCell(normalized.studentId),
-        toCell(normalized.enrollNumber),
-        toCell(normalized.department),
-        toCell(normalized.year),
-        toCell(normalized.batch),
+        toCsvCell(normalized.fullName),
+        toCsvCell(normalized.email),
+        toCsvCell(normalized.studentId),
+        toCsvCell(normalized.enrollNumber),
+        toCsvCell(normalized.department),
+        toCsvCell(normalized.year),
+        toCsvCell(normalized.batch),
       ].join(",");
     });
 

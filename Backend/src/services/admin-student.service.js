@@ -39,6 +39,18 @@ const parseStudentYear = (value) => {
   return Number.isInteger(year) && year >= 1 && year <= 4 ? year : null;
 };
 
+const normalizeColumnKey = (value) => String(value || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
+const getRowValue = (row, aliases = []) => {
+  const aliasSet = new Set(aliases.map(normalizeColumnKey));
+  for (const [key, value] of Object.entries(row || {})) {
+    if (aliasSet.has(normalizeColumnKey(key))) {
+      return String(value ?? "").trim();
+    }
+  }
+  return "";
+};
+
 const parseCsvRecords = (csvText) => {
   const records = [];
   let row = [];
@@ -113,15 +125,15 @@ const processBulkImportJob = async ({ jobId, collegeId, adminId, adminDepartment
     await db.reportJob.update({ where: { id: jobId }, data: { status: "PROCESSING" } });
 
     for (const row of rows) {
-      const fullName = row.fullname || row.name || "";
-      const email = row.email || "";
-      const requestedStudentId = row.studentid || row.student_id || "";
-      const enrollNumber = row.enrollnumber || row.enroll_number || requestedStudentId;
-      const year = parseStudentYear(row.year || row.studentyear || row.student_year || row.academicyear);
-      const departmentName = row.department || row.departmentname || "";
-      const batchName = row.batch || row.batchname || "";
+      const fullName = getRowValue(row, ["fullName", "full_name", "name", "studentName", "student_name"]);
+      const email = getRowValue(row, ["email", "emailAddress", "email_address", "eMail", "mail"]);
+      const requestedStudentId = getRowValue(row, ["studentId", "student_id", "rollNo", "rollNumber", "roll"]);
+      const enrollNumber = getRowValue(row, ["enrollNumber", "enroll_number", "enrollmentNumber", "enrollment_no", "enrollmentNo"]) || requestedStudentId;
+      const year = parseStudentYear(getRowValue(row, ["year", "studentYear", "student_year", "academicYear", "academic_year", "yearOfStudy", "year_of_study"]));
+      const departmentLookup = getRowValue(row, ["departmentId", "department_id", "department", "departmentName", "department_name", "branch", "branchName"]);
+      const batchLookup = getRowValue(row, ["batchId", "batch_id", "batch", "batchName", "batch_name", "section"]);
 
-      if (!fullName || !email || !departmentName || !enrollNumber || !year) {
+      if (!fullName || !email || !departmentLookup || !enrollNumber || !year) {
         result.failed += 1;
         result.errors.push({ row: row.__row, reason: "Missing required columns: fullName, email, enrollNumber, department, year" });
         continue;
@@ -138,7 +150,8 @@ const processBulkImportJob = async ({ jobId, collegeId, adminId, adminDepartment
         continue;
       }
 
-      const department = await db.department.findFirst({ where: { collegeId, name: { equals: departmentName, mode: "insensitive" } } });
+      const departmentById = await db.department.findFirst({ where: { id: departmentLookup, collegeId } });
+      const department = departmentById || await db.department.findFirst({ where: { collegeId, name: { equals: departmentLookup, mode: "insensitive" } } });
       if (!department) {
         result.failed += 1;
         result.errors.push({ row: row.__row, reason: "Invalid department" });
@@ -151,9 +164,11 @@ const processBulkImportJob = async ({ jobId, collegeId, adminId, adminDepartment
         continue;
       }
 
-      const batch = batchName
-        ? await db.batch.findFirst({ where: { collegeId, departmentId: department.id, name: { equals: batchName, mode: "insensitive" } } })
-        : null;
+      let batch = null;
+      if (batchLookup) {
+        const batchById = await db.batch.findFirst({ where: { id: batchLookup, collegeId, departmentId: department.id } });
+        batch = batchById || await db.batch.findFirst({ where: { collegeId, departmentId: department.id, name: { equals: batchLookup, mode: "insensitive" } } });
+      }
 
       const generatedPassword = createStudentPassword(fullName, enrollNumber);
       const passwordHash = await bcrypt.hash(generatedPassword, 10);
