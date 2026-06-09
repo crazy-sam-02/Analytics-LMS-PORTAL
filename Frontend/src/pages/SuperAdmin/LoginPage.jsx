@@ -9,13 +9,10 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { loginSuperAdmin } from "@/features/SuperAdmin/superAdminAuthSlice";
 import { useSeo } from "@/hooks/useSeo";
+import { LOGIN_SEO } from "@/lib/seoMetadata";
 
 export default function SuperAdminLoginPage() {
-  useSeo({
-    title: "Super Admin Login | Analytics LMS | Analystics LMS",
-    description: "Super Admin login for Analytics LMS, also searched as Analystics LMS. Supervise colleges, admins, users, tests, and global analytics.",
-    keywords: "Analystics LMS super admin, Analytics LMS super admin portal, LMS platform admin, global LMS analytics",
-  });
+  useSeo(LOGIN_SEO.superAdmin);
 
   const dispatch = useDispatch();
   const { superAdmin, loading, error } = useSelector((state) => state.superAdminAuth);
@@ -59,7 +56,7 @@ export default function SuperAdminLoginPage() {
           <div className="relative z-10 flex h-full flex-col justify-between">
             <div>
               <img
-                src="/ANALYTICS%20LOGO-%20FINAL.png"
+                src="/analytics-logo-final.png"
                 alt="Analytics Logo"
                 className="h-11 w-auto max-w-72 object-contain brightness-0 invert"
               />

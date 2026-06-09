@@ -10,14 +10,11 @@ import { Button } from "@/components/ui/button";
 import { loginAdmin, logoutAdmin } from "@/features/Admin/adminAuthSlice";
 import { isAdminRole, isCollegeAdminRole, normalizeAdminRole } from "@/features/Admin/adminRole";
 import { useSeo } from "@/hooks/useSeo";
+import { LOGIN_SEO } from "@/lib/seoMetadata";
 import HardRedirect from "@/components/common/HardRedirect";
 
 export default function AdminLoginPage() {
-  useSeo({
-    title: "Admin Login | Analytics LMS | Analystics LMS",
-    description: "Admin login for Analytics LMS, also searched as Analystics LMS. Manage students, assessments, reports, and college-level LMS analytics.",
-    keywords: "Analystics LMS admin login, Analytics LMS admin portal, college LMS admin, assessment management portal",
-  });
+  useSeo(LOGIN_SEO.admin);
 
   const dispatch = useDispatch();
   const { admin, loading, error } = useSelector((state) => state.adminAuth);
@@ -103,7 +100,7 @@ export default function AdminLoginPage() {
           <div className="relative z-10 flex h-full flex-col justify-between">
             <div>
               <img
-                src="/ANALYTICS%20LOGO-%20FINAL.png"
+                src="/analytics-logo-final.png"
                 alt="Analytics Logo"
                 className="h-11 w-auto max-w-72 object-contain brightness-0 invert"
               />

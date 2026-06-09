@@ -84,7 +84,7 @@ export default function AdminSidebar({
       <div className={`mb-6 flex items-start gap-3 ${collapsed ? "justify-center" : "justify-between"}`}>
         <div className="flex min-w-0 flex-1 flex-col items-center rounded-2xl border border-white/10 bg-white/5 px-3 py-4 text-center shadow-[0_18px_40px_-24px_rgba(0,0,0,0.55)] backdrop-blur-sm transition-transform hover:-translate-y-px">
           <img
-            src="/ANALYTICS%20LOGO-%20FINAL.png"
+            src="/analytics-logo-final.png"
             alt="Analytics Logo"
             className={`h-8 object-contain brightness-0 invert ${collapsed ? "w-10" : "w-full max-w-44"}`}
           />

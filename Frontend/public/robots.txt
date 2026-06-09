@@ -1,0 +1,6 @@
+User-agent: *
+Disallow: /admin/
+Disallow: /college-admin/
+Disallow: /super-admin/
+Allow: /
+Sitemap: https://lms.analyticsedify.com/sitemap.xml

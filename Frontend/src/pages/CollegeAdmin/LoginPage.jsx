@@ -20,16 +20,11 @@ import {
   normalizeAdminRole,
 } from "@/features/Admin/adminRole";
 import { useSeo } from "@/hooks/useSeo";
+import { LOGIN_SEO } from "@/lib/seoMetadata";
 import HardRedirect from "@/components/common/HardRedirect";
 
 export default function CollegeAdminLoginPage() {
-  useSeo({
-    title: "College Admin Login | Analytics LMS",
-    description:
-      "College Admin login for Analytics LMS. Manage departments, admins, students, tests, and analytics within your college.",
-    keywords:
-      "college admin login, LMS college admin portal, college scoped analytics",
-  });
+  useSeo(LOGIN_SEO.collegeAdmin);
 
   const dispatch = useDispatch();
   const navigate = useNavigate();
@@ -105,7 +100,7 @@ export default function CollegeAdminLoginPage() {
           <div className="relative z-10 flex h-full flex-col justify-between">
             <div>
               <img
-                src="/ANALYTICS%20LOGO-%20FINAL.png"
+                src="/analytics-logo-final.png"
                 alt="Analytics Logo"
                 className="h-11 w-auto max-w-72 object-contain brightness-0 invert"
               />

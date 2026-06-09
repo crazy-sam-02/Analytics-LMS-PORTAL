@@ -9,13 +9,10 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { loginStudent } from "@/features/Students/authSlice";
 import { useSeo } from "@/hooks/useSeo";
+import { LOGIN_SEO } from "@/lib/seoMetadata";
 
 export default function LoginPage() {
-  useSeo({
-    title: "Student Login | Analytics LMS | Analystics LMS",
-    description: "Student login for Analytics LMS, also searched as Analystics LMS. Access tests, reports, performance metrics, and academic insights.",
-    keywords: "Analystics LMS student login, Analytics LMS student portal, LMS student login, online test portal",
-  });
+  useSeo(LOGIN_SEO.student);
 
   const dispatch = useDispatch();
   const { user, loading, error } = useSelector((state) => state.auth);
@@ -63,7 +60,7 @@ export default function LoginPage() {
           <div className="relative z-10 flex h-full flex-col justify-between">
             <div>
               <img
-                src="/ANALYTICS%20LOGO-%20FINAL.png"
+                src="/analytics-logo-final.png"
                 alt="Analytics Logo"
                 className="h-11 w-auto max-w-72 object-contain brightness-0 invert"
               />
