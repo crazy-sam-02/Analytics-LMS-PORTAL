@@ -23,6 +23,7 @@ import {
   updateRestrictionsField,
   updateTestCreationField,
   validateCurrentStep,
+  createInitialTestCreationState,
 } from "@/features/Admin/testCreationSlice";
 import { fetchAdminTests, fetchBatches, fetchDepartments, fetchStudents } from "@/features/Admin/adminPanelSlice";
 import { fetchSuperColleges } from "@/features/SuperAdmin/superAdminPanelSlice";
@@ -116,7 +117,8 @@ const normalizeId = (value) => String(value ?? "");
 export default function TestCreationDialog({ context = "admin", onCreated }) {
   const dispatch = useDispatch();
   const isSuperAdminContext = context === "super_admin";
-  const testCreation = useSelector((state) => state.testCreation);
+  const fallbackTestCreation = useMemo(() => createInitialTestCreationState(), []);
+  const testCreation = useSelector((state) => state.testCreation) || fallbackTestCreation;
   const departments = useSelector((state) => state.adminPanel?.departments?.data || []);
   const batches = useSelector((state) => state.adminPanel?.batches?.data || []);
   const students = useSelector((state) => state.adminPanel?.students?.data || []);
@@ -125,7 +127,7 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
   const superAdminUser = useSelector((state) => state.superAdminAuth?.superAdmin || null);
   const scopedUser = isSuperAdminContext ? superAdminUser : (adminUser || studentUser);
   const currentUserDeptId = resolveDepartmentId(scopedUser?.departmentId || scopedUser?.department);
-  const colleges = useSelector((state) => state.superAdminPanel.colleges);
+  const colleges = useSelector((state) => state.superAdminPanel?.colleges || []);
   const qbState = useSelector((state) => (isSuperAdminContext ? state.superQuestionBank : state.questionBank));
   const qb = qbState || DEFAULT_QB_STATE;
   const { form, open, step, stepTitles, errors, isSubmitting, questionRenderLimit, mode } = testCreation;

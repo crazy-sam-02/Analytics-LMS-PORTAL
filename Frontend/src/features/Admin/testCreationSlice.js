@@ -71,6 +71,13 @@ const initialState = {
   form: createDefaultForm(),
 };
 
+export const createInitialTestCreationState = () => ({
+  ...initialState,
+  errors: {},
+  stepTitles: [...STEP_TITLES],
+  form: createDefaultForm(),
+});
+
 const parseDateTimeLocal = (value) => {
   if (!value || typeof value !== "string") return null;
 

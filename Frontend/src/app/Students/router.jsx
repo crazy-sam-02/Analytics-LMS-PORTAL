@@ -13,6 +13,7 @@ import { injectReducer } from "@/app/store";
 import OfflineBanner from "@/components/common/OfflineBanner";
 import LoginPage from "@/pages/Students/LoginPage";
 import { registerAuthInterceptorHandlers } from "@/services/httpClient";
+import RouteErrorElement from "@/components/common/RouteErrorElement";
 
 const STUDENT_ACCESS_TOKEN_KEY = "student_access_token";
 const STUDENT_REFRESH_TOKEN_KEY = "student_refresh_token";
@@ -229,6 +230,7 @@ function PublicOnlyRoute() {
 const router = createBrowserRouter([
   {
     element: <AuthBootstrap />,
+    errorElement: <RouteErrorElement />,
     children: [
       {
         element: <PublicOnlyRoute />,

@@ -7,6 +7,7 @@ import AdminLoginPage from "@/pages/Admin/LoginPage";
 import { ADMIN_PERMISSIONS } from "@/features/Admin/adminPermissions";
 import { isCollegeAdminRole } from "@/features/Admin/adminRole";
 import HardRedirect from "@/components/common/HardRedirect";
+import RouteErrorElement from "@/components/common/RouteErrorElement";
 
 const injectAdminReducers = async () => {
   const [adminDashboard, adminPanel, testCreation, adminUi, questionBank, reports, learningResources] = await Promise.all([
@@ -124,6 +125,7 @@ function AdminPublicOnlyRoute() {
 const router = createBrowserRouter([
   {
     element: <AdminAuthBootstrap />,
+    errorElement: <RouteErrorElement />,
     children: [
       {
         element: <AdminPublicOnlyRoute />,

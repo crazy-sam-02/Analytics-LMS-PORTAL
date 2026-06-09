@@ -4,6 +4,7 @@ import { Navigate, Outlet, RouterProvider, createBrowserRouter } from "react-rou
 import { injectReducer } from "@/app/store";
 import { fetchCurrentSuperAdmin } from "@/features/SuperAdmin/superAdminAuthSlice";
 import SuperAdminLoginPage from "@/pages/SuperAdmin/LoginPage";
+import RouteErrorElement from "@/components/common/RouteErrorElement";
 
 const injectSuperAdminReducers = async () => {
   const [dashboard, panel, ui, questionBank, learningResources] = await Promise.all([
@@ -100,6 +101,7 @@ function SuperAdminPublicOnlyRoute() {
 const router = createBrowserRouter([
   {
     element: <SuperAdminBootstrap />,
+    errorElement: <RouteErrorElement />,
     children: [
       {
         element: <SuperAdminPublicOnlyRoute />,
