@@ -114,7 +114,7 @@ const resolveDepartmentId = (departmentRef) => {
 
 const normalizeId = (value) => String(value ?? "");
 
-export default function TestCreationDialog({ context = "admin", onCreated }) {
+export default function TestCreationDialog({ context = "admin", onCreated, hideTrigger = false }) {
   const dispatch = useDispatch();
   const isSuperAdminContext = context === "super_admin";
   const fallbackTestCreation = useMemo(() => createInitialTestCreationState(), []);
@@ -773,7 +773,7 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
     });
 
     try {
-      await dispatch(submitTestCreation()).unwrap();
+      await dispatch(submitTestCreation(nextState)).unwrap();
       if (isSuperAdminContext) {
         if (typeof onCreated === "function") {
           await onCreated();
@@ -900,8 +900,18 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
     ? form.publishState
     : "PUBLISH";
 
+  if (!open && hideTrigger) {
+    return null;
+  }
+
   if (!open) return (
-    <Button onClick={() => dispatch(openTestCreationDialog())} className="bg-primary hover:bg-primary-dark">
+    <Button
+      onClick={() => {
+        dispatch(setTestCreationContext(context));
+        dispatch(openTestCreationDialog());
+      }}
+      className="bg-primary hover:bg-primary-dark"
+    >
       Create Test
     </Button>
   );

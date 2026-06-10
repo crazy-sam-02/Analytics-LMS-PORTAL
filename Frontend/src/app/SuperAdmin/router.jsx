@@ -7,11 +7,12 @@ import SuperAdminLoginPage from "@/pages/SuperAdmin/LoginPage";
 import RouteErrorElement from "@/components/common/RouteErrorElement";
 
 const injectSuperAdminReducers = async () => {
-  const [dashboard, panel, ui, questionBank, learningResources] = await Promise.all([
+  const [dashboard, panel, ui, questionBank, testCreation, learningResources] = await Promise.all([
     import("@/features/SuperAdmin/superAdminDashboardSlice"),
     import("@/features/SuperAdmin/superAdminPanelSlice"),
     import("@/features/SuperAdmin/superAdminUiSlice"),
     import("@/features/SuperAdmin/superQuestionBankSlice"),
+    import("@/features/Admin/testCreationSlice"),
     import("@/features/LearningResources/learningResourcesSlice"),
   ]);
 
@@ -19,6 +20,7 @@ const injectSuperAdminReducers = async () => {
   injectReducer("superAdminPanel", panel.default);
   injectReducer("superAdminUi", ui.default);
   injectReducer("superQuestionBank", questionBank.default);
+  injectReducer("testCreation", testCreation.default);
   injectReducer("learningResources", learningResources.default);
 };
 
@@ -129,6 +131,7 @@ const router = createBrowserRouter([
               { path: "/super-admin/students", element: <PageRoute Page={StudentsPage} /> },
               { path: "/super-admin/departments", element: <PageRoute Page={DepartmentsPage} /> },
               { path: "/super-admin/tests", element: <PageRoute Page={TestsPage} /> },
+              { path: "/super-admin/tests/create", element: <PageRoute Page={TestsPage} /> },
               { path: "/super-admin/question-bank", element: <PageRoute Page={QuestionBankPage} /> },
               { path: "/super-admin/resources", element: <PageRoute Page={LearningResourcesPage} /> },
               { path: "/super-admin/batches", element: <PageRoute Page={BatchesPage} /> },

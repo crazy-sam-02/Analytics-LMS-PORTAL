@@ -401,8 +401,18 @@ export const validateCurrentStep = (state) => {
 
 export const submitTestCreation = createAsyncThunk(
   "testCreation/submit",
-  async (_, { getState, rejectWithValue }) => {
-    const state = getState().testCreation;
+  async (stateSnapshot = null, { getState, rejectWithValue }) => {
+    const currentState = getState().testCreation;
+    const state = stateSnapshot && typeof stateSnapshot === "object"
+      ? {
+          ...currentState,
+          ...stateSnapshot,
+          form: {
+            ...currentState.form,
+            ...(stateSnapshot.form || {}),
+          },
+        }
+      : currentState;
     const { form } = state;
 
     if (!form.questions.length) {
@@ -470,6 +480,7 @@ export const submitTestCreation = createAsyncThunk(
           shuffleAnswers: payload.shuffleAnswers,
           startsAt: payload.startsAt,
           endsAt: payload.endsAt,
+          publishState: payload.publishState,
           collegeIds,
           allColleges: Boolean(form.allColleges),
           assignmentMethod: form.assignmentMethod || "department_wise",

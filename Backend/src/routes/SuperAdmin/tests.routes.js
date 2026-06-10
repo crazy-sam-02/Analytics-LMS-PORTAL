@@ -56,6 +56,6 @@ router.post("/global", authenticateSuperAdmin, superAdminTestCreateLimiter, vali
 router.post("/:testId/clone", authenticateSuperAdmin, superAdminTestCloneLimiter, validate(cloneTestSchema), cloneTestToCollege);
 router.patch("/:testId", authenticateSuperAdmin, superAdminTestUpdateLimiter, validate(updateGlobalTestSchema), updateGlobalTest);
 router.patch("/:testId/status", authenticateSuperAdmin, superAdminTestUpdateLimiter, validate(transitionGlobalTestStatusSchema), transitionGlobalTestStatus);
-router.delete("/:testId", authenticateSuperAdmin, superAdminTestUpdateLimiter, deactivateTest);
+router.delete("/:testId", authenticateSuperAdmin, superAdminTestUpdateLimiter, validate(testIdParamSchema), deactivateTest);
 
 module.exports = router;

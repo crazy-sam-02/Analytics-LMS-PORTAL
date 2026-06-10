@@ -29,6 +29,12 @@ const TRANSITION_ACTION = {
   ARCHIVE: "ARCHIVE",
 };
 
+const PUBLISH_STATE = {
+  DRAFT: "DRAFT",
+  UPCOMING: "UPCOMING",
+  PUBLISH: "PUBLISH",
+};
+
 const ALLOWED_TRANSITIONS = {
   [TEST_STATUS.DRAFT]: [TEST_STATUS.SCHEDULED, TEST_STATUS.LIVE, TEST_STATUS.ARCHIVED],
   [TEST_STATUS.SCHEDULED]: [TEST_STATUS.LIVE, TEST_STATUS.ARCHIVED],
@@ -44,6 +50,67 @@ const normalizeStudentYears = (years) => {
     .map((year) => Number(year))
     .filter((year) => Number.isInteger(year) && year >= 1 && year <= 4))];
   return normalized.length ? normalized.sort((a, b) => a - b) : DEFAULT_STUDENT_YEARS;
+};
+
+const isPublishNow = (publishState) => publishState === PUBLISH_STATE.PUBLISH;
+const isUpcoming = (publishState) => publishState === PUBLISH_STATE.UPCOMING;
+
+const resolveStatus = (publishState, startsAt) => {
+  if (isPublishNow(publishState)) {
+    return startsAt > new Date() ? TEST_STATUS.SCHEDULED : TEST_STATUS.LIVE;
+  }
+
+  if (isUpcoming(publishState)) {
+    return TEST_STATUS.SCHEDULED;
+  }
+
+  return TEST_STATUS.DRAFT;
+};
+
+const resolvePublicationUpdateFields = ({ existing, currentStatus, publishState, startsAt, endsAt }) => {
+  if (!publishState) {
+    return {
+      status: deriveLifecycleStatus({ ...existing, startsAt, endsAt }, new Date()),
+      isPublished: existing.isPublished,
+    };
+  }
+
+  const now = new Date();
+
+  if (publishState === PUBLISH_STATE.DRAFT) {
+    if (currentStatus === TEST_STATUS.LIVE) {
+      throw new ApiError(409, "Live tests cannot be moved back to draft", null, "LIVE_TO_DRAFT_BLOCKED");
+    }
+
+    return {
+      status: TEST_STATUS.DRAFT,
+      isPublished: false,
+    };
+  }
+
+  if (publishState === PUBLISH_STATE.UPCOMING) {
+    if (startsAt <= now) {
+      throw new ApiError(422, "Scheduled tests require a future start date", null, "SCHEDULE_REQUIRES_FUTURE_START");
+    }
+
+    return {
+      status: TEST_STATUS.SCHEDULED,
+      isPublished: true,
+    };
+  }
+
+  if (publishState === PUBLISH_STATE.PUBLISH) {
+    if (startsAt > now) {
+      throw new ApiError(422, "Cannot publish live before start date", null, "LIVE_BEFORE_START_NOT_ALLOWED");
+    }
+
+    return {
+      status: TEST_STATUS.LIVE,
+      isPublished: true,
+    };
+  }
+
+  throw new ApiError(422, `Unsupported publish state ${publishState}`, null, "INVALID_PUBLISH_STATE");
 };
 
 const deriveLifecycleStatus = (test, now = new Date()) => {
@@ -272,6 +339,9 @@ const createGlobalTest = asyncHandler(async (req, res) => {
   let collegeIds = Array.isArray(payload.collegeIds) ? payload.collegeIds : [];
   const assignmentMethod = payload.assignmentMethod || "department_wise";
   const years = normalizeStudentYears(payload.years);
+  const publishState = payload.publishState || PUBLISH_STATE.UPCOMING;
+  const startsAtDate = new Date(payload.startsAt);
+  const endsAtDate = new Date(payload.endsAt);
   const requestedBatchIds = Array.isArray(payload.batchIds) ? payload.batchIds : [];
   const requestedDepartmentIds = assignmentMethod === "department_wise"
     ? (Array.isArray(payload.departmentIds) ? payload.departmentIds : [])
@@ -282,6 +352,18 @@ const createGlobalTest = asyncHandler(async (req, res) => {
     proctoringConfig: payload.proctoringConfig,
     restrictions: payload.restrictions,
   });
+
+  if (Number.isNaN(startsAtDate.getTime()) || Number.isNaN(endsAtDate.getTime())) {
+    throw new ApiError(422, "Invalid startsAt/endsAt values");
+  }
+
+  if (endsAtDate <= startsAtDate) {
+    throw new ApiError(422, "End date/time must be after start date/time", null, "INVALID_END_DATE");
+  }
+
+  if (isPublishNow(publishState) && startsAtDate > new Date()) {
+    throw new ApiError(422, "Cannot publish live before start date", null, "LIVE_BEFORE_START_NOT_ALLOWED");
+  }
 
   if (payload.allColleges) {
     const colleges = await db.college.findMany({ where: { isActive: true }, select: { id: true } });
@@ -458,10 +540,10 @@ const createGlobalTest = asyncHandler(async (req, res) => {
         negativeMarks: Number(payload.negativeMarks || 0),
         shuffleQuestions: Boolean(payload.shuffleQuestions),
         shuffleAnswers: Boolean(payload.shuffleAnswers),
-        startsAt: new Date(payload.startsAt),
-        endsAt: new Date(payload.endsAt),
-        isPublished: true,
-        status: TEST_STATUS.SCHEDULED,
+        startsAt: startsAtDate,
+        endsAt: endsAtDate,
+        isPublished: publishState !== PUBLISH_STATE.DRAFT,
+        status: resolveStatus(publishState, startsAtDate),
         isGlobal: true,
         assignmentMethod,
         years,
@@ -518,6 +600,7 @@ const createGlobalTest = asyncHandler(async (req, res) => {
       title: payload.title,
       colleges: normalizedCollegeIds,
       createdCount: created.length,
+      publishState,
       testType: resolvedTestConfiguration.testType,
       proctoringPreset: resolvedTestConfiguration.proctoringPreset,
     },
@@ -605,8 +688,17 @@ const updateGlobalTest = asyncHandler(async (req, res) => {
   }
 
   const currentStatus = deriveLifecycleStatus(existing);
-  if (currentStatus === TEST_STATUS.ARCHIVED) {
-    throw new ApiError(409, "Archived tests cannot be edited", { currentStatus }, "ARCHIVED_TEST_EDIT_BLOCKED");
+  if (Array.isArray(payload.questions) && currentStatus !== TEST_STATUS.DRAFT) {
+    throw new ApiError(
+      409,
+      "Question mutations are allowed only while test is in draft state",
+      { currentStatus },
+      "QUESTION_EDIT_LOCKED"
+    );
+  }
+
+  if (currentStatus === TEST_STATUS.COMPLETED || currentStatus === TEST_STATUS.ARCHIVED) {
+    throw new ApiError(409, `Test is ${currentStatus.toLowerCase()} and immutable`, { currentStatus }, "TEST_IMMUTABLE");
   }
 
   const startsAt = new Date(payload.startsAt);
@@ -614,6 +706,17 @@ const updateGlobalTest = asyncHandler(async (req, res) => {
   if (Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime())) {
     throw new ApiError(422, "Invalid startsAt/endsAt values");
   }
+  if (endsAt <= startsAt) {
+    throw new ApiError(422, "End date/time must be after start date/time", null, "INVALID_END_DATE");
+  }
+
+  const publicationFields = resolvePublicationUpdateFields({
+    existing,
+    currentStatus,
+    publishState: payload.publishState,
+    startsAt,
+    endsAt,
+  });
   const resolvedTestConfiguration = resolvePersistedTestConfiguration({
     existingTest: existing,
     testType: payload.testType,
@@ -798,6 +901,8 @@ const updateGlobalTest = asyncHandler(async (req, res) => {
             assignedTo: resolvedScope.assignedTo || [],
             startsAt,
             endsAt,
+            status: publicationFields.status,
+            isPublished: publicationFields.isPublished,
             departmentId: assignmentMethod === "department_wise" ? resolvedScope.departmentId : null,
             batchId: resolvedScope.batchIds[0] || null,
             ...resolvedTestConfiguration.persistenceFields,
@@ -826,8 +931,8 @@ const updateGlobalTest = asyncHandler(async (req, res) => {
             shuffleAnswers: Boolean(payload.shuffleAnswers),
             startsAt,
             endsAt,
-            isPublished: existing.isPublished,
-            status: existing.status,
+            isPublished: publicationFields.isPublished,
+            status: publicationFields.status,
             isGlobal: true,
             sourceTestId: rootSourceId,
             assignmentMethod,
@@ -893,6 +998,7 @@ const updateGlobalTest = asyncHandler(async (req, res) => {
       subject: primaryUpdated.subject,
       status: primaryUpdated.status,
       assignmentMethod,
+      publishState: payload.publishState || null,
       updatedCollegeIds,
       createdCollegeIds,
       skippedColleges,
@@ -958,8 +1064,8 @@ const transitionGlobalTestStatus = asyncHandler(async (req, res) => {
   const currentStatus = deriveLifecycleStatus(existing);
   const nextStatus = resolveTransitionTarget(action);
 
-  if (action === TRANSITION_ACTION.GO_LIVE && existing.startsAt && new Date(existing.startsAt) > new Date()) {
-    throw new ApiError(422, "Cannot publish live before start date", null, "LIVE_BEFORE_START_NOT_ALLOWED");
+  if (action === TRANSITION_ACTION.SCHEDULE && existing.startsAt && new Date(existing.startsAt) <= new Date()) {
+    throw new ApiError(409, "Scheduled transition requires a future start date", null, "SCHEDULE_REQUIRES_FUTURE_START");
   }
 
   assertTransition(currentStatus, nextStatus);
@@ -970,6 +1076,7 @@ const transitionGlobalTestStatus = asyncHandler(async (req, res) => {
     data: {
       status: nextStatus,
       isPublished: nextStatus !== TEST_STATUS.ARCHIVED,
+      startsAt: action === TRANSITION_ACTION.GO_LIVE && existing.startsAt > transitionedAt ? transitionedAt : existing.startsAt,
       endsAt: action === TRANSITION_ACTION.COMPLETE ? transitionedAt : existing.endsAt,
     },
   });
@@ -1022,12 +1129,13 @@ const deactivateTest = asyncHandler(async (req, res) => {
     throw new ApiError(404, "Test not found");
   }
 
+  const currentStatus = deriveLifecycleStatus(existing);
   const submissionCount = await db.submission.count({ where: { testId } });
-  if (submissionCount > 0) {
+  if (currentStatus !== TEST_STATUS.DRAFT || submissionCount > 0) {
     throw new ApiError(
       409,
-      "Cannot delete test with submissions. Archive it instead to preserve reporting integrity.",
-      { testId, submissionCount, suggestedAction: TRANSITION_ACTION.ARCHIVE },
+      "Only draft tests with zero submissions can be deleted. Archive this test instead.",
+      { testId, currentStatus, submissionCount, suggestedAction: TRANSITION_ACTION.ARCHIVE },
       "TEST_DELETE_BLOCKED"
     );
   }

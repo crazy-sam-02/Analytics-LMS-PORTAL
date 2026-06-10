@@ -338,6 +338,7 @@ const createGlobalTestSchema = z.object({
     shuffleAnswers: z.boolean().default(false),
     startsAt: z.string().datetime(),
     endsAt: z.string().datetime(),
+    publishState: z.enum(["DRAFT", "UPCOMING", "PUBLISH"]).default("UPCOMING"),
     allColleges: z.boolean().default(false),
     collegeIds: z.array(idSchema).optional().default([]),
     assignmentMethod: z.enum(["department_wise", "batch_wise"]).default("department_wise"),
@@ -356,8 +357,31 @@ const createGlobalTestSchema = z.object({
   params: z.object({}).optional().default({}),
   query: z.object({}).optional().default({}),
 }).superRefine((input, ctx) => {
+  const startsAt = new Date(input.body.startsAt);
+  const endsAt = new Date(input.body.endsAt);
+
+  if (Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime())) {
+    ctx.addIssue({ code: "custom", message: "Invalid start/end date-time format" });
+  } else {
+    if (endsAt <= startsAt) {
+      ctx.addIssue({ code: "custom", message: "End date/time must be after start date/time" });
+    }
+
+    if (input.body.publishState === "UPCOMING" && startsAt <= new Date()) {
+      ctx.addIssue({ code: "custom", message: "Scheduled tests require a future start date" });
+    }
+
+    if (input.body.publishState === "PUBLISH" && startsAt > new Date()) {
+      ctx.addIssue({ code: "custom", message: "Cannot publish live before start date" });
+    }
+  }
+
   if (!input.body.allColleges && (!Array.isArray(input.body.collegeIds) || input.body.collegeIds.length === 0)) {
     ctx.addIssue({ code: "custom", message: "At least one college must be targeted" });
+  }
+
+  if (input.body.assignmentMethod === "department_wise" && (!Array.isArray(input.body.departmentIds) || input.body.departmentIds.length === 0)) {
+    ctx.addIssue({ code: "custom", message: "At least one department must be selected for department-wise assignment" });
   }
 
   if (input.body.assignmentMethod === "batch_wise" && (!Array.isArray(input.body.batchIds) || input.body.batchIds.length === 0)) {
@@ -396,6 +420,7 @@ const updateGlobalTestSchema = z.object({
     shuffleAnswers: z.boolean().default(false),
     startsAt: z.string().datetime(),
     endsAt: z.string().datetime(),
+    publishState: z.enum(["DRAFT", "UPCOMING", "PUBLISH"]).optional(),
     allColleges: z.boolean().default(false),
     collegeIds: z.array(idSchema).optional().default([]),
     assignmentMethod: z.enum(["department_wise", "batch_wise"]).default("batch_wise"),
@@ -416,6 +441,25 @@ const updateGlobalTestSchema = z.object({
   }),
   query: z.object({}).optional().default({}),
 }).superRefine((input, ctx) => {
+  const startsAt = new Date(input.body.startsAt);
+  const endsAt = new Date(input.body.endsAt);
+
+  if (Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime())) {
+    ctx.addIssue({ code: "custom", message: "Invalid start/end date-time format" });
+  } else {
+    if (endsAt <= startsAt) {
+      ctx.addIssue({ code: "custom", message: "End date/time must be after start date/time" });
+    }
+
+    if (input.body.publishState === "UPCOMING" && startsAt <= new Date()) {
+      ctx.addIssue({ code: "custom", message: "Scheduled tests require a future start date" });
+    }
+
+    if (input.body.publishState === "PUBLISH" && startsAt > new Date()) {
+      ctx.addIssue({ code: "custom", message: "Cannot publish live before start date" });
+    }
+  }
+
   if (input.body.assignmentMethod === "department_wise" && (!Array.isArray(input.body.departmentIds) || input.body.departmentIds.length === 0)) {
     ctx.addIssue({ code: "custom", message: "At least one department must be selected for department-wise assignment" });
   }

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useDispatch, useSelector } from "react-redux";
-import { openTestEditDialog } from "@/features/Admin/testCreationSlice";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { openTestCreationDialog, openTestEditDialog, setTestCreationContext } from "@/features/Admin/testCreationSlice";
 import { fetchSuperColleges } from "@/features/SuperAdmin/superAdminPanelSlice";
 import { superAdminApi } from "@/services/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,6 +14,7 @@ import ConfirmActionDialog from "@/components/Admin/ConfirmActionDialog";
 import TestCreationDialog from "@/components/Admin/TestCreationDialog";
 
 const PAGE_SIZE = 10;
+const API_PAGE_SIZE = 100;
 const STATUS_OPTIONS = ["ALL", "DRAFT", "SCHEDULED", "LIVE", "COMPLETED", "ARCHIVED"];
 
 const STATUS_TONE = {
@@ -85,8 +87,42 @@ const transitionConfirmationText = (testTitle, action) => {
   }
 };
 
+const fetchAllPages = async (request, params = {}) => {
+  const loadPage = async (page) => {
+    const query = new URLSearchParams();
+    query.set("page", String(page));
+    query.set("limit", String(API_PAGE_SIZE));
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && String(value).trim() !== "") {
+        query.set(key, String(value));
+      }
+    });
+    return request(`?${query.toString()}`);
+  };
+
+  const firstPage = await loadPage(1);
+  const firstRows = Array.isArray(firstPage?.data) ? firstPage.data : [];
+  const totalPages = Number(firstPage?.pagination?.pages || firstPage?.pagination?.totalPages || 1);
+
+  if (totalPages <= 1) {
+    return firstRows;
+  }
+
+  const restPages = await Promise.all(
+    Array.from({ length: totalPages - 1 }, (_, index) => loadPage(index + 2))
+  );
+
+  return [
+    ...firstRows,
+    ...restPages.flatMap((result) => (Array.isArray(result?.data) ? result.data : [])),
+  ];
+};
+
 export default function TestsPage() {
   const dispatch = useDispatch();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const colleges = useSelector((state) => state.superAdminPanel.colleges);
 
   const [banner, setBanner] = useState({ type: "", title: "", message: "" });
@@ -114,8 +150,8 @@ export default function TestsPage() {
   const loadTests = async () => {
     setLoadingTests(true);
     try {
-      const response = await superAdminApi.getTests("?page=1&limit=100");
-      setTests(Array.isArray(response?.data) ? response.data : []);
+      const rows = await fetchAllPages(superAdminApi.getTests);
+      setTests(Array.from(new Map(rows.map((item) => [item.id, item])).values()));
     } catch (error) {
       setBanner({ type: "error", title: "Failed to load tests", message: error?.message || "Unable to fetch global tests." });
     } finally {
@@ -124,26 +160,13 @@ export default function TestsPage() {
   };
 
   const loadDepartmentDirectory = async () => {
-    let pageCursor = 1;
-    const limit = 100;
     const byId = {};
-
-    while (true) {
-      const response = await superAdminApi.getDepartments(`?page=${pageCursor}&limit=${limit}`);
-      const rows = Array.isArray(response?.data) ? response.data : [];
-      rows.forEach((item) => {
-        if (item?.id) {
-          byId[String(item.id)] = item.name || String(item.id);
-        }
-      });
-
-      const totalPages = Number(response?.pagination?.pages || 1);
-      if (pageCursor >= totalPages) {
-        break;
+    const rows = await fetchAllPages(superAdminApi.getDepartments);
+    rows.forEach((item) => {
+      if (item?.id) {
+        byId[String(item.id)] = item.name || String(item.id);
       }
-
-      pageCursor += 1;
-    }
+    });
 
     setDepartmentNameById(byId);
   };
@@ -155,6 +178,27 @@ export default function TestsPage() {
       setDepartmentNameById({});
     });
   }, [dispatch]);
+
+  useEffect(() => {
+    const isCreateRoute = /\/super-admin\/tests\/create\/?$/.test(location.pathname);
+    const isCreateQuery = searchParams.get("create") === "1";
+
+    if (!isCreateRoute && !isCreateQuery) {
+      return;
+    }
+
+    dispatch(setTestCreationContext("super_admin"));
+    dispatch(openTestCreationDialog());
+
+    if (isCreateRoute) {
+      navigate("/super-admin/tests", { replace: true });
+      return;
+    }
+
+    const nextSearchParams = new URLSearchParams(searchParams);
+    nextSearchParams.delete("create");
+    setSearchParams(nextSearchParams, { replace: true });
+  }, [dispatch, location.pathname, navigate, searchParams, setSearchParams]);
 
   const filteredTests = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -187,15 +231,15 @@ export default function TestsPage() {
       setLoadingScopeOptions(true);
       try {
         if (cloneTarget.assignmentMethod === "department_wise") {
-          const response = await superAdminApi.getDepartments(
-            `?page=1&limit=100&collegeId=${encodeURIComponent(cloneTarget.destinationCollegeId)}`
-          );
-          setScopeOptions(Array.isArray(response?.data) ? response.data : []);
+          const rows = await fetchAllPages(superAdminApi.getDepartments, {
+            collegeId: cloneTarget.destinationCollegeId,
+          });
+          setScopeOptions(rows);
         } else {
-          const response = await superAdminApi.getBatches(
-            `?page=1&limit=100&collegeId=${encodeURIComponent(cloneTarget.destinationCollegeId)}`
-          );
-          setScopeOptions(Array.isArray(response?.data) ? response.data : []);
+          const rows = await fetchAllPages(superAdminApi.getBatches, {
+            collegeId: cloneTarget.destinationCollegeId,
+          });
+          setScopeOptions(rows);
         }
       } catch {
         setScopeOptions([]);
@@ -375,7 +419,10 @@ export default function TestsPage() {
             <CardTitle>Create Global Test</CardTitle>
             <CardDescription>Uses the exact same multi-step workflow and system design as Admin test creation.</CardDescription>
           </div>
-          <TestCreationDialog context="super_admin" onCreated={loadTests} />
+          <Button onClick={() => navigate("/super-admin/tests/create")} className="bg-primary hover:bg-primary-dark">
+            Create Test
+          </Button>
+          <TestCreationDialog context="super_admin" onCreated={loadTests} hideTrigger />
         </CardHeader>
       </Card>
 
@@ -534,7 +581,9 @@ export default function TestsPage() {
             <div className="space-y-2">
               {pagedTests.map((test) => {
                 const submissionCount = Number(test?._count?.submissions || 0);
-                const canDeleteTest = submissionCount === 0;
+                const status = normalizeStatus(test.status);
+                const canOpenFullEditor = status === "DRAFT";
+                const canDeleteTest = status === "DRAFT" && submissionCount === 0;
 
                 return (
                   <div key={test.id} className="flex items-center justify-between gap-2 rounded-xl border border-border px-3 py-2">
@@ -543,7 +592,7 @@ export default function TestsPage() {
                       <p className="text-xs text-text-secondary">{test.subject} | {test.college?.name || "-"}</p>
                       <p className="mt-1">
                         <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${STATUS_TONE[normalizeStatus(test.status)] || STATUS_TONE.DRAFT}`}>
-                          {normalizeStatus(test.status)}
+                          {status}
                         </span>
                       </p>
                       <p className="text-xs text-text-secondary">Questions: {test?._count?.questions || 0} | Attempts: {submissionCount}</p>
@@ -556,7 +605,7 @@ export default function TestsPage() {
                         size="sm"
                         variant="outline"
                         onClick={() => onOpenEdit(test.id)}
-                        disabled={editingTestId === test.id || normalizeStatus(test.status) === "ARCHIVED"}
+                        disabled={editingTestId === test.id || !canOpenFullEditor}
                       >
                         {editingTestId === test.id ? "Opening..." : "Edit Test"}
                       </Button>
@@ -570,7 +619,7 @@ export default function TestsPage() {
                           Delete Test
                         </Button>
                       ) : null}
-                      {transitionsForStatus(normalizeStatus(test.status)).map((transition) => (
+                      {transitionsForStatus(status).map((transition) => (
                         <Button
                           key={`${test.id}-${transition.action}`}
                           size="sm"

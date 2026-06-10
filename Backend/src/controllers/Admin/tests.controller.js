@@ -126,6 +126,52 @@ const resolveStatus = (publishState, startsAt) => {
   return TEST_STATUS.DRAFT;
 };
 
+const resolvePublicationUpdateFields = ({ existing, currentStatus, publishState, startsAt, endsAt }) => {
+  if (!publishState) {
+    return {
+      status: deriveLifecycleStatus({ ...existing, startsAt, endsAt }, new Date()),
+      isPublished: existing.isPublished,
+    };
+  }
+
+  const now = new Date();
+
+  if (publishState === "DRAFT") {
+    if (currentStatus === TEST_STATUS.LIVE) {
+      throw new ApiError(409, "Live tests cannot be moved back to draft", null, "LIVE_TO_DRAFT_BLOCKED");
+    }
+
+    return {
+      status: TEST_STATUS.DRAFT,
+      isPublished: false,
+    };
+  }
+
+  if (publishState === "UPCOMING") {
+    if (startsAt <= now) {
+      throw new ApiError(422, "Scheduled tests require a future start date", null, "SCHEDULE_REQUIRES_FUTURE_START");
+    }
+
+    return {
+      status: TEST_STATUS.SCHEDULED,
+      isPublished: true,
+    };
+  }
+
+  if (publishState === "PUBLISH") {
+    if (startsAt > now) {
+      throw new ApiError(422, "Cannot publish live before start date", null, "LIVE_BEFORE_START_NOT_ALLOWED");
+    }
+
+    return {
+      status: TEST_STATUS.LIVE,
+      isPublished: true,
+    };
+  }
+
+  throw new ApiError(422, `Unsupported publish state ${publishState}`, null, "INVALID_PUBLISH_STATE");
+};
+
 const assertTransition = (currentStatus, nextStatus) => {
   if (currentStatus === nextStatus) {
     return;
@@ -909,6 +955,13 @@ const updateTest = asyncHandler(async (req, res) => {
   const updated = await db.$transaction(async (tx) => {
     const nextStartsAt = req.body.startsAt ? new Date(req.body.startsAt) : existing.startsAt;
     const nextEndsAt = req.body.endsAt ? new Date(req.body.endsAt) : existing.endsAt;
+    const publicationFields = resolvePublicationUpdateFields({
+      existing,
+      currentStatus,
+      publishState: req.body.publishState,
+      startsAt: nextStartsAt,
+      endsAt: nextEndsAt,
+    });
 
     const shouldUpdateAssignment =
       typeof req.body.assignmentMethod !== "undefined"
@@ -975,14 +1028,8 @@ const updateTest = asyncHandler(async (req, res) => {
         ...resolvedTestConfiguration.persistenceFields,
         startsAt: nextStartsAt,
         endsAt: nextEndsAt,
-        status: deriveLifecycleStatus(
-          {
-            ...existing,
-            startsAt: nextStartsAt,
-            endsAt: nextEndsAt,
-          },
-          new Date()
-        ),
+        status: publicationFields.status,
+        isPublished: publicationFields.isPublished,
       },
     });
 
@@ -1037,6 +1084,8 @@ const updateTest = asyncHandler(async (req, res) => {
       endsAt: updated.endsAt,
       departmentId: updated.departmentId,
       batchId: updated.batchId,
+      publishState: req.body.publishState || null,
+      status: updated.status,
       testType: updated.testType,
       proctoringPreset: updated.proctoringPreset,
     },
