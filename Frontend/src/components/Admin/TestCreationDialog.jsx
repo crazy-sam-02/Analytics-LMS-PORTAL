@@ -1168,6 +1168,29 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                       </div>
                     </div>
 
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <label className="flex max-w-md items-center justify-between rounded-xl border border-border bg-muted px-4 py-3">
+                        <span className="text-sm text-text-secondary">Negative Marking</span>
+                        <Switch
+                          checked={Boolean(form.negativeMarkingEnabled)}
+                          onCheckedChange={(value) => dispatch(updateTestCreationField({ key: "negativeMarkingEnabled", value }))}
+                        />
+                      </label>
+                      <div className="space-y-2">
+                        <label className="text-sm text-text-secondary">Marks Deducted Per Wrong Answer</label>
+                        <Input
+                          className="max-w-md"
+                          type="number"
+                          min={0}
+                          step="0.25"
+                          disabled={!form.negativeMarkingEnabled}
+                          value={form.negativeMarks}
+                          onChange={(e) => dispatch(updateTestCreationField({ key: "negativeMarks", value: Number(e.target.value) }))}
+                        />
+                        {errors.negativeMarks ? <p className="text-xs text-danger">{errors.negativeMarks}</p> : null}
+                      </div>
+                    </div>
+
                     <div className="space-y-2">
                       <label className="text-sm text-text-secondary">Overlap Policy</label>
                       <label className="flex max-w-md items-center justify-between rounded-xl border border-warning/30 bg-warning/10/70 px-4 py-3 text-sm text-text-secondary">
@@ -1941,6 +1964,10 @@ export default function TestCreationDialog({ context = "admin", onCreated }) {
                     <label className="flex items-center justify-between rounded-lg bg-muted px-4 py-3">
                       <span className="text-sm text-text-secondary">Shuffle Questions</span>
                       <Switch checked={Boolean(form.shuffleQuestions)} onCheckedChange={(value) => dispatch(updateTestCreationField({ key: "shuffleQuestions", value }))} />
+                    </label>
+                    <label className="flex items-center justify-between rounded-lg bg-muted px-4 py-3">
+                      <span className="text-sm text-text-secondary">Shuffle Answers</span>
+                      <Switch checked={Boolean(form.shuffleAnswers)} onCheckedChange={(value) => dispatch(updateTestCreationField({ key: "shuffleAnswers", value }))} />
                     </label>
                   </div>
 

@@ -4,6 +4,12 @@ const { redisClient, getRedisQueueConnection } = require("../../config/redis");
 const { invalidateRefreshTokenRecord } = require("../../services/refresh-token-cache.service");
 const { bumpPrincipalTokenVersion, invalidatePrincipalAuthCache } = require("../../services/auth-revocation.service");
 const { createAuditLog } = require("../../services/audit.service");
+const {
+  STUDENT_LIFECYCLE_STATUS,
+  isAlumniStatus,
+  promoteStudentsForPassout,
+} = require("../../services/student-lifecycle.service");
+const { appendLifecycleFilters } = require("../../services/report-scope.service");
 const { ApiError, asyncHandler } = require("../../utils/http");
 const { getPagination } = require("../../utils/pagination");
 const {
@@ -352,12 +358,13 @@ const getStudentsGlobal = asyncHandler(async (req, res) => {
     filters.push({ year: Number(year) });
   }
 
-  const where = {
+  const baseWhere = {
     ...(collegeId ? { collegeId } : {}),
     ...(departmentId ? { departmentId } : {}),
     ...(studentId ? { id: studentId } : {}),
     ...(filters.length ? { AND: filters } : {}),
   };
+  const where = req.query.studentScope ? appendLifecycleFilters(baseWhere, req.query) : baseWhere;
 
   const [items, total] = await Promise.all([
     db.student.findMany({
@@ -402,32 +409,20 @@ const promoteStudentsYearGlobal = asyncHandler(async (req, res) => {
   const m = await models.init();
   const db = m.dbClient;
 
-  const result = await db.$transaction(async (tx) => {
-    const prior4 = await tx.student.findMany({ where: { collegeId, year: 4 }, select: { id: true } });
-    const prior4Ids = prior4.map((s) => s.id);
-
-    const step3 = await tx.student.updateMany({ where: { collegeId, year: 3 }, data: { year: 4, isActive: true } });
-    const step2 = await tx.student.updateMany({ where: { collegeId, year: 2 }, data: { year: 3 } });
-    const step1 = await tx.student.updateMany({ where: { collegeId, year: 1 }, data: { year: 2 } });
-
-    let deactivated = { count: 0 };
-    if (prior4Ids.length > 0) {
-      deactivated = await tx.student.updateMany({ where: { collegeId, id: { in: prior4Ids } }, data: { isActive: false } });
-    }
-
-    return { step1, step2, step3, deactivated, prior4Ids };
+  const result = await promoteStudentsForPassout({
+    db,
+    collegeId,
+    actorId: superAdminId,
+    actorType: "SUPER_ADMIN",
+    passoutYear: req.body.passoutYear,
+    academicLabel: req.body.academicLabel,
   });
 
   if (result.prior4Ids?.length) {
     await Promise.all(result.prior4Ids.map((studentId) => revokeStudentRefreshTokens(db, studentId)));
   }
 
-  const summary = {
-    year1To2: result.step1.count || 0,
-    year2To3: result.step2.count || 0,
-    year3To4: result.step3.count || 0,
-    deactivatedPrior4: result.deactivated.count || 0,
-  };
+  const summary = result.summary;
 
   await createAuditLog({
     action: "SUPER_ADMIN_STUDENT_YEAR_PROMOTED",
@@ -438,7 +433,7 @@ const promoteStudentsYearGlobal = asyncHandler(async (req, res) => {
     afterState: summary,
   });
 
-  res.status(200).json({ message: "Student years updated successfully", summary });
+  res.status(200).json({ message: "Student years updated successfully", summary, cohort: result.cohort });
 });
 
 const toggleStudentStatus = asyncHandler(async (req, res) => {
@@ -458,9 +453,18 @@ const toggleStudentStatus = asyncHandler(async (req, res) => {
     }
   }
 
+  if (req.body.isActive === true && isAlumniStatus(existing.lifecycleStatus)) {
+    throw new ApiError(409, "Alumni accounts cannot be reactivated from status toggle", null, "ALUMNI_STUDENT_REACTIVATION_BLOCKED");
+  }
+
   const student = await db.student.update({
     where: { id: studentId },
-    data: { isActive: req.body.isActive },
+    data: {
+      isActive: req.body.isActive,
+      ...(req.body.isActive
+        ? { lifecycleStatus: STUDENT_LIFECYCLE_STATUS.ACTIVE, disabledReason: null, disabledAt: null }
+        : { lifecycleStatus: STUDENT_LIFECYCLE_STATUS.SUSPENDED, disabledReason: "MANUAL_SUSPEND", disabledAt: new Date() }),
+    },
   });
   if (req.body.isActive === false) {
     await revokeStudentRefreshTokens(db, studentId);

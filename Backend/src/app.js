@@ -347,6 +347,32 @@ const buildCoreHealthSnapshot = async () => {
 };
 
 const allowedOrigins = env.frontendOrigins || [env.frontendOrigin].filter(Boolean);
+const unsafeMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+const getOriginFromReferer = (referer) => {
+  if (!referer) return null;
+  try {
+    return new URL(referer).origin;
+  } catch {
+    return null;
+  }
+};
+
+const enforceTrustedOriginForUnsafeMethods = (req, res, next) => {
+  if (!unsafeMethods.has(String(req.method || "").toUpperCase())) {
+    return next();
+  }
+
+  const requestOrigin = req.get("origin") || getOriginFromReferer(req.get("referer"));
+  if (!requestOrigin || allowedOrigins.includes(requestOrigin)) {
+    return next();
+  }
+
+  return res.status(403).json({
+    message: "Untrusted request origin",
+    code: "UNTRUSTED_ORIGIN",
+    requestId: req.id,
+  });
+};
 
 app.use(requestIdMiddleware);
 app.use(
@@ -375,6 +401,7 @@ app.use(
 app.use(express.json({ limit: env.requestBodyLimit }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
+app.use(enforceTrustedOriginForUnsafeMethods);
 app.use(createResponseCacheInvalidationHook());
 
 app.use((req, res, next) => {

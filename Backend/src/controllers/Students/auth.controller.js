@@ -14,6 +14,10 @@ const {
 } = require("../../services/refresh-token-session.service");
 const { revokeAccessTokenFromRequest } = require("../../services/access-token-revocation.service");
 const { requestPasswordReset, resetPasswordWithToken } = require("../../services/password-reset.service");
+const {
+  canStudentAuthenticate,
+  normalizeStudentLifecycleStatus,
+} = require("../../services/student-lifecycle.service");
 
 const STUDENT_REFRESH_COOKIE = "student_refresh_token";
 const getEnrollmentDisplay = (user = {}) => user.enrollNumber || user.enrollmentNumber || user.studentId;
@@ -31,6 +35,8 @@ const buildStudentProfilePayload = (user = {}) => ({
   department: user.department,
   college: user.college,
   preferences: user.preferences,
+  lifecycleStatus: normalizeStudentLifecycleStatus(user.lifecycleStatus),
+  isActive: user.isActive !== false,
 });
 
 const getRefreshCookieOptions = ({ keepLoggedIn = true } = {}) => ({
@@ -86,7 +92,7 @@ const login = asyncHandler(async (req, res) => {
     throw new ApiError(401, "Password is wrong", null, "PASSWORD_WRONG");
   }
 
-  if (!user.isActive) {
+  if (!canStudentAuthenticate(user)) {
     throw new ApiError(403, "Account is inactive", null, "ACCOUNT_INACTIVE");
   }
 
@@ -148,7 +154,7 @@ const refresh = asyncHandler(async (req, res) => {
     throw new ApiError(401, "Invalid refresh token");
   }
 
-  if (!userRecord.isActive) {
+  if (!canStudentAuthenticate(userRecord)) {
     throw new ApiError(403, "Account is inactive", null, "ACCOUNT_INACTIVE");
   }
 

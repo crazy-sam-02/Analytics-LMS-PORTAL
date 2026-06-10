@@ -3,6 +3,7 @@ const ASSIGNMENT_METHOD = {
   DEPARTMENT_WISE: "department_wise",
   BATCH_WISE: "batch_wise",
 };
+const { isCurrentStudent } = require("./student-lifecycle.service");
 
 const normalizeIds = (values = []) =>
   Array.isArray(values) ? values.filter(Boolean).map((value) => String(value)) : [];
@@ -13,6 +14,10 @@ const getStudentBatchIds = (student) =>
   [...new Set(normalizeIds([...(student?.batchIds || []), student?.batchId]))];
 
 const buildStudentAssignmentScope = (student) => {
+  if (!isCurrentStudent(student)) {
+    return { id: "__NO_ACTIVE_STUDENT_TESTS__" };
+  }
+
   const userBatchIds = getStudentBatchIds(student);
   const userDepartmentId = student?.departmentId || null;
   const userYear = Number(student?.year);
@@ -102,6 +107,10 @@ const buildStudentAssignmentScope = (student) => {
 };
 
 const isStudentAssignedToTest = ({ test, student, hasBatchAssignment = false }) => {
+  if (!isCurrentStudent(student)) {
+    return false;
+  }
+
   const testCollegeId = String(test?.collegeId || "");
   const studentCollegeId = String(student?.collegeId || "");
   if (!testCollegeId || testCollegeId !== studentCollegeId) {

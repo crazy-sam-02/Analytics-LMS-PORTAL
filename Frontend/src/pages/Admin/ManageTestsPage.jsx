@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { useLocation, useNavigate } from "react-router-dom";
 import { fetchAdminTests, transitionAdminTestStatus, deleteAdminTest } from "@/features/Admin/adminPanelSlice";
-import { openTestEditDialog } from "@/features/Admin/testCreationSlice";
+import { openTestCreationDialog, openTestEditDialog } from "@/features/Admin/testCreationSlice";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -132,6 +132,22 @@ export default function ManageTestsPage() {
   const basePath = location.pathname.startsWith("/college-admin") ? "/college-admin" : "/admin";
   const canTransition = canEdit || canPublish;
   const canMonitor = canViewTests || canEdit;
+
+  useEffect(() => {
+    if (!canCreate) {
+      return;
+    }
+
+    const searchParams = new URLSearchParams(location.search);
+    if (searchParams.get("create") !== "1") {
+      return;
+    }
+
+    dispatch(openTestCreationDialog());
+    searchParams.delete("create");
+    const nextSearch = searchParams.toString();
+    navigate(nextSearch ? `${location.pathname}?${nextSearch}` : location.pathname, { replace: true });
+  }, [canCreate, dispatch, location.pathname, location.search, navigate]);
 
   const queryString = useMemo(() => {
     const query = new URLSearchParams();

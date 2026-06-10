@@ -7,6 +7,7 @@ const { createSuperReportSchema, reportJobParamSchema } = require("../../schemas
 const {
 	generateSuperReport,
 	getSuperReportAnalytics,
+	getPassoutCohorts,
 	getSuperReportJobs,
 	downloadSuperReport,
 	regenerateSuperReportLink,
@@ -34,6 +35,7 @@ const superReportReadLimiter = createRateLimiter({
 
 router.post("/generate", authenticateSuperAdmin, superReportLimiter, validate(createSuperReportSchema), generateSuperReport);
 router.get("/", authenticateSuperAdmin, superReportReadLimiter, getSuperReportJobs);
+router.get("/passout-cohorts", authenticateSuperAdmin, superReportReadLimiter, getPassoutCohorts);
 router.get("/analytics", authenticateSuperAdmin, superReportReadLimiter, getSuperReportAnalytics);
 router.get("/anomalies/escalations", authenticateSuperAdmin, superReportReadLimiter, getEscalatedAnomalies);
 router.post("/jobs/:reportJobId/regenerate-link", authenticateSuperAdmin, superReportLimiter, validate(reportJobParamSchema), regenerateSuperReportLink);

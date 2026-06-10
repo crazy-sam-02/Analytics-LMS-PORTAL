@@ -16,6 +16,7 @@ const {
 const {
 	generateReport,
 	getReportJobs,
+	getPassoutCohorts,
 	getReportJobStatus,
 	getReportAnalytics,
 	getReportSummaryDashboard,
@@ -48,6 +49,7 @@ const adminReportReadLimiter = createRateLimiter({
 });
 
 router.get("/", authenticatePlatformAdmin, adminReportReadLimiter, requirePermission("view_reports"), getReportJobs);
+router.get("/passout-cohorts", authenticatePlatformAdmin, adminReportReadLimiter, requirePermission("view_reports"), getPassoutCohorts);
 router.get("/summary", authenticatePlatformAdmin, adminReportReadLimiter, requirePermission("view_reports"), requireSameDepartment(), validate(reportDashboardQuerySchema), getReportSummaryDashboard);
 router.get("/charts", authenticatePlatformAdmin, adminReportReadLimiter, requirePermission("view_reports"), requireSameDepartment(), validate(reportDashboardQuerySchema), getReportChartsDashboard);
 router.get("/table", authenticatePlatformAdmin, adminReportReadLimiter, requirePermission("view_reports"), requireSameDepartment(), validate(reportDashboardQuerySchema), getReportTableDashboard);

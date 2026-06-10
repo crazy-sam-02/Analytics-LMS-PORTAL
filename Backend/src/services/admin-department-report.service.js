@@ -1,5 +1,6 @@
 const PASS_THRESHOLD_PERCENT = 40;
 const { clampPercent } = require("../utils/score");
+const { buildStudentLifecycleWhere, buildReportScopeMetadata } = require("./report-scope.service");
 
 const toNumber = (value) => (Number.isFinite(Number(value)) ? Number(value) : 0);
 
@@ -103,6 +104,7 @@ const buildDepartmentReportPayload = async ({ db, job }) => {
   const batchId = filters.batchId ? String(filters.batchId) : null;
   const testId = filters.testId ? String(filters.testId) : null;
   const year = filters.year ? Number(filters.year) : null;
+  const studentLifecycleWhere = buildStudentLifecycleWhere(filters);
 
   const departmentBatches = await db.batch.findMany({
     where: { collegeId, departmentId },
@@ -136,6 +138,7 @@ const buildDepartmentReportPayload = async ({ db, job }) => {
   const studentWhere = {
     collegeId,
     departmentId,
+    ...studentLifecycleWhere,
     ...(year ? { year } : {}),
     ...(batchId ? { OR: [{ batchId }, { batchIds: { in: [batchId] } }] } : {}),
   };
@@ -152,6 +155,7 @@ const buildDepartmentReportPayload = async ({ db, job }) => {
         academicYear: resolveAcademicYear({ filters, batch: scopedBatch }),
         logoUrl: resolveLogoUrl(filters),
         hasSelectedTest: Boolean(testId),
+        reportScope: buildReportScopeMetadata(filters),
       },
       kpis: {
         totalStudents,
@@ -183,6 +187,7 @@ const buildDepartmentReportPayload = async ({ db, job }) => {
       status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
       ...(submissionDateFilter ? { submittedAt: submissionDateFilter } : {}),
       user: {
+        ...studentLifecycleWhere,
         departmentId,
         ...(year ? { year } : {}),
         ...(batchId ? { OR: [{ batchId }, { batchIds: { in: [batchId] } }] } : {}),
@@ -277,6 +282,7 @@ const buildDepartmentReportPayload = async ({ db, job }) => {
       academicYear: resolveAcademicYear({ filters, batch: scopedBatch }),
       logoUrl: resolveLogoUrl(filters),
       hasSelectedTest: Boolean(testId),
+      reportScope: buildReportScopeMetadata(filters),
     },
     kpis: {
       totalStudents,

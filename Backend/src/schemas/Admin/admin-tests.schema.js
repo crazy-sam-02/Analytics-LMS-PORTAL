@@ -64,6 +64,10 @@ const createAdminTestPayloadSchema = z.object({
     totalMarks: z.number().int().min(1),
     attemptsAllowed: z.number().int().min(1).max(10).default(1),
     evaluationRule: z.enum(["LAST_ATTEMPT", "BEST_ATTEMPT"]),
+    negativeMarkingEnabled: z.boolean().default(false),
+    negativeMarks: z.number().min(0).max(100).default(0),
+    shuffleQuestions: z.boolean().default(false),
+    shuffleAnswers: z.boolean().default(false),
     startsAt: z.string().trim().min(1),
     endsAt: z.string().trim().min(1),
     assignmentMethod: z.enum(["department_wise", "batch_wise"]).default("department_wise"),
@@ -132,6 +136,10 @@ const createAdminTestSchema = createAdminTestPayloadSchema
     const marksSum = input.body.questions.reduce((sum, question) => sum + question.marks, 0);
     if (marksSum !== input.body.totalMarks) {
       ctx.addIssue({ code: "custom", message: "totalMarks must equal sum of all question marks" });
+    }
+
+    if (input.body.negativeMarkingEnabled && Number(input.body.negativeMarks || 0) <= 0) {
+      ctx.addIssue({ code: "custom", message: "Negative marks must be greater than 0 when negative marking is enabled" });
     }
 
     if (input.body.assignmentMethod === "department_wise" && !input.body.departmentId) {

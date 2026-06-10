@@ -82,6 +82,7 @@ describe("high-risk route rate limit wiring", () => {
       "../../controllers/Admin/reports.controller": {
         generateReport: mockMiddleware,
         getReportJobs: mockMiddleware,
+        getPassoutCohorts: mockMiddleware,
         getReportJobStatus: mockMiddleware,
         getReportAnalytics: mockMiddleware,
         getReportSummaryDashboard: mockMiddleware,
@@ -263,6 +264,7 @@ describe("high-risk route rate limit wiring", () => {
       "../../controllers/SuperAdmin/reports.controller": {
         generateSuperReport: mockMiddleware,
         getSuperReportAnalytics: mockMiddleware,
+        getPassoutCohorts: mockMiddleware,
         getSuperReportJobs: mockMiddleware,
         downloadSuperReport: mockMiddleware,
         regenerateSuperReportLink: mockMiddleware,

@@ -6,9 +6,14 @@ const createResponse = () => {
 };
 
 const createPromotionDb = () => {
-  const tx = {
+  const db = {
     student: {
-      findMany: jest.fn(async () => [{ id: "prior-year-4" }]),
+      findMany: jest.fn(async () => [{
+        id: "prior-year-4",
+        collegeId: "college-1",
+        year: 4,
+        batchIds: [],
+      }]),
       updateMany: jest.fn(async ({ where }) => {
         if (where.year === 3) return { count: 3 };
         if (where.year === 2) return { count: 2 };
@@ -16,18 +21,23 @@ const createPromotionDb = () => {
         if (where.id?.in) return { count: where.id.in.length };
         return { count: 0 };
       }),
+      update: jest.fn(async ({ data }) => ({ id: "prior-year-4", ...data })),
     },
-  };
-
-  const db = {
-    $transaction: jest.fn(async (callback) => callback(tx)),
+    studentPassoutCohort: {
+      findFirst: jest.fn(async () => null),
+      create: jest.fn(async ({ data }) => ({ id: "cohort-1", ...data })),
+      update: jest.fn(async ({ data }) => ({ id: "cohort-1", ...data })),
+    },
+    submission: {
+      updateMany: jest.fn(async () => ({ count: 1 })),
+    },
     studentRefreshToken: {
       findMany: jest.fn(async () => []),
       updateMany: jest.fn(async () => ({ count: 0 })),
     },
   };
 
-  return { db, tx };
+  return { db };
 };
 
 const invoke = async (handler, req) => {
@@ -65,7 +75,7 @@ describe("student year promotion controllers", () => {
   });
 
   it("promotes super-admin student years from highest to lowest to avoid cascading updates", async () => {
-    const { db, tx } = createPromotionDb();
+    const { db } = createPromotionDb();
     mockPromotionDependencies(db);
     jest.doMock("../../config/redis", () => ({
       redisClient: null,
@@ -82,7 +92,7 @@ describe("student year promotion controllers", () => {
       superAdmin: { id: "super-admin-1" },
     });
 
-    expect(tx.student.updateMany.mock.calls.map(([args]) => args.where.year || "prior4")).toEqual([
+    expect(db.student.updateMany.mock.calls.map(([args]) => args.where.year || "prior4")).toEqual([
       3,
       2,
       1,
@@ -93,13 +103,18 @@ describe("student year promotion controllers", () => {
         year1To2: 1,
         year2To3: 2,
         year3To4: 3,
+        alumniPrior4: 1,
         deactivatedPrior4: 1,
+        passoutYear: expect.any(Number),
+        passoutCohortId: "cohort-1",
+        passoutStudents: 1,
+        updatedSubmissions: 1,
       },
     }));
   });
 
   it("promotes admin student years from highest to lowest to avoid cascading updates", async () => {
-    const { db, tx } = createPromotionDb();
+    const { db } = createPromotionDb();
     mockPromotionDependencies(db);
     jest.doMock("../../services/admin-student.service", () => ({}));
     jest.doMock("../../utils/admin-scope", () => ({
@@ -117,7 +132,7 @@ describe("student year promotion controllers", () => {
       admin: { id: "admin-1" },
     });
 
-    expect(tx.student.updateMany.mock.calls.map(([args]) => args.where.year || "prior4")).toEqual([
+    expect(db.student.updateMany.mock.calls.map(([args]) => args.where.year || "prior4")).toEqual([
       3,
       2,
       1,

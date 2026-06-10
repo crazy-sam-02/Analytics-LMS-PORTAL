@@ -204,7 +204,7 @@ export default function CollegeAdminStudentsPage() {
       setBanner({
         type: "success",
         title: "Year updated",
-        message: `1st->2nd: ${summary.year1To2 || 0} | 2nd->3rd: ${summary.year2To3 || 0} | 3rd->4th: ${summary.year3To4 || 0} | 4th deactivated: ${summary.year4Inactive || 0}`,
+        message: `1st->2nd: ${summary.year1To2 || 0} | 2nd->3rd: ${summary.year2To3 || 0} | 3rd->4th: ${summary.year3To4 || 0} | alumni: ${summary.alumniPrior4 || 0}`,
       });
       setYearPromotionConfirmation("");
       setYearPromotionVerified(false);

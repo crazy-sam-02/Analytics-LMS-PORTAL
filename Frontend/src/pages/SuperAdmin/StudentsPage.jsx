@@ -263,7 +263,7 @@ export default function StudentsPage() {
       setBanner({
         type: "success",
         title: "Year updated",
-        message: `1st->2nd: ${summary.year1To2 || 0} | 2nd->3rd: ${summary.year2To3 || 0} | 3rd->4th: ${summary.year3To4 || 0} | 4th deactivated: ${summary.deactivatedPrior4 || 0}`,
+        message: `1st->2nd: ${summary.year1To2 || 0} | 2nd->3rd: ${summary.year2To3 || 0} | 3rd->4th: ${summary.year3To4 || 0} | alumni: ${summary.alumniPrior4 || 0}`,
       });
       setYearPromotionConfirmation("");
       setYearPromotionVerified(false);
@@ -660,7 +660,7 @@ export default function StudentsPage() {
                 checked={yearPromotionVerified}
                 onCheckedChange={(checked) => setYearPromotionVerified(Boolean(checked))}
               />
-              <span className="text-sm text-text-secondary">I understand prior 4th-year accounts will be deactivated.</span>
+              <span className="text-sm text-text-secondary">I understand prior 4th-year accounts will move to alumni status.</span>
             </div>
           </div>
 

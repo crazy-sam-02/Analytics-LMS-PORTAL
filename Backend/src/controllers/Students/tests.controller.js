@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const models = require("../../models");
 const {
   completeSubmission,
@@ -78,6 +79,53 @@ const sanitizeQuestionForStudent = (question = {}) => stripSensitiveQuestionFiel
 const sanitizeQuestionsForStudent = (questions = []) =>
   Array.isArray(questions) ? questions.map(sanitizeQuestionForStudent) : [];
 
+const deterministicRank = (seed, index) => {
+  const hash = crypto
+    .createHash("sha256")
+    .update(`${seed}:${index}`)
+    .digest("hex");
+  return Number.parseInt(hash.slice(0, 12), 16);
+};
+
+const stableShuffle = (items = [], seed) =>
+  Array.isArray(items)
+    ? items
+        .map((item, index) => ({ item, index, rank: deterministicRank(seed, index) }))
+        .sort((a, b) => (a.rank === b.rank ? a.index - b.index : a.rank - b.rank))
+        .map(({ item }) => item)
+    : [];
+
+const applyStudentQuestionPresentation = (test = {}, questions = [], submissionId = null) => {
+  const safeQuestions = sanitizeQuestionsForStudent(questions);
+  if (!submissionId) {
+    return safeQuestions;
+  }
+
+  const testId = test?.id || test?.testId || "test";
+  const questionSeed = `${testId}:${submissionId}:questions`;
+  const shouldShuffleQuestions = Boolean(test?.shuffleQuestions);
+  const shouldShuffleAnswers = Boolean(test?.shuffleAnswers);
+  const orderedQuestions = shouldShuffleQuestions
+    ? stableShuffle(safeQuestions, questionSeed)
+    : safeQuestions;
+
+  if (!shouldShuffleAnswers) {
+    return orderedQuestions;
+  }
+
+  return orderedQuestions.map((question, index) => {
+    if (!Array.isArray(question?.options) || question.options.length < 2) {
+      return question;
+    }
+
+    const questionId = question.id || question.sourceQuestionId || index;
+    return {
+      ...question,
+      options: stableShuffle(question.options, `${testId}:${submissionId}:${questionId}:options`),
+    };
+  });
+};
+
 const getStudentQuestionPayload = async (testId, questions = []) => {
   let cachedQuestions = await getCachedTestQuestions(testId);
   if (!cachedQuestions) {
@@ -87,10 +135,10 @@ const getStudentQuestionPayload = async (testId, questions = []) => {
   return sanitizeQuestionsForStudent(cachedQuestions);
 };
 
-const withStudentSafeTest = (test = {}) =>
+const withStudentSafeTest = (test = {}, submissionId = null) =>
   attachResolvedTestConfiguration({
     ...test,
-    questions: sanitizeQuestionsForStudent(test?.questions),
+    questions: applyStudentQuestionPresentation(test, test?.questions, submissionId),
   });
 
 const getClientSessionId = (req) => {
@@ -354,10 +402,11 @@ const startTest = asyncHandler(async (req, res) => {
 
         if (submission && submission.status === "IN_PROGRESS") {
           const cachedQuestions = await getStudentQuestionPayload(testId, test.questions);
+          const presentedQuestions = applyStudentQuestionPresentation(test, cachedQuestions, submission.id);
 
           const hydratedTest = attachResolvedTestConfiguration({
             ...test,
-            questions: cachedQuestions,
+            questions: presentedQuestions,
           });
 
           return res.status(200).json({
@@ -366,10 +415,10 @@ const startTest = asyncHandler(async (req, res) => {
             server_end_time: new Date(existingSession.expiresAt).getTime(),
             test_type: hydratedTest.test_type,
             proctoring_config: hydratedTest.proctoring_config,
-            question_order: Array.isArray(cachedQuestions)
-              ? cachedQuestions.map((question) => question.id).filter(Boolean)
+            question_order: Array.isArray(presentedQuestions)
+              ? presentedQuestions.map((question) => question.id).filter(Boolean)
               : [],
-            questions: cachedQuestions,
+            questions: presentedQuestions,
             session: {
               connectionStatus:
                 heartbeatAgeSeconds(existingSession.lastHeartbeatAt) > HEARTBEAT_STALE_SECONDS ? "DISCONNECTED" : "ONLINE",
@@ -485,9 +534,10 @@ const startTest = asyncHandler(async (req, res) => {
           },
         });
 
+        const presentedQuestions = applyStudentQuestionPresentation(test, cachedQuestions, submission.id);
         const hydratedTest = attachResolvedTestConfiguration({
           ...test,
-          questions: cachedQuestions,
+          questions: presentedQuestions,
         });
 
         return res.status(200).json({
@@ -496,8 +546,8 @@ const startTest = asyncHandler(async (req, res) => {
           server_end_time: new Date(existingSession.expiresAt).getTime(),
           test_type: hydratedTest.test_type,
           proctoring_config: hydratedTest.proctoring_config,
-          question_order: Array.isArray(cachedQuestions) ? cachedQuestions.map((question) => question.id).filter(Boolean) : [],
-          questions: cachedQuestions,
+          question_order: Array.isArray(presentedQuestions) ? presentedQuestions.map((question) => question.id).filter(Boolean) : [],
+          questions: presentedQuestions,
           session: {
             connectionStatus:
               heartbeatAgeSeconds(existingSession.lastHeartbeatAt) > HEARTBEAT_STALE_SECONDS ? "DISCONNECTED" : "ONLINE",
@@ -648,9 +698,10 @@ const startTest = asyncHandler(async (req, res) => {
     violations: 0,
   });
 
+      const presentedQuestions = applyStudentQuestionPresentation(test, cachedQuestions, submission.id);
       const hydratedTest = attachResolvedTestConfiguration({
         ...test,
-        questions: cachedQuestions,
+        questions: presentedQuestions,
       });
 
       return res.status(200).json({
@@ -659,8 +710,8 @@ const startTest = asyncHandler(async (req, res) => {
         server_end_time: new Date(new Date(submission.startedAt || now).getTime() + test.durationMins * 60 * 1000).getTime(),
         test_type: hydratedTest.test_type,
         proctoring_config: hydratedTest.proctoring_config,
-        question_order: Array.isArray(cachedQuestions) ? cachedQuestions.map((question) => question.id).filter(Boolean) : [],
-        questions: cachedQuestions,
+        question_order: Array.isArray(presentedQuestions) ? presentedQuestions.map((question) => question.id).filter(Boolean) : [],
+        questions: presentedQuestions,
         submission,
         test: hydratedTest,
       });
@@ -746,7 +797,7 @@ const getSession = asyncHandler(async (req, res) => {
     },
   });
 
-  const hydratedTest = withStudentSafeTest(submission.test);
+  const hydratedTest = withStudentSafeTest(submission.test, submission.id);
 
   res.status(200).json({
     ...submission,
@@ -800,7 +851,7 @@ const getAttemptSession = asyncHandler(async (req, res) => {
     throw new ApiError(409, "Test time expired. Submission auto-submitted.", { submission: completed }, "TEST_TIME_EXPIRED");
   }
 
-  const hydratedTest = withStudentSafeTest(submission.test);
+  const hydratedTest = withStudentSafeTest(submission.test, submission.id);
 
   res.status(200).json({
     ...submission,

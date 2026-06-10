@@ -91,6 +91,11 @@ const TOPIC_LABEL_MAP = {
   dbms: "DBMS",
 };
 const YEAR_OPTIONS = ["1", "2", "3", "4"];
+const STUDENT_SCOPE_OPTIONS = [
+  { value: "current", label: "Current" },
+  { value: "passout", label: "Passed Out" },
+  { value: "all", label: "All" },
+];
 const formatTopicLabel = (label, index) => {
   const raw = String(label || "").trim();
   if (!raw) return `Topic ${index + 1}`;
@@ -113,6 +118,10 @@ export default function ReportsPage({ basePathOverride = null, showStudentDepart
   const testId = searchParams.get("test") || "all";
   const batchId = searchParams.get("batch") || "";
   const studentId = searchParams.get("student_id") || "";
+  const rawStudentScope = searchParams.get("student_scope") || "current";
+  const studentScope = STUDENT_SCOPE_OPTIONS.some((item) => item.value === rawStudentScope) ? rawStudentScope : "current";
+  const passoutYear = searchParams.get("passout_year") || "";
+  const passoutCohortId = searchParams.get("passout_cohort") || "";
 
   const [studentSearch, setStudentSearch] = useState("");
   const [studentYear, setStudentYear] = useState("");
@@ -171,8 +180,15 @@ export default function ReportsPage({ basePathOverride = null, showStudentDepart
     staleTime: 120000,
   });
 
+  const passoutCohortsQuery = useQuery({
+    queryKey: [`${queryKeyPrefix}-passout-cohorts-v1`],
+    queryFn: () => adminApi.getPassoutCohorts(),
+    enabled: canViewReports,
+    staleTime: 120000,
+  });
+
   const studentsDirectoryQuery = useQuery({
-    queryKey: [`${queryKeyPrefix}-students-directory-v2`, studentYear, studentDepartmentId],
+    queryKey: [`${queryKeyPrefix}-students-directory-v2`, studentYear, studentDepartmentId, studentScope, passoutYear, passoutCohortId],
     queryFn: () =>
       adminApi.getStudents(
         toQueryString({
@@ -180,13 +196,16 @@ export default function ReportsPage({ basePathOverride = null, showStudentDepart
           limit: 100,
           year: studentYear || undefined,
           departmentId: studentDepartmentId || undefined,
+          studentScope,
+          passoutYear: passoutYear || undefined,
+          passoutCohortId: passoutCohortId || undefined,
         })
       ),
     staleTime: 120000,
   });
   const studentSearchTerm = studentSearch.trim();
   const studentSearchQuery = useQuery({
-    queryKey: [`${queryKeyPrefix}-student-search-v2`, studentSearchTerm, studentYear, studentDepartmentId],
+    queryKey: [`${queryKeyPrefix}-student-search-v2`, studentSearchTerm, studentYear, studentDepartmentId, studentScope, passoutYear, passoutCohortId],
     queryFn: () =>
       adminApi.getStudents(
         toQueryString({
@@ -195,6 +214,9 @@ export default function ReportsPage({ basePathOverride = null, showStudentDepart
           search: studentSearchTerm,
           year: studentYear || undefined,
           departmentId: studentDepartmentId || undefined,
+          studentScope,
+          passoutYear: passoutYear || undefined,
+          passoutCohortId: passoutCohortId || undefined,
         })
       ),
     enabled: canViewReports && mode === "student" && studentSearchTerm.length >= 2,
@@ -202,7 +224,7 @@ export default function ReportsPage({ basePathOverride = null, showStudentDepart
   });
 
   const analyticsQuery = useQuery({
-    queryKey: [`${queryKeyPrefix}-analytics-v2`, mode, testId, batchId, studentId, studentYear],
+    queryKey: [`${queryKeyPrefix}-analytics-v2`, mode, testId, batchId, studentId, studentYear, studentScope, passoutYear, passoutCohortId],
     queryFn: () =>
       adminApi.getReportAnalytics(
         toQueryString({
@@ -211,14 +233,22 @@ export default function ReportsPage({ basePathOverride = null, showStudentDepart
           batchId,
           studentId,
           year: studentYear || undefined,
+          studentScope,
+          passoutYear: passoutYear || undefined,
+          passoutCohortId: passoutCohortId || undefined,
         })
       ),
     enabled: canViewReports && (mode !== "student" || Boolean(studentId)),
     staleTime: 45000,
   });
   const studentDetailQuery = useQuery({
-    queryKey: [`${queryKeyPrefix}-student-detail-all-tests-v2`, studentId, studentYear],
-    queryFn: () => adminApi.getReportStudentDetail(studentId, toQueryString({ year: studentYear || undefined })),
+    queryKey: [`${queryKeyPrefix}-student-detail-all-tests-v2`, studentId, studentYear, studentScope, passoutYear, passoutCohortId],
+    queryFn: () => adminApi.getReportStudentDetail(studentId, toQueryString({
+      year: studentYear || undefined,
+      studentScope,
+      passoutYear: passoutYear || undefined,
+      passoutCohortId: passoutCohortId || undefined,
+    })),
     enabled: canViewReports && mode === "student" && Boolean(studentId),
     staleTime: 45000,
   });
@@ -226,6 +256,10 @@ export default function ReportsPage({ basePathOverride = null, showStudentDepart
   const tests = testsQuery.data?.data || [];
   const batches = batchesQuery.data || [];
   const departments = Array.isArray(departmentsQuery.data) ? departmentsQuery.data : [];
+  const passoutCohortsData = passoutCohortsQuery.data?.data;
+  const passoutCohorts = Array.isArray(passoutCohortsData) ? passoutCohortsData : [];
+  const passoutYearOptions = [...new Set(passoutCohorts.map((cohort) => String(cohort.passoutYear || "")).filter(Boolean))];
+  const visiblePassoutCohorts = passoutCohorts.filter((cohort) => !passoutYear || String(cohort.passoutYear) === String(passoutYear));
   const studentsDirectoryData = studentsDirectoryQuery.data?.data;
   const studentSearchData = studentSearchQuery.data?.data;
   const studentsDirectory = useMemo(
@@ -460,6 +494,9 @@ export default function ReportsPage({ basePathOverride = null, showStudentDepart
           batchId: mode === "batch" ? batchId || undefined : undefined,
           studentId: mode === "student" ? studentId || undefined : undefined,
           year: studentYear || undefined,
+          studentScope,
+          passoutYear: passoutYear || undefined,
+          passoutCohortId: passoutCohortId || undefined,
         },
       });
 
@@ -511,6 +548,26 @@ export default function ReportsPage({ basePathOverride = null, showStudentDepart
   const handleYearChange = (nextYear) => {
     setStudentYear(nextYear || "");
     updateParams({ student_id: "" });
+    setStudentSearch("");
+  };
+
+  const handleStudentScopeChange = (nextScope) => {
+    updateParams({
+      student_scope: nextScope === "current" ? "" : nextScope,
+      passout_year: nextScope === "current" ? "" : passoutYear,
+      passout_cohort: nextScope === "current" ? "" : passoutCohortId,
+      student_id: "",
+    });
+    setStudentSearch("");
+  };
+
+  const handlePassoutYearChange = (nextYear) => {
+    updateParams({ passout_year: nextYear || "", passout_cohort: "", student_id: "" });
+    setStudentSearch("");
+  };
+
+  const handlePassoutCohortChange = (nextCohortId) => {
+    updateParams({ passout_cohort: nextCohortId || "", student_id: "" });
     setStudentSearch("");
   };
 
@@ -607,6 +664,53 @@ export default function ReportsPage({ basePathOverride = null, showStudentDepart
         </div>
 
         <div className="flex flex-wrap gap-3">
+          <label className="space-y-1 text-xs text-text-secondary">
+            <span>Student Scope</span>
+            <select
+              value={studentScope}
+              onChange={(event) => handleStudentScopeChange(event.target.value)}
+              className="h-9 min-w-40 rounded-lg border border-border bg-background px-3 text-sm text-text-primary"
+            >
+              {STUDENT_SCOPE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+
+          {studentScope !== "current" ? (
+            <>
+              <label className="space-y-1 text-xs text-text-secondary">
+                <span>Passout Year</span>
+                <select
+                  value={passoutYear}
+                  onChange={(event) => handlePassoutYearChange(event.target.value)}
+                  className="h-9 min-w-40 rounded-lg border border-border bg-background px-3 text-sm text-text-primary"
+                >
+                  <option value="">All passout years</option>
+                  {passoutYearOptions.map((year) => (
+                    <option key={year} value={year}>{year}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="space-y-1 text-xs text-text-secondary">
+                <span>Passout Cohort</span>
+                <select
+                  value={passoutCohortId}
+                  onChange={(event) => handlePassoutCohortChange(event.target.value)}
+                  className="h-9 min-w-48 rounded-lg border border-border bg-background px-3 text-sm text-text-primary"
+                >
+                  <option value="">All cohorts</option>
+                  {visiblePassoutCohorts.map((cohort) => (
+                    <option key={cohort.id} value={cohort.id}>
+                      {cohort.academicLabel || cohort.passoutYear} ({cohort.totalStudents || 0})
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </>
+          ) : null}
+
           <label className="space-y-1 text-xs text-text-secondary">
             <span>Student Year</span>
             <select

@@ -12,6 +12,7 @@ const {
   isDepartmentAdminRole,
 } = require("../constants/roles");
 const { getCachedUser, setCachedUser } = require("../services/auth-cache.service");
+const { canStudentAuthenticate } = require("../services/student-lifecycle.service");
 
 const parseTokenPayload = (req) => {
   const authHeader = req.headers.authorization || "";
@@ -96,7 +97,7 @@ const authenticateStudent = asyncHandler(async (req, _res, next) => {
 
   validatePrincipalTokenClaims({ payload, principal: user });
 
-  if (!user?.isActive) {
+  if (!canStudentAuthenticate(user)) {
     throw new ApiError(403, "Account is inactive", null, "ACCOUNT_INACTIVE");
   }
 

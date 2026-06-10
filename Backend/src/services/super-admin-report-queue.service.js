@@ -3,6 +3,7 @@ const { redisClient, getRedisQueueConnection } = require("../config/redis");
 const { emitToRole } = require("../realtime/socket");
 const { saveReportPayload } = require("./report-payload-store.service");
 const { clampPercent, getSubmissionScorePercent } = require("../utils/score");
+const { buildStudentLifecycleWhere } = require("./report-scope.service");
 
 let Queue = null;
 let Worker = null;
@@ -99,6 +100,7 @@ const buildTestWhere = (filters = {}, departmentBatchIds = []) => ({
 });
 
 const buildDepartmentAcademicPayload = async (db, filters = {}) => {
+  const studentLifecycleWhere = buildStudentLifecycleWhere(filters);
   const [college, department, test, students, submissions] = await Promise.all([
     db.college.findUnique({
       where: { id: filters.collegeId },
@@ -121,9 +123,9 @@ const buildDepartmentAcademicPayload = async (db, filters = {}) => {
     db.student.findMany({
       where: {
         ...(filters.collegeId ? { collegeId: filters.collegeId } : {}),
+        ...studentLifecycleWhere,
         ...(filters.departmentId ? { departmentId: filters.departmentId } : {}),
         ...(normalizeStudentYear(filters.year) ? { year: normalizeStudentYear(filters.year) } : {}),
-        isActive: true,
       },
       include: {
         batch: { select: { name: true, year: true, academicYear: true } },
@@ -136,11 +138,12 @@ const buildDepartmentAcademicPayload = async (db, filters = {}) => {
         ...(filters.departmentId || normalizeStudentYear(filters.year)
           ? {
               user: {
+                ...studentLifecycleWhere,
                 ...(filters.departmentId ? { departmentId: filters.departmentId } : {}),
                 ...(normalizeStudentYear(filters.year) ? { year: normalizeStudentYear(filters.year) } : {}),
               },
             }
-          : {}),
+          : Object.keys(studentLifecycleWhere).length ? { user: studentLifecycleWhere } : {}),
       }),
       include: {
         user: {
@@ -257,6 +260,7 @@ if (Queue && redisClient && queueConnection) {
 const buildGlobalReportPayload = async (db, job) => {
   const filters = job.filters || {};
   const scopedYear = normalizeStudentYear(filters.year);
+  const studentLifecycleWhere = buildStudentLifecycleWhere(filters);
   const departmentBatchIds = await getDepartmentBatchIds(db, filters);
   const scopedTests = filters.departmentId
     ? await db.test.findMany({
@@ -271,19 +275,17 @@ const buildGlobalReportPayload = async (db, job) => {
   };
 
   if (job.type === "STUDENT_WISE") {
+    const studentWiseUserWhere = {
+      ...studentLifecycleWhere,
+      ...(filters.departmentId ? { departmentId: filters.departmentId } : {}),
+      ...(scopedYear ? { year: scopedYear } : {}),
+    };
     const rows = await db.submission.findMany({
       where: buildSubmittedSubmissionWhere(filters, {
         ...(filters.collegeId ? { collegeId: filters.collegeId } : {}),
         ...scopedTestFilter,
         ...(filters.studentId ? { userId: filters.studentId } : {}),
-        ...(filters.departmentId || scopedYear
-          ? {
-              user: {
-                ...(filters.departmentId ? { departmentId: filters.departmentId } : {}),
-                ...(scopedYear ? { year: scopedYear } : {}),
-              },
-            }
-          : {}),
+        ...(Object.keys(studentWiseUserWhere).length ? { user: studentWiseUserWhere } : {}),
       }),
       include: {
         user: { select: { fullName: true, studentId: true, enrollNumber: true, enrollmentNumber: true, collegeId: true, department: { select: { name: true } } } },
@@ -308,20 +310,18 @@ const buildGlobalReportPayload = async (db, job) => {
   }
 
   if (job.type === "TEST_WISE") {
+    const testWiseUserWhere = {
+      ...studentLifecycleWhere,
+      ...(filters.departmentId ? { departmentId: filters.departmentId } : {}),
+      ...(scopedYear ? { year: scopedYear } : {}),
+    };
     const tests = await db.test.findMany({
       where: buildTestWhere(filters, departmentBatchIds),
       include: {
         submissions: {
           where: buildSubmittedSubmissionWhere(filters, {
             ...(filters.studentId ? { userId: filters.studentId } : {}),
-            ...(filters.departmentId || scopedYear
-              ? {
-                  user: {
-                    ...(filters.departmentId ? { departmentId: filters.departmentId } : {}),
-                    ...(scopedYear ? { year: scopedYear } : {}),
-                  },
-                }
-              : {}),
+            ...(Object.keys(testWiseUserWhere).length ? { user: testWiseUserWhere } : {}),
           }),
         },
       },
@@ -355,6 +355,7 @@ const buildGlobalReportPayload = async (db, job) => {
         students: {
           where: {
             ...(filters.studentId ? { id: filters.studentId } : {}),
+            ...studentLifecycleWhere,
             ...(scopedYear ? { year: scopedYear } : {}),
           },
           include: {
@@ -394,6 +395,7 @@ const buildGlobalReportPayload = async (db, job) => {
       students: {
         where: {
           ...(filters.studentId ? { id: filters.studentId } : {}),
+          ...studentLifecycleWhere,
           ...(scopedYear ? { year: scopedYear } : {}),
         },
         include: {

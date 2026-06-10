@@ -59,6 +59,7 @@ function buildModelMap() {
     Submission: dbClient.submission,
     Answer: dbClient.answer,
     Violation: dbClient.violation,
+    StudentPassoutCohort: dbClient.studentPassoutCohort,
     // Keep raw dbClient available for direct access
     dbClient,
   };

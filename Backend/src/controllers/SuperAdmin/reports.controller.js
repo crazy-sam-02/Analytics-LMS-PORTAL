@@ -7,6 +7,13 @@ const { renderHtmlToPdfBuffer } = require("../../services/report-pdf.service");
 const { readReportPayload } = require("../../services/report-payload-store.service");
 const { ApiError, asyncHandler } = require("../../utils/http");
 const { clampPercent, getSubmissionScorePercent } = require("../../utils/score");
+const {
+  buildStudentLifecycleWhere,
+  buildReportScopeMetadata,
+  normalizeStudentScope,
+  normalizePassoutYear,
+  normalizeOptionalId,
+} = require("../../services/report-scope.service");
 
 const PASS_THRESHOLD_PERCENT = 40;
 const MAX_ANALYTICS_SUBMISSIONS = 20000;
@@ -59,7 +66,7 @@ const buildSuperReportCollegeWhere = (collegeId) => ({
   ],
 });
 
-const validateReportScope = async ({ db, collegeId, departmentId, studentId, testId }) => {
+const validateReportScope = async ({ db, collegeId, departmentId, studentId, testId, studentScope, passoutYear, passoutCohortId }) => {
   if (collegeId) {
     const college = await db.college.findUnique({ where: { id: collegeId }, select: { id: true, isActive: true } });
     if (!college || !college.isActive) {
@@ -86,7 +93,7 @@ const validateReportScope = async ({ db, collegeId, departmentId, studentId, tes
         id: studentId,
         ...(collegeId ? { collegeId } : {}),
         ...(departmentId ? { departmentId } : {}),
-        isActive: true,
+        ...buildStudentLifecycleWhere({ studentScope, passoutYear, passoutCohortId }),
       },
       select: { id: true },
     });
@@ -118,17 +125,23 @@ const generateSuperReport = asyncHandler(async (req, res) => {
   const studentId = normalizeId(filters.studentId);
   const testId = normalizeId(filters.testId);
   const year = normalizeStudentYear(filters.year);
+  const studentScope = normalizeStudentScope(filters.studentScope);
+  const passoutYear = normalizePassoutYear(filters.passoutYear);
+  const passoutCohortId = normalizeOptionalId(filters.passoutCohortId);
 
   if (!collegeId) {
     throw new ApiError(400, "Select a college before generating a super admin report");
   }
 
-  await validateReportScope({ db, collegeId, departmentId, studentId, testId });
+  await validateReportScope({ db, collegeId, departmentId, studentId, testId, studentScope, passoutYear, passoutCohortId });
   const reportFilters = { ...filters, collegeId };
   if (departmentId) reportFilters.departmentId = departmentId;
   if (studentId) reportFilters.studentId = studentId;
   if (testId) reportFilters.testId = testId;
   if (year) reportFilters.year = year;
+  reportFilters.studentScope = studentScope;
+  if (passoutYear) reportFilters.passoutYear = passoutYear;
+  if (passoutCohortId) reportFilters.passoutCohortId = passoutCohortId;
 
   const job = await db.superReportJob.create({
     data: {
@@ -155,6 +168,12 @@ const getSuperReportAnalytics = asyncHandler(async (req, res) => {
   const studentId = normalizeId(req.query.studentId);
   const testId = normalizeId(req.query.testId);
   const year = normalizeStudentYear(req.query.year);
+  const reportScopeFilters = {
+    studentScope: normalizeStudentScope(req.query.studentScope),
+    passoutYear: normalizePassoutYear(req.query.passoutYear),
+    passoutCohortId: normalizeOptionalId(req.query.passoutCohortId),
+  };
+  const studentLifecycleWhere = buildStudentLifecycleWhere(reportScopeFilters);
   const dateFrom = toValidDate(req.query.dateFrom);
   const dateTo = toValidDate(req.query.dateTo);
 
@@ -162,7 +181,7 @@ const getSuperReportAnalytics = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Select a college before viewing super admin report analytics");
   }
 
-  await validateReportScope({ db, collegeId, departmentId, studentId, testId });
+  await validateReportScope({ db, collegeId, departmentId, studentId, testId, ...reportScopeFilters });
   const submittedAtFilter = {
     ...(dateFrom ? { gte: dateFrom } : {}),
     ...(dateTo ? { lte: dateTo } : {}),
@@ -180,10 +199,10 @@ const getSuperReportAnalytics = asyncHandler(async (req, res) => {
 
   const studentWhere = {
     ...(collegeId ? { collegeId } : {}),
+    ...studentLifecycleWhere,
     ...(departmentId ? { departmentId } : {}),
     ...(studentId ? { id: studentId } : {}),
     ...(year ? { year } : {}),
-    isActive: true,
   };
 
   const testWhere = {
@@ -202,35 +221,7 @@ const getSuperReportAnalytics = asyncHandler(async (req, res) => {
     } : {}),
     ...(testId ? { id: testId } : {}),
   };
-  const submissionWhere = {
-    status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
-    ...(collegeId ? { collegeId } : {}),
-    ...(testId ? { testId } : {}),
-    ...(Object.keys(submittedAtFilter).length ? { submittedAt: submittedAtFilter } : {}),
-    ...(studentId ? { userId: studentId } : {}),
-    ...(departmentId || studentId
-      ? {
-          user: {
-            ...(departmentId ? { departmentId } : {}),
-            ...(studentId ? { id: studentId } : {}),
-            ...(year ? { year } : {}),
-          },
-        }
-      : {}),
-    ...(!departmentId && !studentId && year ? { user: { year } } : {}),
-  };
-
-  const submissionCount = await db.submission.count({ where: submissionWhere });
-  if (submissionCount > MAX_ANALYTICS_SUBMISSIONS && !studentId) {
-    throw new ApiError(
-      413,
-      "Report scope is too large. Select a department, test, student, or date range before loading analytics.",
-      { submissionCount, maxSubmissions: MAX_ANALYTICS_SUBMISSIONS },
-      "REPORT_SCOPE_TOO_LARGE"
-    );
-  }
-
-  const [students, tests, departments, submissions] = await Promise.all([
+  const [students, tests, departments] = await Promise.all([
     db.student.findMany({
       where: studentWhere,
       include: {
@@ -262,67 +253,85 @@ const getSuperReportAnalytics = asyncHandler(async (req, res) => {
       },
       orderBy: [{ collegeId: "asc" }, { name: "asc" }],
     }),
-    db.submission.findMany({
-      where: submissionWhere,
-      include: {
-        user: {
-          select: {
-            id: true,
-            fullName: true,
-            studentId: true,
-            enrollNumber: true,
-            enrollmentNumber: true,
-            year: true,
-            collegeId: true,
-            departmentId: true,
-            batchId: true,
-            college: { select: { id: true, name: true, code: true } },
-            department: { select: { id: true, name: true } },
-            batch: { select: { id: true, name: true } },
-          },
-        },
-        test: {
-          select: {
-            id: true,
-            title: true,
-            subject: true,
-            totalMarks: true,
-            collegeId: true,
-            departmentId: true,
-          },
-        },
-        ...(studentId
-          ? {
-              violations: {
-                select: {
-                  id: true,
-                  type: true,
-                  createdAt: true,
-                  metadata: true,
-                },
-                orderBy: { createdAt: "desc" },
-              },
-              answers: {
-                select: {
-                  id: true,
-                  questionId: true,
-                },
-              },
-            }
-          : {
-              _count: {
-                select: {
-                  violations: true,
-                },
-              },
-            }),
-      },
-      orderBy: { submittedAt: "asc" },
-    }),
   ]);
 
   const scopedTestIds = new Set(tests.map((test) => test.id));
   const scopedStudentIds = new Set(students.map((student) => student.id));
+  const submissionWhere = {
+    status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
+    ...(collegeId ? { collegeId } : {}),
+    testId: { in: Array.from(scopedTestIds) },
+    userId: { in: Array.from(scopedStudentIds) },
+    ...(Object.keys(submittedAtFilter).length ? { submittedAt: submittedAtFilter } : {}),
+  };
+
+  const submissionCount = await db.submission.count({ where: submissionWhere });
+  if (submissionCount > MAX_ANALYTICS_SUBMISSIONS && !studentId) {
+    throw new ApiError(
+      413,
+      "Report scope is too large. Select a department, test, student, or date range before loading analytics.",
+      { submissionCount, maxSubmissions: MAX_ANALYTICS_SUBMISSIONS },
+      "REPORT_SCOPE_TOO_LARGE"
+    );
+  }
+
+  const submissions = await db.submission.findMany({
+    where: submissionWhere,
+    include: {
+      user: {
+        select: {
+          id: true,
+          fullName: true,
+          studentId: true,
+          enrollNumber: true,
+          enrollmentNumber: true,
+          year: true,
+          collegeId: true,
+          departmentId: true,
+          batchId: true,
+          college: { select: { id: true, name: true, code: true } },
+          department: { select: { id: true, name: true } },
+          batch: { select: { id: true, name: true } },
+        },
+      },
+      test: {
+        select: {
+          id: true,
+          title: true,
+          subject: true,
+          totalMarks: true,
+          collegeId: true,
+          departmentId: true,
+        },
+      },
+      ...(studentId
+        ? {
+            violations: {
+              select: {
+                id: true,
+                type: true,
+                createdAt: true,
+                metadata: true,
+              },
+              orderBy: { createdAt: "desc" },
+            },
+            answers: {
+              select: {
+                id: true,
+                questionId: true,
+              },
+            },
+          }
+        : {
+            _count: {
+              select: {
+                violations: true,
+              },
+            },
+          }),
+    },
+    orderBy: { submittedAt: "asc" },
+  });
   const scopedSubmissions = submissions.filter((submission) => {
     if (studentId && !scopedStudentIds.has(submission.userId)) return false;
     if (testId && !scopedTestIds.has(submission.testId)) return false;
@@ -531,6 +540,7 @@ const getSuperReportAnalytics = asyncHandler(async (req, res) => {
       studentId: studentId || null,
       testId: testId || null,
       year: year || null,
+      ...buildReportScopeMetadata(reportScopeFilters),
     },
     metrics: {
       totalStudents: students.length,
@@ -550,6 +560,29 @@ const getSuperReportAnalytics = asyncHandler(async (req, res) => {
     selectedStudent,
     attemptHistory,
   });
+});
+
+const getPassoutCohorts = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
+  const collegeId = normalizeId(req.query.collegeId);
+
+  if (!collegeId) {
+    throw new ApiError(400, "Select a college before loading passout cohorts");
+  }
+
+  await validateReportScope({ db, collegeId });
+
+  const cohorts = await db.studentPassoutCohort.findMany({
+    where: {
+      collegeId,
+      status: "COMPLETED",
+    },
+    orderBy: [{ passoutYear: "desc" }, { createdAt: "desc" }],
+    take: 100,
+  });
+
+  res.status(200).json({ data: cohorts });
 });
 
 const getEscalatedAnomalies = asyncHandler(async (req, res) => {
@@ -717,6 +750,7 @@ const regenerateSuperReportLink = asyncHandler(async (req, res) => {
 module.exports = {
   generateSuperReport,
   getSuperReportAnalytics,
+  getPassoutCohorts,
   getSuperReportJobs,
   downloadSuperReport,
   regenerateSuperReportLink,

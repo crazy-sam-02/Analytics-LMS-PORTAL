@@ -5,6 +5,7 @@ const { createAuditLog } = require("../../services/audit.service");
 const { getScopedDepartmentId, assertDepartmentScope } = require("../../utils/admin-scope");
 const { invalidateRefreshTokenRecord } = require("../../services/refresh-token-cache.service");
 const { bumpPrincipalTokenVersion } = require("../../services/auth-revocation.service");
+const { promoteStudentsForPassout } = require("../../services/student-lifecycle.service");
 
 const revokeStudentRefreshTokens = async (db, studentId) => {
   await bumpPrincipalTokenVersion(db, "student", studentId);
@@ -35,6 +36,9 @@ const getStudents = asyncHandler(async (req, res) => {
     batchId: req.query.batchId,
     search: req.query.search,
     year: req.query.year,
+    studentScope: req.query.studentScope,
+    passoutYear: req.query.passoutYear,
+    passoutCohortId: req.query.passoutCohortId,
   };
   const { data, total, page, limit } = await studentService.listStudents(collegeId, opts);
   res.status(200).json({ data, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
@@ -137,36 +141,20 @@ const promoteStudentsYear = asyncHandler(async (req, res) => {
   const m = await models.init();
   const db = m.dbClient;
 
-  // We need to ensure only students who were 4th-year before this operation are deactivated.
-  // To do that safely we snapshot their ids and then run the promotion + deactivation
-  // within a single transaction so the operation is atomic and newly promoted students
-  // (3 -> 4) will not be affected by the deactivation step.
-  const result = await db.$transaction(async (tx) => {
-    const prior4 = await tx.student.findMany({ where: { collegeId, year: 4 }, select: { id: true } });
-    const prior4Ids = prior4.map((s) => s.id);
-
-    const step3 = await tx.student.updateMany({ where: { collegeId, year: 3 }, data: { year: 4, isActive: true } });
-    const step2 = await tx.student.updateMany({ where: { collegeId, year: 2 }, data: { year: 3 } });
-    const step1 = await tx.student.updateMany({ where: { collegeId, year: 1 }, data: { year: 2 } });
-
-    let deactivated = { count: 0 };
-    if (prior4Ids.length > 0) {
-      deactivated = await tx.student.updateMany({ where: { collegeId, id: { in: prior4Ids } }, data: { isActive: false } });
-    }
-
-    return { step1, step2, step3, deactivated, prior4Ids };
+  const result = await promoteStudentsForPassout({
+    db,
+    collegeId,
+    actorId: adminId,
+    actorType: "ADMIN",
+    passoutYear: req.body.passoutYear,
+    academicLabel: req.body.academicLabel,
   });
 
   if (result.prior4Ids?.length) {
     await Promise.all(result.prior4Ids.map((studentId) => revokeStudentRefreshTokens(db, studentId)));
   }
 
-  const summary = {
-    year1To2: result.step1.count || 0,
-    year2To3: result.step2.count || 0,
-    year3To4: result.step3.count || 0,
-    deactivatedPrior4: result.deactivated.count || 0,
-  };
+  const summary = result.summary;
 
   await createAuditLog({
     action: "ADMIN_STUDENT_YEAR_PROMOTED",
@@ -180,6 +168,7 @@ const promoteStudentsYear = asyncHandler(async (req, res) => {
   res.status(200).json({
     message: "Student years updated successfully",
     summary,
+    cohort: result.cohort,
   });
 });
 

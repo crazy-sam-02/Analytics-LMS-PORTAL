@@ -12,6 +12,13 @@ const {
   buildAdminTestVisibilityWhere,
   resolveAdminTestScope,
 } = require("../../utils/admin-test-access");
+const {
+  buildStudentLifecycleWhere,
+  buildReportScopeMetadata,
+  normalizeStudentScope,
+  normalizePassoutYear,
+  normalizeOptionalId,
+} = require("../../services/report-scope.service");
 
 const MAX_ANALYTICS_SUBMISSIONS = 20000;
 const toPercent = (value) => clampPercent(value);
@@ -154,6 +161,12 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
   const batchId = req.query.batchId;
   const studentId = req.query.studentId;
   const year = normalizeStudentYear(req.query.year);
+  const reportScopeFilters = {
+    studentScope: normalizeStudentScope(req.query.studentScope),
+    passoutYear: normalizePassoutYear(req.query.passoutYear),
+    passoutCohortId: normalizeOptionalId(req.query.passoutCohortId),
+  };
+  const studentLifecycleWhere = buildStudentLifecycleWhere(reportScopeFilters);
   const dateFrom = req.query.dateFrom;
   const dateTo = req.query.dateTo;
   const dateFromValue = toValidDate(dateFrom);
@@ -177,7 +190,9 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
 
   const studentWhere = {
     collegeId,
+    ...studentLifecycleWhere,
     ...(scopedDepartmentId ? { departmentId: scopedDepartmentId } : {}),
+    ...(filters.year ? { year: filters.year } : {}),
     ...(scopedBatchId
       ? {
           OR: [
@@ -189,10 +204,22 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
     ...(studentId ? { id: studentId } : {}),
     ...(year ? { year } : {}),
   };
+  const students = await db.student.findMany({
+    where: studentWhere,
+    include: {
+      department: { select: { id: true, name: true } },
+      batch: { select: { id: true, name: true } },
+    },
+  });
+  const scopedStudentIds = students.map((student) => String(student.id));
+  const submissionStudentFilter = studentId
+    ? (scopedStudentIds.includes(String(studentId)) ? { userId: studentId } : { userId: { in: [] } })
+    : { userId: { in: scopedStudentIds } };
+
   const submissionWhere = {
     collegeId,
     ...(testIds.length ? { testId: { in: testIds } } : {}),
-    ...(studentId ? { userId: studentId } : {}),
+    ...submissionStudentFilter,
     status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
     ...(dateFromValue || dateToValue
       ? {
@@ -202,23 +229,6 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
           },
         }
       : {}),
-    ...(scopedDepartmentId || scopedBatchId
-      ? {
-          user: {
-            ...(scopedDepartmentId ? { departmentId: scopedDepartmentId } : {}),
-            ...(year ? { year } : {}),
-            ...(scopedBatchId
-              ? {
-                  OR: [
-                    { batchId: scopedBatchId },
-                    { batchIds: { in: [scopedBatchId] } },
-                  ],
-                }
-              : {}),
-          },
-        }
-      : {}),
-    ...(!scopedDepartmentId && !scopedBatchId && year ? { user: { year } } : {}),
   };
 
   const submissionCount = await db.submission.count({ where: submissionWhere });
@@ -270,14 +280,6 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
     if (dateToValue && (!eventDate || eventDate > dateToValue)) return false;
 
     return true;
-  });
-
-  const students = await db.student.findMany({
-    where: studentWhere,
-    include: {
-      department: { select: { id: true, name: true } },
-      batch: { select: { id: true, name: true } },
-    },
   });
 
   const departments = await db.department.findMany({ where: { collegeId }, select: { id: true, name: true } });
@@ -516,6 +518,7 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
 
   res.status(200).json({
     mode,
+    filters: buildReportScopeMetadata(reportScopeFilters),
     metrics: {
       avgScore: toPercent(avgScore),
       passRate: toPercent(passRate),
@@ -552,6 +555,9 @@ const resolveDateFilters = (query = {}) => {
     batchId: query.batchId,
     studentId: query.studentId,
     year: normalizeStudentYear(query.year) || undefined,
+    studentScope: normalizeStudentScope(query.studentScope),
+    passoutYear: normalizePassoutYear(query.passoutYear) || undefined,
+    passoutCohortId: normalizeOptionalId(query.passoutCohortId) || undefined,
     dateFrom: validDateFrom ? validDateFrom.toISOString() : undefined,
     dateTo: validDateTo ? validDateTo.toISOString() : undefined,
     mode: query.mode || "department",
@@ -694,28 +700,34 @@ const getReportTableDashboard = asyncHandler(async (req, res) => {
 
   const scopedDepartmentId = scope.departmentId;
   const scopedBatchId = scope.batchId;
+  const studentLifecycleWhere = buildStudentLifecycleWhere(filters);
+  const tableStudentWhere = {
+    collegeId: req.collegeId,
+    ...studentLifecycleWhere,
+    ...(filters.studentId ? { id: filters.studentId } : {}),
+    ...(scopedDepartmentId ? { departmentId: scopedDepartmentId } : {}),
+    ...(filters.year ? { year: filters.year } : {}),
+    ...(scopedBatchId
+      ? {
+          OR: [
+            { batchId: scopedBatchId },
+            { batchIds: { in: [scopedBatchId] } },
+          ],
+        }
+      : {}),
+  };
+  const tableStudents = await db.student.findMany({ where: tableStudentWhere, select: { id: true } });
+  const tableStudentIds = tableStudents.map((student) => String(student.id));
+  const submissionStudentFilter = filters.studentId
+    ? (tableStudentIds.includes(String(filters.studentId)) ? { userId: filters.studentId } : { userId: { in: [] } })
+    : { userId: { in: tableStudentIds } };
 
   const submissions = await db.submission.findMany({
     where: {
       collegeId: req.collegeId,
       status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
       ...(scope.testIds.length ? { testId: { in: scope.testIds } } : {}),
-      ...(filters.studentId ? { userId: filters.studentId } : {}),
-      ...(scopedDepartmentId || scopedBatchId
-        ? {
-          user: {
-            ...(scopedDepartmentId ? { departmentId: scopedDepartmentId } : {}),
-            ...(scopedBatchId
-              ? {
-                  OR: [
-                    { batchId: scopedBatchId },
-                    { batchIds: { in: [scopedBatchId] } },
-                  ],
-                }
-              : {}),
-          },
-        }
-      : {}),
+      ...submissionStudentFilter,
       ...(filters.dateFrom || filters.dateTo
         ? {
             submittedAt: {
@@ -854,11 +866,13 @@ const getReportStudentDetailDashboard = asyncHandler(async (req, res) => {
     departmentId: scope.departmentId,
     batchId: scope.batchId,
   });
+  const studentLifecycleWhere = buildStudentLifecycleWhere(filters);
 
   const student = await db.student.findFirst({
     where: {
       id: studentId,
       collegeId: req.collegeId,
+      ...studentLifecycleWhere,
       ...(scope.departmentId ? { departmentId: scope.departmentId } : {}),
       ...(filters.year ? { year: filters.year } : {}),
       ...(scope.batchId
@@ -994,6 +1008,9 @@ const normalizeFilters = (filters = {}) => {
     departmentId: filters.departmentId || undefined,
     batchId: filters.batchId || undefined,
     year: normalizeStudentYear(filters.year) || undefined,
+    studentScope: normalizeStudentScope(filters.studentScope),
+    passoutYear: normalizePassoutYear(filters.passoutYear) || undefined,
+    passoutCohortId: normalizeOptionalId(filters.passoutCohortId) || undefined,
     semester: filters.semester || undefined,
     academicYear: filters.academicYear || undefined,
     remarks: filters.remarks || undefined,
@@ -1209,6 +1226,22 @@ const downloadReport = asyncHandler(async (req, res) => {
   res.status(200).send(pdfBuffer);
 });
 
+const getPassoutCohorts = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
+
+  const cohorts = await db.studentPassoutCohort.findMany({
+    where: {
+      collegeId: req.collegeId,
+      status: "COMPLETED",
+    },
+    orderBy: [{ passoutYear: "desc" }, { createdAt: "desc" }],
+    take: 100,
+  });
+
+  res.status(200).json({ data: cohorts });
+});
+
 const regenerateReportLink = asyncHandler(async (req, res) => {
   const m = await models.init();
   const db = m.dbClient;
@@ -1324,6 +1357,7 @@ const reviewAnomaly = asyncHandler(async (req, res) => {
 module.exports = {
   generateReport,
   getReportJobs,
+  getPassoutCohorts,
   getReportJobStatus,
   getReportAnalytics,
   getReportSummaryDashboard,

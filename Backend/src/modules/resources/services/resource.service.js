@@ -9,6 +9,7 @@ const { redisClient, isRedisAvailable } = require("../../../config/redis");
 const { scanFileForThreats } = require("../../../services/clamav.service");
 const { ApiError } = require("../../../utils/http");
 const { ROLES, normalizeRole } = require("../../../constants/roles");
+const { isCurrentStudent } = require("../../../services/student-lifecycle.service");
 const { uploadRoot } = require("../middlewares/upload.middleware");
 const {
   EXTENSIONS_BY_RESOURCE_TYPE,
@@ -150,6 +151,8 @@ const getActorFromRequest = (req) => {
       collegeId: req.user.collegeId || req.collegeId || null,
       departmentId: req.user.departmentId || null,
       batchIds,
+      lifecycleStatus: req.user.lifecycleStatus || null,
+      isActive: req.user.isActive !== false,
     };
   }
 
@@ -200,6 +203,10 @@ const buildVisibilityWhereForActor = (actor, options = {}) => {
     });
   }
 
+  if (actor.role === ROLES.STUDENT && !isCurrentStudent(actor)) {
+    return { id: "__NO_ACTIVE_STUDENT_RESOURCES__" };
+  }
+
   return appendAnd(activeWhere, {
     OR: [
       { visibilityScope: VISIBILITY_SCOPES.GLOBAL },
@@ -229,6 +236,10 @@ const canAccessResource = (actor, resource, action = "read") => {
   }
 
   if (actor.role === ROLES.STUDENT && resource.isActive === false) {
+    return false;
+  }
+
+  if (actor.role === ROLES.STUDENT && !isCurrentStudent(actor)) {
     return false;
   }
 

@@ -53,6 +53,41 @@ describe("test service scoring", () => {
     expect(isQuestionCorrect(question, { selectedOptions: ["A"] })).toBe(false);
   });
 
+  it("deducts negative marks only for answered wrong questions", async () => {
+    jest.spyOn(models, "init").mockResolvedValue({
+      dbClient: {
+        submission: {
+          findUnique: jest.fn(async () => ({
+            id: "submission-1",
+            test: {
+              negativeMarkingEnabled: true,
+              negativeMarks: 1,
+              questions: [
+                { id: "q1", type: "MCQ", correctOption: "A", marks: 5 },
+                { id: "q2", type: "MCQ", correctOption: "B", marks: 5 },
+                { id: "q3", type: "MCQ", correctOption: "C", marks: 5 },
+              ],
+            },
+            answers: [
+              { questionId: "q1", selectedOption: "A" },
+              { questionId: "q2", selectedOption: "A" },
+              { questionId: "q3", selectedOption: null, selectedOptions: [], answerText: "" },
+            ],
+          })),
+        },
+      },
+    });
+
+    const summary = await calculateSubmissionScore("submission-1");
+
+    expect(summary).toEqual({
+      score: 4,
+      accuracy: 26.67,
+      completion: 66.67,
+      totalQuestions: 3,
+    });
+  });
+
   it("uses the same answered check as the student test palette", () => {
     expect(isAnswerProvided({ selectedOption: null, selectedOptions: [], answerText: "" })).toBe(false);
     expect(isAnswerProvided({ markedForReview: true })).toBe(false);

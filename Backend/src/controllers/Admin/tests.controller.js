@@ -314,6 +314,10 @@ const createTest = asyncHandler(async (req, res) => {
     totalMarks,
     attemptsAllowed,
     evaluationRule,
+    negativeMarkingEnabled,
+    negativeMarks,
+    shuffleQuestions,
+    shuffleAnswers,
     startsAt,
     endsAt,
     assignmentMethod,
@@ -372,6 +376,10 @@ const createTest = asyncHandler(async (req, res) => {
         totalMarks,
         attemptsAllowed,
         evaluationRule,
+        negativeMarkingEnabled: Boolean(negativeMarkingEnabled),
+        negativeMarks: Number(negativeMarks || 0),
+        shuffleQuestions: Boolean(shuffleQuestions),
+        shuffleAnswers: Boolean(shuffleAnswers),
         startsAt: startsAtDate,
         endsAt: endsAtDate,
         status: resolveStatus(publishState, startsAtDate),
@@ -865,6 +873,12 @@ const updateTest = asyncHandler(async (req, res) => {
     }
   }
 
+  const nextNegativeMarkingEnabled = req.body.negativeMarkingEnabled ?? existing.negativeMarkingEnabled ?? false;
+  const nextNegativeMarks = Number(req.body.negativeMarks ?? existing.negativeMarks ?? 0);
+  if (nextNegativeMarkingEnabled && (!Number.isFinite(nextNegativeMarks) || nextNegativeMarks <= 0)) {
+    throw new ApiError(422, "Negative marks must be greater than 0 when negative marking is enabled", null, "INVALID_NEGATIVE_MARKS");
+  }
+
   if (req.body.startsAt) {
     const startsAt = new Date(req.body.startsAt);
     if (Number.isNaN(startsAt.getTime())) {
@@ -948,6 +962,10 @@ const updateTest = asyncHandler(async (req, res) => {
         totalMarks: req.body.totalMarks ?? existing.totalMarks,
         attemptsAllowed: req.body.attemptsAllowed ?? existing.attemptsAllowed,
         evaluationRule: req.body.evaluationRule ?? existing.evaluationRule,
+        negativeMarkingEnabled: nextNegativeMarkingEnabled,
+        negativeMarks: nextNegativeMarks,
+        shuffleQuestions: req.body.shuffleQuestions ?? existing.shuffleQuestions ?? false,
+        shuffleAnswers: req.body.shuffleAnswers ?? existing.shuffleAnswers ?? false,
         assignmentMethod: shouldUpdateAssignment
           ? resolvedAssignmentMethod
           : (existing.assignmentMethod || deriveAssignmentMethod(existing)),
@@ -1228,7 +1246,7 @@ const getLiveMonitoring = asyncHandler(async (req, res) => {
     ? { user: { departmentId: scopedDepartmentId } }
     : {};
 
-  const [inProgress, questionCount, sessions, rateLimits] = await Promise.all([
+  const [inProgress, questionCount, rateLimits] = await Promise.all([
     db.submission.findMany({
       where: { testId, collegeId, status: "IN_PROGRESS", ...submissionUserScope },
       include: {
@@ -1253,9 +1271,15 @@ const getLiveMonitoring = asyncHandler(async (req, res) => {
       orderBy: { updatedAt: "desc" },
     }),
     db.question.count({ where: { testId, collegeId } }),
-    db.testSession.findMany({ where: { testId }, select: { userId: true, submissionId: true, expiresAt: true } }),
     getExamRateLimitMetricsSnapshot({ limit: 5, collegeId }),
   ]);
+  const scopedSubmissionIds = inProgress.map((submission) => submission.id).filter(Boolean);
+  const sessions = scopedSubmissionIds.length > 0
+    ? await db.testSession.findMany({
+        where: { testId, submissionId: { in: scopedSubmissionIds } },
+        select: { userId: true, submissionId: true, expiresAt: true },
+      })
+    : [];
 
   const nowMs = Date.now();
   const sessionMap = new Map(sessions.map((item) => [item.submissionId, item]));

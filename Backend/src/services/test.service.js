@@ -107,6 +107,25 @@ const isQuestionCorrect = (question, answer) => {
   return normalize(getAnswerText(answer)) === normalize(question.correctText);
 };
 
+const toNumber = (value, fallback = 0) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const resolveNegativeMarks = (test = {}, question = {}) => {
+  if (!test?.negativeMarkingEnabled) {
+    return 0;
+  }
+
+  const questionPenalty = toNumber(question?.negativeMarks, NaN);
+  if (Number.isFinite(questionPenalty) && questionPenalty > 0) {
+    return questionPenalty;
+  }
+
+  const testPenalty = toNumber(test?.negativeMarks, 0);
+  return testPenalty > 0 ? testPenalty : 0;
+};
+
 const calculateSubmissionScore = async (submissionId) => {
   const m = await models.init();
   const db = m.dbClient;
@@ -135,16 +154,23 @@ const calculateSubmissionScore = async (submissionId) => {
   let scoredMarks = 0;
   for (const question of questions) {
     const answer = findAnswerForQuestion(answers, question);
+    if (!isAnswerProvided(answer)) {
+      continue;
+    }
+
     if (isQuestionCorrect(question, answer)) {
       scoredMarks += Number(question?.marks || 0);
+    } else {
+      scoredMarks -= resolveNegativeMarks(submission.test, question);
     }
   }
 
-  const accuracy = totalMarks > 0 ? (scoredMarks / totalMarks) * 100 : 0;
+  const finalScore = Math.max(0, scoredMarks);
+  const accuracy = totalMarks > 0 ? (finalScore / totalMarks) * 100 : 0;
   const completion = totalQuestions > 0 ? (providedAnswerCount / totalQuestions) * 100 : 0;
 
   return {
-    score: Number(scoredMarks.toFixed(2)),
+    score: Number(finalScore.toFixed(2)),
     accuracy: Number(accuracy.toFixed(2)),
     completion: Number(completion.toFixed(2)),
     totalQuestions,

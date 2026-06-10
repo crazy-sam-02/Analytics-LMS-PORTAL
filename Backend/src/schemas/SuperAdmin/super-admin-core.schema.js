@@ -27,6 +27,9 @@ const paginationQuerySchema = z.object({
     limit: z.coerce.number().int().min(1).max(100).default(20),
     search: z.string().optional(),
     year: z.coerce.number().int().min(1).max(4).optional(),
+    studentScope: z.enum(["current", "passout", "all"]).optional(),
+    passoutYear: z.coerce.number().int().min(2000).max(2100).optional(),
+    passoutCohortId: z.string().trim().optional(),
     collegeId: idSchema.optional(),
     departmentId: idSchema.optional(),
     batchId: idSchema.optional(),
@@ -281,6 +284,8 @@ const promoteStudentsYearGlobalSchema = z.object({
   body: z.object({
     collegeId: idSchema,
     confirmationText: z.string().trim().min(1),
+    passoutYear: z.coerce.number().int().min(2000).max(2100).optional(),
+    academicLabel: z.string().trim().min(3).max(50).optional(),
   }),
   params: z.object({}).optional().default({}),
   query: z.object({}).optional().default({}),
@@ -327,6 +332,10 @@ const createGlobalTestSchema = z.object({
     totalMarks: z.number().int().min(1),
     attemptsAllowed: z.number().int().min(1).max(10).default(1),
     evaluationRule: z.enum(["LAST_ATTEMPT", "BEST_ATTEMPT"]).default("BEST_ATTEMPT"),
+    negativeMarkingEnabled: z.boolean().default(false),
+    negativeMarks: z.number().min(0).max(100).default(0),
+    shuffleQuestions: z.boolean().default(false),
+    shuffleAnswers: z.boolean().default(false),
     startsAt: z.string().datetime(),
     endsAt: z.string().datetime(),
     allColleges: z.boolean().default(false),
@@ -358,6 +367,10 @@ const createGlobalTestSchema = z.object({
   if (Number(input.body?.restrictions?.paragraphWordLimit || 0) < 10) {
     ctx.addIssue({ code: "custom", message: "Paragraph word limit must be at least 10" });
   }
+
+  if (input.body.negativeMarkingEnabled && Number(input.body.negativeMarks || 0) <= 0) {
+    ctx.addIssue({ code: "custom", message: "Negative marks must be greater than 0 when negative marking is enabled" });
+  }
 });
 
 const testIdParamSchema = z.object({
@@ -377,6 +390,10 @@ const updateGlobalTestSchema = z.object({
     totalMarks: z.number().int().min(1),
     attemptsAllowed: z.number().int().min(1).max(10).default(1),
     evaluationRule: z.enum(["LAST_ATTEMPT", "BEST_ATTEMPT"]).default("BEST_ATTEMPT"),
+    negativeMarkingEnabled: z.boolean().default(false),
+    negativeMarks: z.number().min(0).max(100).default(0),
+    shuffleQuestions: z.boolean().default(false),
+    shuffleAnswers: z.boolean().default(false),
     startsAt: z.string().datetime(),
     endsAt: z.string().datetime(),
     allColleges: z.boolean().default(false),
@@ -409,6 +426,10 @@ const updateGlobalTestSchema = z.object({
 
   if (Number(input.body?.restrictions?.paragraphWordLimit || 0) < 10) {
     ctx.addIssue({ code: "custom", message: "Paragraph word limit must be at least 10" });
+  }
+
+  if (input.body.negativeMarkingEnabled && Number(input.body.negativeMarks || 0) <= 0) {
+    ctx.addIssue({ code: "custom", message: "Negative marks must be greater than 0 when negative marking is enabled" });
   }
 });
 
@@ -563,6 +584,18 @@ const superAdminPasswordSchema = z.string().superRefine((password, ctx) => {
   }
 });
 
+const changeSuperAdminPasswordSchema = z.object({
+  body: z.object({
+    currentPassword: z.string().min(8),
+    newPassword: superAdminPasswordSchema,
+  }).refine((payload) => payload.currentPassword !== payload.newPassword, {
+    path: ["newPassword"],
+    message: "New password must be different from current password",
+  }),
+  params: z.object({}).optional().default({}),
+  query: z.object({}).optional().default({}),
+});
+
 const createSystemAdminSchema = z.object({
   body: z.object({
     name: z.string().trim().min(2).optional(),
@@ -633,6 +666,7 @@ module.exports = {
   createSuperReportSchema,
   reportJobParamSchema,
   updatePlatformSettingsSchema,
+  changeSuperAdminPasswordSchema,
   createSystemAdminSchema,
   updateSystemAdminStatusSchema,
   resetSystemAdminPasswordSchema,

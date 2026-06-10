@@ -5,6 +5,7 @@ const { ApiError } = require("../utils/http");
 const { createAuditLog } = require("./audit.service");
 const { getPagination } = require("../utils/pagination");
 const { invalidatePrincipalAuthCache } = require("./auth-revocation.service");
+const { appendLifecycleFilters } = require("./report-scope.service");
 const {
   buildDepartmentLookupIndex,
   getInvalidDepartmentReason,
@@ -251,11 +252,12 @@ const listStudents = async (collegeId, opts = {}) => {
   const { page, limit, skip } = getPagination(opts);
   const year = opts.year !== undefined && opts.year !== "" ? Number(opts.year) : undefined;
 
-  const where = {
+  const baseWhere = {
     collegeId,
     ...(opts.departmentId ? { departmentId: opts.departmentId } : {}),
     ...(year !== undefined && Number.isFinite(year) ? { year } : {}),
   };
+  const where = opts.studentScope ? appendLifecycleFilters(baseWhere, opts) : baseWhere;
 
   const filters = [];
   if (opts.batchId) {

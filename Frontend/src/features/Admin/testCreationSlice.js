@@ -41,6 +41,8 @@ const createDefaultForm = () => ({
   endsAt: "",
   attemptsAllowed: 1,
   evaluationRule: "BEST_ATTEMPT",
+  negativeMarkingEnabled: false,
+  negativeMarks: 0,
   skipOverlapCheck: false,
   assignmentMethod: "department_wise",
   years: [1, 2, 3, 4],
@@ -50,6 +52,7 @@ const createDefaultForm = () => ({
   questionInputMode: "manual",
   questions: [{ ...emptyQuestion }],
   shuffleQuestions: false,
+  shuffleAnswers: false,
   restrictions: normalizeRestrictions(),
   testType: DEFAULT_TEST_TYPE,
   proctoringPreset: DEFAULT_PROCTORING_PRESET,
@@ -189,6 +192,8 @@ const buildFormFromTest = (test) => {
     endsAt: toDateTimeLocal(test?.endsAt),
     attemptsAllowed: Math.max(1, Math.min(10, Number(test?.attemptsAllowed || 1))),
     evaluationRule: String(test?.evaluationRule || "BEST_ATTEMPT"),
+    negativeMarkingEnabled: Boolean(test?.negativeMarkingEnabled),
+    negativeMarks: Number(test?.negativeMarks || 0),
     assignmentMethod: resolvedAssignmentMethod,
     years: Array.isArray(test?.years) && test.years.length > 0
       ? test.years.map((year) => Number(year)).filter((year) => year >= 1 && year <= 4)
@@ -202,6 +207,8 @@ const buildFormFromTest = (test) => {
           .sort((a, b) => Number(a.order || 0) - Number(b.order || 0))
           .map(mapQuestionToForm)
       : [{ ...emptyQuestion }],
+    shuffleQuestions: Boolean(test?.shuffleQuestions),
+    shuffleAnswers: Boolean(test?.shuffleAnswers),
     restrictions: resolvedConfig.restrictions,
     testType: resolvedConfig.testType,
     proctoringPreset: resolvedConfig.proctoringPreset,
@@ -262,6 +269,13 @@ export const validateCurrentStep = (state) => {
 
     if (!Number.isFinite(attemptsAllowed) || attemptsAllowed < 1 || attemptsAllowed > 10) {
       errors.attemptsAllowed = "Attempts allowed must be between 1 and 10";
+    }
+
+    if (form.negativeMarkingEnabled) {
+      const negativeMarks = Number(form.negativeMarks);
+      if (!Number.isFinite(negativeMarks) || negativeMarks <= 0) {
+        errors.negativeMarks = "Negative marks must be greater than 0";
+      }
     }
   }
 
@@ -417,6 +431,8 @@ export const submitTestCreation = createAsyncThunk(
       durationMins: Number(form.durationMins),
       totalMarks: Number(form.totalMarks),
       attemptsAllowed: Math.max(1, Math.min(10, Number(form.attemptsAllowed) || 1)),
+      negativeMarkingEnabled: Boolean(form.negativeMarkingEnabled),
+      negativeMarks: form.negativeMarkingEnabled ? Number(form.negativeMarks || 0) : 0,
       skipOverlapCheck: form.publishState === "DRAFT" ? true : Boolean(form.skipOverlapCheck),
       assignmentMethod: form.assignmentMethod,
       years: Array.isArray(form.years) ? [...new Set(form.years.map(Number).filter((year) => year >= 1 && year <= 4))] : [],
@@ -430,6 +446,8 @@ export const submitTestCreation = createAsyncThunk(
         deriveTestTypeFromPreset(form.proctoringPreset)
       ),
       restrictions: normalizedRestrictions,
+      shuffleQuestions: Boolean(form.shuffleQuestions),
+      shuffleAnswers: Boolean(form.shuffleAnswers),
       questions: form.questions.map((question) => normalizeQuestion(question)),
     };
 
@@ -446,6 +464,10 @@ export const submitTestCreation = createAsyncThunk(
           totalMarks: payload.totalMarks,
           attemptsAllowed: payload.attemptsAllowed,
           evaluationRule: payload.evaluationRule,
+          negativeMarkingEnabled: payload.negativeMarkingEnabled,
+          negativeMarks: payload.negativeMarks,
+          shuffleQuestions: payload.shuffleQuestions,
+          shuffleAnswers: payload.shuffleAnswers,
           startsAt: payload.startsAt,
           endsAt: payload.endsAt,
           collegeIds,

@@ -5,6 +5,7 @@ const { validateUniqueEmail } = require("./cross-field-validators.service");
 const { UserValidation } = require("../models/validation");
 const { ApiError } = require("../utils/http");
 const { bumpPrincipalTokenVersion, invalidatePrincipalAuthCache } = require("./auth-revocation.service");
+const { isAlumniStatus, STUDENT_LIFECYCLE_STATUS } = require("./student-lifecycle.service");
 
 const resolveStudentId = (enrollmentNumber) => String(enrollmentNumber || "").trim();
 
@@ -314,6 +315,10 @@ async function toggleStudentStatus(studentId, collegeId, adminId, isActive) {
     throw new ApiError(403, "Student not found");
   }
 
+  if (isActive && isAlumniStatus(existing.lifecycleStatus)) {
+    throw new ApiError(409, "Alumni accounts cannot be reactivated from status toggle", null, "ALUMNI_STUDENT_REACTIVATION_BLOCKED");
+  }
+
   // Simple validation for status change
   const validated = await validateDocument(
     UserValidation,
@@ -326,7 +331,12 @@ async function toggleStudentStatus(studentId, collegeId, adminId, isActive) {
 
   const updated = await db.student.update({
     where: { id: studentId },
-    data: { isActive: validated.isActive },
+    data: {
+      isActive: validated.isActive,
+      ...(validated.isActive
+        ? { lifecycleStatus: STUDENT_LIFECYCLE_STATUS.ACTIVE, disabledReason: null, disabledAt: null }
+        : { lifecycleStatus: STUDENT_LIFECYCLE_STATUS.SUSPENDED, disabledReason: "MANUAL_SUSPEND", disabledAt: new Date() }),
+    },
   });
 
   if (!validated.isActive) {

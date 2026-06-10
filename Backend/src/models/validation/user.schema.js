@@ -31,6 +31,19 @@ const UserValidationSchema = new mongoose.Schema(
     batchId: { type: String, default: null, validate: optionalReferenceValidator },
     year: { type: Number, required: true, min: 1, max: 4 },
     isActive: { type: Boolean, default: true },
+    lifecycleStatus: {
+      type: String,
+      enum: ["ACTIVE", "ALUMNI", "SUSPENDED", "DROPPED", "BLOCKED", "GRADUATED"],
+      default: "ACTIVE",
+    },
+    disabledReason: {
+      type: String,
+      enum: ["MANUAL_SUSPEND", "MANUAL_DROP", "MANUAL_BLOCK", "PASSOUT", null],
+      default: null,
+    },
+    disabledAt: { type: Date, default: null },
+    passoutYear: { type: Number, min: 2000, max: 2100, default: null },
+    passoutCohortId: { type: String, default: null, validate: optionalReferenceValidator },
   },
   {
     _id: false,
