@@ -1,5 +1,9 @@
 export const ADMIN_PERMISSIONS = {
   VIEW_TESTS: "view_tests",
+  VIEW_BATCHES: "view_batches",
+  VIEW_STUDENTS: "view_students",
+  VIEW_EVENTS: "view_events",
+  VIEW_QUESTION_BANK: "view_question_bank",
   CREATE_TEST: "create_test",
   EDIT_TEST: "edit_test",
   DELETE_TEST: "delete_test",

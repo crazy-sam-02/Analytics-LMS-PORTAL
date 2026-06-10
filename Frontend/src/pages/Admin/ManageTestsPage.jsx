@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { fetchAdminTests, transitionAdminTestStatus, deleteAdminTest } from "@/features/Admin/adminPanelSlice";
-import { openTestEditDialog } from "@/features/Admin/testCreationSlice";
+import { openTestCreationDialog, openTestEditDialog, setTestCreationContext } from "@/features/Admin/testCreationSlice";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -53,20 +53,19 @@ const transitionsForStatus = (status) => {
       return [
         { action: "SCHEDULE", label: "Schedule" },
         { action: "GO_LIVE", label: "Go Live" },
-        { action: "DELETE", label: "Delete" },
       ];
     case "SCHEDULED":
       return [
         { action: "GO_LIVE", label: "Go Live" },
-        { action: "DELETE", label: "Delete" },
+        { action: "ARCHIVE", label: "Archive" },
       ];
     case "LIVE":
       return [
         { action: "COMPLETE", label: "Mark Complete" },
-        { action: "DELETE", label: "Delete" },
+        { action: "ARCHIVE", label: "Archive" },
       ];
     case "COMPLETED":
-      return [{ action: "DELETE", label: "Delete" }];
+      return [{ action: "ARCHIVE", label: "Archive" }];
     default:
       return [];
   }
@@ -95,8 +94,8 @@ const transitionConfirmationText = (testTitle, action) => {
       return `Go live now for "${testTitle}"? Questions become locked for editing after publish.`;
     case "COMPLETE":
       return `Mark "${testTitle}" as completed? This will stop it from remaining active.`;
-    case "DELETE":
-      return `Delete "${testTitle}"? This action is irreversible and will remove all associated data.`;
+    case "ARCHIVE":
+      return `Archive "${testTitle}"? It will be hidden from active workflows but retained for reports.`;
     default:
       return `Apply transition ${action} for "${testTitle}"?`;
   }
@@ -106,6 +105,7 @@ export default function ManageTestsPage() {
   const dispatch = useDispatch();
   const location = useLocation();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const tests = useSelector((state) => state.adminPanel.tests.data);
   const loading = useSelector((state) => state.adminPanel.tests.loading);
   const pagination = useSelector((state) => state.adminPanel.tests.pagination || {});
@@ -149,6 +149,27 @@ export default function ManageTestsPage() {
       dispatch(fetchAdminTests(queryString));
     }
   }, [canCreate, canEdit, canPublish, canViewTests, dispatch, queryString]);
+
+  useEffect(() => {
+    const isCreateRoute = /\/tests\/create\/?$/.test(location.pathname);
+    const isCreateQuery = searchParams.get("create") === "1";
+
+    if ((!isCreateRoute && !isCreateQuery) || !canCreate) {
+      return;
+    }
+
+    dispatch(setTestCreationContext("admin"));
+    dispatch(openTestCreationDialog());
+
+    if (isCreateRoute) {
+      navigate(`${basePath}/tests`, { replace: true });
+      return;
+    }
+
+    const nextSearchParams = new URLSearchParams(searchParams);
+    nextSearchParams.delete("create");
+    setSearchParams(nextSearchParams, { replace: true });
+  }, [basePath, canCreate, dispatch, location.pathname, navigate, searchParams, setSearchParams]);
 
   useEffect(() => {
     setSelectedIds([]);
@@ -292,7 +313,14 @@ export default function ManageTestsPage() {
             <CardTitle>Create Test</CardTitle>
             <CardDescription>Open the multi-step modal to create, validate, and publish tests.</CardDescription>
           </div>
-          {canCreate ? <TestCreationDialog /> : <PermissionDenied action="create tests" />}
+          {canCreate ? (
+            <>
+              <Button onClick={() => navigate(`${basePath}/tests/create`)} className="bg-primary hover:bg-primary-dark">
+                Create Test
+              </Button>
+              <TestCreationDialog hideTrigger />
+            </>
+          ) : <PermissionDenied action="create tests" />}
         </CardHeader>
       </Card>
 
@@ -354,6 +382,7 @@ export default function ManageTestsPage() {
                 {tests.map((test) => {
                   const totalAttempts = Number(test?._count?.submissions || 0);
                   const adminReadOnly = isAdminReadOnlyTest(test);
+                  const canOpenFullEditor = normalizeStatus(test.status) === "DRAFT";
                   return (
                     <tr key={test.id}>
                       <td className="px-3 py-2"><input type="checkbox" checked={selectedIds.includes(test.id)} disabled={adminReadOnly} onChange={(event) => setSelectedIds((prev) => event.target.checked ? [...new Set([...prev, test.id])] : prev.filter((id) => id !== test.id))} /></td>
@@ -386,7 +415,7 @@ export default function ManageTestsPage() {
                               Monitor
                             </Button>
                           ) : null}
-                          {canEdit && !adminReadOnly ? (
+                          {canEdit && !adminReadOnly && canOpenFullEditor ? (
                             <Button
                               size="sm"
                               variant="outline"

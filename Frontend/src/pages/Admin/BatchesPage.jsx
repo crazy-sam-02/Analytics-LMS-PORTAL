@@ -9,6 +9,9 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import SkeletonBlock from "@/components/common/SkeletonBlock";
+import PermissionDenied from "@/components/Admin/PermissionDenied";
+import usePermission from "@/hooks/usePermission";
+import { ADMIN_PERMISSIONS } from "@/features/Admin/adminPermissions";
 
 const PAGE_SIZE = 8;
 
@@ -29,6 +32,14 @@ export default function BatchesPage() {
 
   const admin = useSelector((state) => state.adminAuth.admin);
   const adminDeptId = admin?.department?.id || admin?.departmentId || "";
+  const canManageBatches = usePermission(ADMIN_PERMISSIONS.MANAGE_BATCHES);
+  const canViewBatches = usePermission(ADMIN_PERMISSIONS.VIEW_BATCHES) || canManageBatches;
+  const canManageStudents = usePermission(ADMIN_PERMISSIONS.MANAGE_STUDENTS);
+  const canViewStudents = usePermission(ADMIN_PERMISSIONS.VIEW_STUDENTS) || canManageStudents;
+  const canEditTests = usePermission(ADMIN_PERMISSIONS.EDIT_TEST);
+  const canViewTests = usePermission(ADMIN_PERMISSIONS.VIEW_TESTS) || canEditTests;
+  const canAssignTests = canManageBatches && canEditTests;
+  const canManageBatchStudents = canManageBatches && canManageStudents;
 
   useEffect(() => {
     if (!adminDeptId) return;
@@ -44,28 +55,31 @@ export default function BatchesPage() {
   const batchesQuery = useQuery({
     queryKey: ["admin-batches"],
     queryFn: adminApi.getBatches,
+    enabled: canViewBatches,
   });
 
   const testsQuery = useQuery({
     queryKey: ["admin-tests-for-batch"],
     queryFn: () => adminApi.getTests("?page=1&limit=100"),
+    enabled: canAssignTests && canViewTests,
   });
 
   const selectedBatchQuery = useQuery({
     queryKey: ["admin-batch-detail", selectedBatchId],
     queryFn: () => adminApi.getBatchDetail(selectedBatchId),
-    enabled: Boolean(selectedBatchId),
+    enabled: Boolean(selectedBatchId) && canViewBatches,
   });
 
   const studentsQuery = useQuery({
     queryKey: ["admin-students-directory", studentPage, search],
     queryFn: () => adminApi.getStudents(`?page=${studentPage}&limit=20&search=${encodeURIComponent(search)}`),
+    enabled: canViewStudents,
   });
 
   const studentProfileQuery = useQuery({
     queryKey: ["admin-student-profile", selectedStudentId],
     queryFn: () => adminApi.getStudentProfile(selectedStudentId),
-    enabled: Boolean(selectedStudentId),
+    enabled: Boolean(selectedStudentId) && canViewStudents,
   });
 
   const createBatchMutation = useMutation({
@@ -222,6 +236,10 @@ export default function BatchesPage() {
     });
   };
 
+  if (!canViewBatches) {
+    return <PermissionDenied action="access batches" />;
+  }
+
   return (
     <div className="space-y-6">
       {banner.type ? (
@@ -231,22 +249,24 @@ export default function BatchesPage() {
         </Alert>
       ) : null}
 
-      <Card className="rounded-2xl border-border">
-        <CardHeader>
-          <CardTitle>Create Batch</CardTitle>
-          <CardDescription>Name + academic year; department is taken from your admin profile.</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-3 sm:grid-cols-3">
-          <Input placeholder="Batch name (CSE-2027-A)" value={form.name} onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))} />
-          <Input type="number" value={form.year} onChange={(event) => setForm((prev) => ({ ...prev, year: Number(event.target.value) }))} />
-          <Button
-            onClick={() => createBatchMutation.mutate(form)}
-            disabled={createBatchMutation.isPending || !form.name || !form.departmentId}
-          >
-            {createBatchMutation.isPending ? "Creating..." : "Create Batch"}
-          </Button>
-        </CardContent>
-      </Card>
+      {canManageBatches ? (
+        <Card className="rounded-2xl border-border">
+          <CardHeader>
+            <CardTitle>Create Batch</CardTitle>
+            <CardDescription>Name + academic year; department is taken from your admin profile.</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-3 sm:grid-cols-3">
+            <Input placeholder="Batch name (CSE-2027-A)" value={form.name} onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))} />
+            <Input type="number" value={form.year} onChange={(event) => setForm((prev) => ({ ...prev, year: Number(event.target.value) }))} />
+            <Button
+              onClick={() => createBatchMutation.mutate(form)}
+              disabled={createBatchMutation.isPending || !form.name || !form.departmentId}
+            >
+              {createBatchMutation.isPending ? "Creating..." : "Create Batch"}
+            </Button>
+          </CardContent>
+        </Card>
+      ) : null}
 
       <div className="grid gap-6 xl:grid-cols-[1fr_1.2fr]">
         <Card className="rounded-2xl border-border">
@@ -287,7 +307,7 @@ export default function BatchesPage() {
         <Card className="rounded-2xl border-border">
           <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle>Batch Detail</CardTitle>
-            {selectedBatch ? (
+            {selectedBatch && canManageBatches ? (
               <Button
                 variant="outline"
                 onClick={() => {
@@ -318,59 +338,63 @@ export default function BatchesPage() {
                   <p className="text-xs text-text-secondary">{selectedBatch.department?.name} • Academic year {selectedBatch.year}</p>
                 </div>
 
-                <div className="space-y-2">
-                  <p className="text-sm font-semibold text-text-secondary">Add Students (CSV)</p>
-                  <Textarea rows={5} value={bulkCsv} onChange={(event) => setBulkCsv(event.target.value)} />
-                  <Button
-                    onClick={() => bulkStudentsMutation.mutate({ batchId: selectedBatch.id, payload: { csvData: bulkCsv } })}
-                    disabled={bulkStudentsMutation.isPending}
-                  >
-                    {bulkStudentsMutation.isPending ? "Importing..." : "Import Students"}
-                  </Button>
-                </div>
-
-                <div className="space-y-2">
-                  <p className="text-sm font-semibold text-text-secondary">Assign Test to {selectedBatch.department?.name}</p>
+                {canManageBatchStudents ? (
                   <div className="space-y-2">
-                    <div className="flex gap-4">
-                      <label className="flex items-center gap-2">
-                        <input
-                          type="radio"
-                          name="assignmentType"
-                          value="department"
-                          checked={assignTest.assignmentType === "department"}
-                          onChange={(e) => setAssignTest((prev) => ({ ...prev, assignmentType: e.target.value }))}
-                          className="h-4 w-4"
-                        />
-                        <span className="text-sm">Entire Department (Default)</span>
-                      </label>
-                      <label className="flex items-center gap-2">
-                        <input
-                          type="radio"
-                          name="assignmentType"
-                          value="batch"
-                          checked={assignTest.assignmentType === "batch"}
-                          onChange={(e) => setAssignTest((prev) => ({ ...prev, assignmentType: e.target.value }))}
-                          className="h-4 w-4"
-                        />
-                        <span className="text-sm">This Batch Only</span>
-                      </label>
-                    </div>
-                    <select className="h-10 rounded-md border border-border px-3 text-sm" value={assignTest.testId} onChange={(event) => setAssignTest((prev) => ({ ...prev, testId: event.target.value }))}>
-                      <option value="">Select test</option>
-                      {(testsQuery.data?.data || []).map((test) => <option key={test.id} value={test.id}>{test.title}</option>)}
-                    </select>
+                    <p className="text-sm font-semibold text-text-secondary">Add Students (CSV)</p>
+                    <Textarea rows={5} value={bulkCsv} onChange={(event) => setBulkCsv(event.target.value)} />
                     <Button
-                      onClick={() => assignTestMutation.mutate({ 
-                        testId: assignTest.testId, 
-                        batchId: selectedBatch.id,
-                        departmentId: selectedBatch.departmentId,
-                        assignmentType: assignTest.assignmentType
-                      })}
-                      disabled={assignTestMutation.isPending || !assignTest.testId}
-                    >{assignTestMutation.isPending ? "Assigning..." : "Assign"}</Button>
+                      onClick={() => bulkStudentsMutation.mutate({ batchId: selectedBatch.id, payload: { csvData: bulkCsv } })}
+                      disabled={bulkStudentsMutation.isPending}
+                    >
+                      {bulkStudentsMutation.isPending ? "Importing..." : "Import Students"}
+                    </Button>
                   </div>
-                </div>
+                ) : null}
+
+                {canAssignTests ? (
+                  <div className="space-y-2">
+                    <p className="text-sm font-semibold text-text-secondary">Assign Test to {selectedBatch.department?.name}</p>
+                    <div className="space-y-2">
+                      <div className="flex gap-4">
+                        <label className="flex items-center gap-2">
+                          <input
+                            type="radio"
+                            name="assignmentType"
+                            value="department"
+                            checked={assignTest.assignmentType === "department"}
+                            onChange={(e) => setAssignTest((prev) => ({ ...prev, assignmentType: e.target.value }))}
+                            className="h-4 w-4"
+                          />
+                          <span className="text-sm">Entire Department (Default)</span>
+                        </label>
+                        <label className="flex items-center gap-2">
+                          <input
+                            type="radio"
+                            name="assignmentType"
+                            value="batch"
+                            checked={assignTest.assignmentType === "batch"}
+                            onChange={(e) => setAssignTest((prev) => ({ ...prev, assignmentType: e.target.value }))}
+                            className="h-4 w-4"
+                          />
+                          <span className="text-sm">This Batch Only</span>
+                        </label>
+                      </div>
+                      <select className="h-10 rounded-md border border-border px-3 text-sm" value={assignTest.testId} onChange={(event) => setAssignTest((prev) => ({ ...prev, testId: event.target.value }))}>
+                        <option value="">Select test</option>
+                        {(testsQuery.data?.data || []).map((test) => <option key={test.id} value={test.id}>{test.title}</option>)}
+                      </select>
+                      <Button
+                        onClick={() => assignTestMutation.mutate({
+                          testId: assignTest.testId,
+                          batchId: selectedBatch.id,
+                          departmentId: selectedBatch.departmentId,
+                          assignmentType: assignTest.assignmentType
+                        })}
+                        disabled={assignTestMutation.isPending || !assignTest.testId}
+                      >{assignTestMutation.isPending ? "Assigning..." : "Assign"}</Button>
+                    </div>
+                  </div>
+                ) : null}
 
                 <div className="space-y-2">
                   <p className="text-sm font-semibold text-text-secondary">Students</p>
@@ -380,9 +404,11 @@ export default function BatchesPage() {
                         <p className="text-sm font-medium text-text-primary">{student.fullName}</p>
                         <p className="text-xs text-text-secondary">{student.email} • Attempts: {student._count?.submissions || 0}</p>
                       </div>
-                      <Button variant="outline" size="sm" onClick={() => removeStudentMutation.mutate({ batchId: selectedBatch.id, studentId: student.id })}>
-                        Remove
-                      </Button>
+                      {canManageBatchStudents ? (
+                        <Button variant="outline" size="sm" onClick={() => removeStudentMutation.mutate({ batchId: selectedBatch.id, studentId: student.id })}>
+                          Remove
+                        </Button>
+                      ) : null}
                     </div>
                   ))}
                 </div>
@@ -392,7 +418,8 @@ export default function BatchesPage() {
         </Card>
 
       </div>
-      <Card className="rounded-2xl border-border">
+      {canViewStudents ? (
+        <Card className="rounded-2xl border-border">
               <CardHeader>
                 <CardTitle>Student Directory</CardTitle>
                 <CardDescription>Search/filter, inspect profile, reassign batch, and monitor bulk-import jobs.</CardDescription>
@@ -402,7 +429,8 @@ export default function BatchesPage() {
                   <Input placeholder="Search by name/email" value={search} onChange={(event) => { setSearch(event.target.value); setStudentPage(1); }} />
                   <Button variant="outline" onClick={() => studentsQuery.refetch()}>Search</Button>
                 </div>
-                  <div className="mb-4 rounded-xl border border-border p-3">
+                  {canManageBatchStudents ? (
+                    <div className="mb-4 rounded-xl border border-border p-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <p className="text-sm font-semibold text-text-secondary">Bulk assign students</p>
                       <p className="text-xs text-text-secondary">Selected: {selectedStudentIds.length}</p>
@@ -434,6 +462,7 @@ export default function BatchesPage() {
                       </Button>
                     </div>
                   </div>
+                  ) : null}
                 <div className="grid gap-6 xl:grid-cols-[1fr_1.2fr]">
                   <div className="space-y-2">
                     {studentsQuery.isLoading ? (
@@ -460,13 +489,15 @@ export default function BatchesPage() {
                           className={`flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left ${selectedStudentId === student.id ? "border-primary/40 bg-primary/10" : "border-border"}`}
                         >
                           <div className="flex items-start gap-3">
-                            <input
-                              type="checkbox"
-                              checked={selectedStudentIds.includes(student.id)}
-                              onChange={() => toggleStudentSelection(student.id)}
-                              onClick={(event) => event.stopPropagation()}
-                              className="mt-1 h-4 w-4"
-                            />
+                            {canManageBatchStudents ? (
+                              <input
+                                type="checkbox"
+                                checked={selectedStudentIds.includes(student.id)}
+                                onChange={() => toggleStudentSelection(student.id)}
+                                onClick={(event) => event.stopPropagation()}
+                                className="mt-1 h-4 w-4"
+                              />
+                            ) : null}
                             <div>
                               <p className="font-medium text-text-primary">{student.fullName}</p>
                               <p className="text-xs text-text-secondary">{student.email} • {student.studentId}</p>
@@ -521,26 +552,29 @@ export default function BatchesPage() {
                           <p className="text-xs text-text-secondary italic">No batches assigned yet</p>
                         )}
       
-                        <div className="grid gap-2 border-t border-border pt-2 sm:grid-cols-3">
-                          <select className="h-10 rounded-md border border-border px-3 text-sm sm:col-span-2" value={batchIdInput} onChange={(event) => setBatchIdInput(event.target.value)}>
-                            <option value="">Select batch to add</option>
-                            {batches.map((batch) => (
-                              <option key={batch.id} value={batch.id}>{batch.name} ({batch.department?.name || "-"})</option>
-                            ))}
-                          </select>
-                          <Button
-                            onClick={() => assignBatchMutation.mutate({ studentId: selectedStudent.id, batchId: batchIdInput })}
-                            disabled={assignBatchMutation.isPending || !batchIdInput}
-                          >
-                            Add Batch
-                          </Button>
-                        </div>
+                        {canManageBatchStudents ? (
+                          <div className="grid gap-2 border-t border-border pt-2 sm:grid-cols-3">
+                            <select className="h-10 rounded-md border border-border px-3 text-sm sm:col-span-2" value={batchIdInput} onChange={(event) => setBatchIdInput(event.target.value)}>
+                              <option value="">Select batch to add</option>
+                              {batches.map((batch) => (
+                                <option key={batch.id} value={batch.id}>{batch.name} ({batch.department?.name || "-"})</option>
+                              ))}
+                            </select>
+                            <Button
+                              onClick={() => assignBatchMutation.mutate({ studentId: selectedStudent.id, batchId: batchIdInput })}
+                              disabled={assignBatchMutation.isPending || !batchIdInput}
+                            >
+                              Add Batch
+                            </Button>
+                          </div>
+                        ) : null}
                       </>
                     ) : null}
                   </div>
                 </div>
               </CardContent>
             </Card>
+      ) : null}
     </div>
   );
 }

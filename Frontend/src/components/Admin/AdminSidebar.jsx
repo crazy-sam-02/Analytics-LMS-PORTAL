@@ -1,4 +1,4 @@
-import { NavLink } from "react-router-dom";
+import { NavLink, useLocation } from "react-router-dom";
 import { useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import {
@@ -17,26 +17,33 @@ import {
   LogOut,
   PlusSquare,
 } from "lucide-react";
-import usePermission from "@/hooks/usePermission";
 import { ADMIN_PERMISSIONS } from "@/features/Admin/adminPermissions";
 import { logoutAdmin } from "@/features/Admin/adminAuthSlice";
 import ConfirmActionDialog from "@/components/Admin/ConfirmActionDialog";
 
-const createNavItems = (basePath) => [
-  { to: `${basePath}/dashboard`, label: "Dashboard", icon: LayoutDashboard },
-  { to: `${basePath}/departments`, label: "Departments", icon: Building2, permission: ADMIN_PERMISSIONS.MANAGE_DEPARTMENTS },
-  { to: `${basePath}/admins`, label: "Admin Management", icon: ShieldUser, permission: ADMIN_PERMISSIONS.MANAGE_ADMINS },
-  { to: `${basePath}/students`, label: "Students", icon: Users, permission: ADMIN_PERMISSIONS.MANAGE_STUDENTS },
-  { to: `${basePath}/tests`, label: "All Tests", icon: FileCheck2, permission: ADMIN_PERMISSIONS.VIEW_TESTS },
-  { to: `${basePath}/tests?create=1`, label: "Create New", icon: PlusSquare, permission: ADMIN_PERMISSIONS.CREATE_TEST },
-  { to: `${basePath}/question-bank`, label: "Question Bank", icon: LibraryBig, permission: ADMIN_PERMISSIONS.MANAGE_QUESTIONS },
-  { to: `${basePath}/resources`, label: "Learning Resources", icon: BookOpenCheck, permission: ADMIN_PERMISSIONS.VIEW_RESOURCES },
-  { to: `${basePath}/batches`, label: "Batches", icon: Layers3, permission: ADMIN_PERMISSIONS.MANAGE_BATCHES },
-  { to: `${basePath}/events`, label: "Events", icon: CalendarDays, permission: ADMIN_PERMISSIONS.MANAGE_EVENTS },
-  { to: `${basePath}/reports`, label: "Reports", icon: BarChart3, permission: ADMIN_PERMISSIONS.VIEW_REPORTS },
-  { to: `${basePath}/analytics`, label: "Analytics", icon: ChartNoAxesCombined, permission: ADMIN_PERMISSIONS.VIEW_ANALYTICS },
-  { to: `${basePath}/settings`, label: "Settings", icon: Settings },
-];
+const createNavItems = (basePath) => {
+  const collegeAdminOnlyItems = basePath === "/college-admin"
+    ? [
+        { to: `${basePath}/departments`, label: "Departments", icon: Building2, permissions: [ADMIN_PERMISSIONS.MANAGE_DEPARTMENTS] },
+        { to: `${basePath}/admins`, label: "Admin Management", icon: ShieldUser, permissions: [ADMIN_PERMISSIONS.MANAGE_ADMINS] },
+      ]
+    : [];
+
+  return [
+    { to: `${basePath}/dashboard`, label: "Dashboard", icon: LayoutDashboard },
+    ...collegeAdminOnlyItems,
+    { to: `${basePath}/students`, label: "Students", icon: Users, permissions: [ADMIN_PERMISSIONS.MANAGE_STUDENTS, ADMIN_PERMISSIONS.VIEW_STUDENTS] },
+    { to: `${basePath}/tests`, label: "All Tests", icon: FileCheck2, permissions: [ADMIN_PERMISSIONS.VIEW_TESTS, ADMIN_PERMISSIONS.EDIT_TEST, ADMIN_PERMISSIONS.PUBLISH_TEST] },
+    { to: `${basePath}/tests?create=1`, label: "Create New", icon: PlusSquare, permissions: [ADMIN_PERMISSIONS.CREATE_TEST] },
+    { to: `${basePath}/question-bank`, label: "Question Bank", icon: LibraryBig, permissions: [ADMIN_PERMISSIONS.MANAGE_QUESTIONS, ADMIN_PERMISSIONS.VIEW_QUESTION_BANK] },
+    { to: `${basePath}/resources`, label: "Learning Resources", icon: BookOpenCheck, permissions: [ADMIN_PERMISSIONS.VIEW_RESOURCES, ADMIN_PERMISSIONS.MANAGE_RESOURCES] },
+    { to: `${basePath}/batches`, label: "Batches", icon: Layers3, permissions: [ADMIN_PERMISSIONS.MANAGE_BATCHES, ADMIN_PERMISSIONS.VIEW_BATCHES] },
+    { to: `${basePath}/events`, label: "Events", icon: CalendarDays, permissions: [ADMIN_PERMISSIONS.MANAGE_EVENTS, ADMIN_PERMISSIONS.VIEW_EVENTS] },
+    { to: `${basePath}/reports`, label: "Reports", icon: BarChart3, permissions: [ADMIN_PERMISSIONS.VIEW_REPORTS] },
+    { to: `${basePath}/analytics`, label: "Analytics", icon: ChartNoAxesCombined, permissions: [ADMIN_PERMISSIONS.VIEW_ANALYTICS] },
+    { to: `${basePath}/settings`, label: "Settings", icon: Settings },
+  ];
+};
 
 export default function AdminSidebar({
   basePath = "/admin",
@@ -46,33 +53,25 @@ export default function AdminSidebar({
   logoutDescription = "You will be signed out from this admin session and need to login again to continue.",
 }) {
   const dispatch = useDispatch();
+  const location = useLocation();
   const collapsed = useSelector((state) => state.adminUi?.sidebarCollapsed);
+  const permissions = useSelector((state) => state.adminAuth.permissions || []);
   const [logoutOpen, setLogoutOpen] = useState(false);
   const navItems = createNavItems(basePath);
-  const canViewTests = usePermission(ADMIN_PERMISSIONS.VIEW_TESTS);
-  const canEditTest = usePermission(ADMIN_PERMISSIONS.EDIT_TEST);
-  const canManageQuestions = usePermission(ADMIN_PERMISSIONS.MANAGE_QUESTIONS);
-  const canViewResources = usePermission(ADMIN_PERMISSIONS.VIEW_RESOURCES);
-  const canManageBatches = usePermission(ADMIN_PERMISSIONS.MANAGE_BATCHES);
-  const canManageStudents = usePermission(ADMIN_PERMISSIONS.MANAGE_STUDENTS);
-  const canManageEvents = usePermission(ADMIN_PERMISSIONS.MANAGE_EVENTS);
-  const canViewReports = usePermission(ADMIN_PERMISSIONS.VIEW_REPORTS);
-  const canManageDepartments = usePermission(ADMIN_PERMISSIONS.MANAGE_DEPARTMENTS);
-  const canManageAdmins = usePermission(ADMIN_PERMISSIONS.MANAGE_ADMINS);
-  const canViewAnalytics = usePermission(ADMIN_PERMISSIONS.VIEW_ANALYTICS);
 
-  const permissionMap = {
-    [ADMIN_PERMISSIONS.VIEW_TESTS]: canViewTests,
-    [ADMIN_PERMISSIONS.EDIT_TEST]: canEditTest,
-    [ADMIN_PERMISSIONS.MANAGE_QUESTIONS]: canManageQuestions,
-    [ADMIN_PERMISSIONS.VIEW_RESOURCES]: canViewResources,
-    [ADMIN_PERMISSIONS.MANAGE_BATCHES]: canManageBatches,
-    [ADMIN_PERMISSIONS.MANAGE_STUDENTS]: canManageStudents,
-    [ADMIN_PERMISSIONS.MANAGE_EVENTS]: canManageEvents,
-    [ADMIN_PERMISSIONS.VIEW_REPORTS]: canViewReports,
-    [ADMIN_PERMISSIONS.MANAGE_DEPARTMENTS]: canManageDepartments,
-    [ADMIN_PERMISSIONS.MANAGE_ADMINS]: canManageAdmins,
-    [ADMIN_PERMISSIONS.VIEW_ANALYTICS]: canViewAnalytics,
+  const permissionSet = new Set(permissions);
+  const canShowItem = (item) => !item.permissions || item.permissions.some((permission) => permissionSet.has(permission));
+  const isNavItemActive = (item, isActive) => {
+    const [itemPathname, itemSearch] = item.to.split("?");
+    if (itemSearch) {
+      return location.pathname === itemPathname && location.search === `?${itemSearch}`;
+    }
+
+    if (item.to === `${basePath}/tests`) {
+      return isActive && location.search !== "?create=1";
+    }
+
+    return isActive;
   };
 
   return (
@@ -105,20 +104,21 @@ export default function AdminSidebar({
       </div>
 
       <nav className="space-y-1.5">
-        {navItems.filter((item) => !item.permission || permissionMap[item.permission]).map((item) => {
+        {navItems.filter(canShowItem).map((item) => {
           const IconComponent = item.icon;
 
           return (
             <NavLink
               key={item.to}
               to={item.to}
-              className={({ isActive }) =>
-                `group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
-                  isActive
+              className={({ isActive }) => {
+                const active = isNavItemActive(item, isActive);
+                return `group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
+                  active
                     ? "bg-sidebar-primary text-sidebar-primary-foreground shadow-sm shadow-primary/35 ring-1 ring-sidebar-ring/30"
                     : "text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground"
-                }`
-              }
+                }`;
+              }}
               title={collapsed ? item.label : undefined}
             >
               <IconComponent className="size-4" strokeWidth={2.1} />

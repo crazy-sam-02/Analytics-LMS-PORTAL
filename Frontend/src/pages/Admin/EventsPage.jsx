@@ -9,8 +9,11 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import SkeletonBlock from "@/components/common/SkeletonBlock";
+import PermissionDenied from "@/components/Admin/PermissionDenied";
 import { validateImageFile } from "@/lib/image";
 import { optimizeCloudinaryImage } from "@/lib/cloudinary";
+import usePermission from "@/hooks/usePermission";
+import { ADMIN_PERMISSIONS } from "@/features/Admin/adminPermissions";
 
 const EVENT_TYPES = ["Workshop", "Hackathon", "Symposium", "Other"];
 const EVENT_PAGE_SIZE = 8;
@@ -79,6 +82,8 @@ export default function EventsPage() {
   const [eventImagePreview, setEventImagePreview] = useState("");
   const [editingEventId, setEditingEventId] = useState("");
   const [form, setForm] = useState(EMPTY_FORM);
+  const canManageEvents = usePermission(ADMIN_PERMISSIONS.MANAGE_EVENTS);
+  const canViewEvents = usePermission(ADMIN_PERMISSIONS.VIEW_EVENTS) || canManageEvents;
 
   useEffect(() => {
     return () => {
@@ -88,11 +93,11 @@ export default function EventsPage() {
     };
   }, [eventImagePreview]);
 
-  const eventsQuery = useQuery({ queryKey: ["admin-events"], queryFn: adminApi.getEvents });
+  const eventsQuery = useQuery({ queryKey: ["admin-events"], queryFn: adminApi.getEvents, enabled: canViewEvents });
   const selectedEventQuery = useQuery({
     queryKey: ["admin-event-registrants", selectedEventId],
     queryFn: () => adminApi.getEventRegistrants(selectedEventId),
-    enabled: Boolean(selectedEventId),
+    enabled: Boolean(selectedEventId) && canViewEvents,
   });
 
   const resetForm = () => {
@@ -320,6 +325,10 @@ export default function EventsPage() {
     URL.revokeObjectURL(url);
   };
 
+  if (!canViewEvents) {
+    return <PermissionDenied action="access events" />;
+  }
+
   return (
     <div className="space-y-6">
       {banner.type ? (
@@ -329,12 +338,13 @@ export default function EventsPage() {
         </Alert>
       ) : null}
 
-      <Card className="rounded-2xl border-border">
-        <CardHeader>
-          <CardTitle>{editingEventId ? "Edit Event" : "Create Event"}</CardTitle>
-          <CardDescription>Event date/deadline with custom registration fields and participant cap.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
+      {canManageEvents ? (
+        <Card className="rounded-2xl border-border">
+          <CardHeader>
+            <CardTitle>{editingEventId ? "Edit Event" : "Create Event"}</CardTitle>
+            <CardDescription>Event date/deadline with custom registration fields and participant cap.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
           <div className="space-y-1.5">
             <label htmlFor="event-title" className="text-sm font-medium text-text-secondary">Title</label>
             <Input id="event-title" placeholder="Title" value={form.title} onChange={(event) => setForm((prev) => ({ ...prev, title: event.target.value }))} />
@@ -442,8 +452,9 @@ export default function EventsPage() {
               </Button>
             ) : null}
           </div>
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      ) : null}
 
       <div className="grid gap-6 lg:grid-cols-[minmax(280px,360px)_1fr]">
         <Card className="rounded-2xl border-border">
@@ -491,14 +502,18 @@ export default function EventsPage() {
                 <p className="text-xs text-text-secondary">{event.eventType} • {(event.visibilityScope || (event.isInterCollege ? "INTER_COLLEGE" : "COLLEGE_ONLY")) === "INTER_COLLEGE" ? "Inter-college" : "College-only"} • {new Date(event.startsAt).toLocaleString()} • {event.registrantCount || 0}/{event.registrationLimit}</p>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   {status !== "ACTIVE" ? <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-semibold text-text-secondary">{status}</span> : null}
-                  <Button type="button" variant="outline" size="sm" onClick={() => startEdit(event)}>
-                    <Pencil className="size-4" />
-                    Edit
-                  </Button>
-                  <Button type="button" variant="destructive" size="sm" disabled={deleteMutation.isPending} onClick={() => deleteMutation.mutate(event.id)}>
-                    <Trash2 className="size-4" />
-                    Delete
-                  </Button>
+                  {canManageEvents ? (
+                    <>
+                      <Button type="button" variant="outline" size="sm" onClick={() => startEdit(event)}>
+                        <Pencil className="size-4" />
+                        Edit
+                      </Button>
+                      <Button type="button" variant="destructive" size="sm" disabled={deleteMutation.isPending} onClick={() => deleteMutation.mutate(event.id)}>
+                        <Trash2 className="size-4" />
+                        Delete
+                      </Button>
+                    </>
+                  ) : null}
                 </div>
               </div>
               );
@@ -533,7 +548,7 @@ export default function EventsPage() {
                   <Button type="button" variant="outline" disabled={selectedEventQuery.isLoading} onClick={downloadCsv}>
                     Download Registrants
                   </Button>
-                  {getEventStatus(selectedEvent) === "ACTIVE" ? (
+                  {canManageEvents && getEventStatus(selectedEvent) === "ACTIVE" ? (
                     <>
                       <Input
                         value={cancelReason}

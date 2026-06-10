@@ -148,28 +148,29 @@ const router = createBrowserRouter([
               { path: "/admin", element: <Navigate to="/admin/dashboard" replace /> },
               { path: "/admin/dashboard", element: <PageRoute Page={AdminDashboardPage} /> },
               { path: "/admin/tests", element: <PageRoute Page={ManageTestsPage} /> },
+              { path: "/admin/tests/create", element: <PageRoute Page={ManageTestsPage} /> },
               {
                 element: <PermissionRoute permissions={[ADMIN_PERMISSIONS.VIEW_TESTS, ADMIN_PERMISSIONS.EDIT_TEST]} action="monitor live tests" />,
                 children: [{ path: "/admin/tests/:testId/monitoring", element: <PageRoute Page={LiveMonitoringPage} /> }],
               },
               {
-                element: <PermissionRoute permission={ADMIN_PERMISSIONS.MANAGE_QUESTIONS} action="access question bank" />,
+                element: <PermissionRoute permissions={[ADMIN_PERMISSIONS.MANAGE_QUESTIONS, ADMIN_PERMISSIONS.VIEW_QUESTION_BANK]} action="access question bank" />,
                 children: [{ path: "/admin/question-bank", element: <PageRoute Page={QuestionBankPage} /> }],
               },
               {
-                element: <PermissionRoute permission={ADMIN_PERMISSIONS.VIEW_RESOURCES} action="access learning resources" />,
+                element: <PermissionRoute permissions={[ADMIN_PERMISSIONS.VIEW_RESOURCES, ADMIN_PERMISSIONS.MANAGE_RESOURCES]} action="access learning resources" />,
                 children: [{ path: "/admin/resources", element: <PageRoute Page={LearningResourcesPage} /> }],
               },
               {
-                element: <PermissionRoute permission={ADMIN_PERMISSIONS.MANAGE_BATCHES} action="manage batches" />,
+                element: <PermissionRoute permissions={[ADMIN_PERMISSIONS.MANAGE_BATCHES, ADMIN_PERMISSIONS.VIEW_BATCHES]} action="access batches" />,
                 children: [{ path: "/admin/batches", element: <PageRoute Page={BatchesPage} /> }],
               },
               {
-                element: <PermissionRoute permission={ADMIN_PERMISSIONS.MANAGE_STUDENTS} action="manage students" />,
+                element: <PermissionRoute permissions={[ADMIN_PERMISSIONS.MANAGE_STUDENTS, ADMIN_PERMISSIONS.VIEW_STUDENTS]} action="access students" />,
                 children: [{ path: "/admin/students", element: <PageRoute Page={StudentsPage} /> }],
               },
               {
-                element: <PermissionRoute permission={ADMIN_PERMISSIONS.MANAGE_EVENTS} action="manage events" />,
+                element: <PermissionRoute permissions={[ADMIN_PERMISSIONS.MANAGE_EVENTS, ADMIN_PERMISSIONS.VIEW_EVENTS]} action="access events" />,
                 children: [{ path: "/admin/events", element: <PageRoute Page={EventsPage} /> }],
               },
               {

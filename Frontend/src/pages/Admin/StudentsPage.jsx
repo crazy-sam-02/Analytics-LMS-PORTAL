@@ -9,8 +9,11 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import SkeletonBlock from "@/components/common/SkeletonBlock";
+import PermissionDenied from "@/components/Admin/PermissionDenied";
 import { parseSpreadsheetRows } from "@/lib/spreadsheet";
 import { isAdminRole } from "@/features/Admin/adminRole";
+import usePermission from "@/hooks/usePermission";
+import { ADMIN_PERMISSIONS } from "@/features/Admin/adminPermissions";
 
 const IMPORT_SAMPLE = [
   "fullName,email,enrollNumber,department,year,batch",
@@ -55,6 +58,13 @@ export default function StudentsPage() {
     batch: "",
   });
   const [createdCredentials, setCreatedCredentials] = useState(null);
+  const canManageStudents = usePermission(ADMIN_PERMISSIONS.MANAGE_STUDENTS);
+  const canViewStudents = usePermission(ADMIN_PERMISSIONS.VIEW_STUDENTS) || canManageStudents;
+  const canManageBatches = usePermission(ADMIN_PERMISSIONS.MANAGE_BATCHES);
+  const canViewBatches = usePermission(ADMIN_PERMISSIONS.VIEW_BATCHES) || canManageBatches;
+  const canBulkImport = usePermission(ADMIN_PERMISSIONS.BULK_IMPORT) && canManageStudents;
+  const canManageDepartments = usePermission(ADMIN_PERMISSIONS.MANAGE_DEPARTMENTS);
+  const canAssignStudentsToBatch = canManageStudents && canManageBatches;
 
   const rowsToCsv = (rows) => {
     const header = ["fullName", "email", "studentId", "enrollNumber", "department", "year", "batch"];
@@ -121,22 +131,25 @@ export default function StudentsPage() {
       if (directoryFilters.year) params.set("year", directoryFilters.year);
       return adminApi.getStudents(`?${params.toString()}`);
     },
+    enabled: canViewStudents,
   });
 
   const studentProfileQuery = useQuery({
     queryKey: ["admin-student-profile", selectedStudentId],
     queryFn: () => adminApi.getStudentProfile(selectedStudentId),
-    enabled: Boolean(selectedStudentId),
+    enabled: Boolean(selectedStudentId) && canViewStudents,
   });
 
   const batchesQuery = useQuery({
     queryKey: ["admin-batches-for-students"],
     queryFn: adminApi.getBatches,
+    enabled: canViewBatches,
   });
 
   const departmentsQuery = useQuery({
     queryKey: ["admin-departments-for-students"],
     queryFn: adminApi.getDepartments,
+    enabled: canViewBatches || canManageDepartments,
   });
 
   const assignBatchMutation = useMutation({
@@ -197,7 +210,7 @@ export default function StudentsPage() {
   const importJobQuery = useQuery({
     queryKey: ["admin-student-import-job", activeImportJobId],
     queryFn: () => adminApi.getStudentImportJobStatus(activeImportJobId),
-    enabled: Boolean(activeImportJobId),
+    enabled: Boolean(activeImportJobId) && canBulkImport,
     refetchInterval: (query) => {
       const status = query?.state?.data?.status;
       return status === "queued" || status === "processing" ? 2000 : false;
@@ -255,6 +268,10 @@ export default function StudentsPage() {
     }
   }, [importJobQuery.data, queryClient]);
 
+  if (!canViewStudents) {
+    return <PermissionDenied action="access students" />;
+  }
+
   return (
     <div className="space-y-6">
       {banner.type ? (
@@ -264,7 +281,8 @@ export default function StudentsPage() {
         </Alert>
       ) : null}
 
-      <Card className="rounded-2xl border-border">
+      {canManageStudents ? (
+        <Card className="rounded-2xl border-border">
         <CardHeader>
           <CardTitle>Create Student Account</CardTitle>
           <CardDescription>No student registration is needed. Admin creates credentials directly.</CardDescription>
@@ -363,8 +381,10 @@ export default function StudentsPage() {
             </div>
           ) : null}
         </CardContent>
-      </Card>
-      <Card className="rounded-2xl border-border">
+        </Card>
+      ) : null}
+      {canBulkImport ? (
+        <Card className="rounded-2xl border-border">
         <CardHeader>
           <CardTitle>Bulk Import (Excel/CSV)</CardTitle>
           <CardDescription>Upload .xlsx/.csv file or paste CSV. Runs as async job and supports large imports.</CardDescription>
@@ -400,7 +420,8 @@ export default function StudentsPage() {
             </div>
           ) : null}
         </CardContent>
-      </Card>
+        </Card>
+      ) : null}
 
       <Card className="rounded-2xl border-border">
         <CardHeader>
@@ -435,6 +456,7 @@ export default function StudentsPage() {
                 setDirectoryFilters((prev) => ({ ...prev, batchId: event.target.value }));
                 setPage(1);
               }}
+              disabled={!canViewBatches}
             >
               <option value="">All batches</option>
               {Array.isArray(batches)
@@ -538,20 +560,22 @@ export default function StudentsPage() {
                     <p className="text-xs text-text-secondary italic">No batches assigned yet</p>
                   )}
 
-                  <div className="grid gap-2 border-t border-border pt-2 sm:grid-cols-3">
-                    <select className="h-10 rounded-md border border-border px-3 text-sm sm:col-span-2" value={batchIdInput} onChange={(event) => setBatchIdInput(event.target.value)}>
-                      <option value="">Select batch to add</option>
-                      {Array.isArray(batches) && batches.map((batch) => (
-                        <option key={batch.id} value={batch.id}>{batch.name} ({batch.department?.name || "-"})</option>
-                      ))}
-                    </select>
-                    <Button
-                      onClick={() => assignBatchMutation.mutate({ studentId: selectedStudent.id, batchId: batchIdInput })}
-                      disabled={assignBatchMutation.isPending || !batchIdInput}
-                    >
-                      Add Batch
-                    </Button>
-                  </div>
+                  {canAssignStudentsToBatch ? (
+                    <div className="grid gap-2 border-t border-border pt-2 sm:grid-cols-3">
+                      <select className="h-10 rounded-md border border-border px-3 text-sm sm:col-span-2" value={batchIdInput} onChange={(event) => setBatchIdInput(event.target.value)}>
+                        <option value="">Select batch to add</option>
+                        {Array.isArray(batches) && batches.map((batch) => (
+                          <option key={batch.id} value={batch.id}>{batch.name} ({batch.department?.name || "-"})</option>
+                        ))}
+                      </select>
+                      <Button
+                        onClick={() => assignBatchMutation.mutate({ studentId: selectedStudent.id, batchId: batchIdInput })}
+                        disabled={assignBatchMutation.isPending || !batchIdInput}
+                      >
+                        Add Batch
+                      </Button>
+                    </div>
+                  ) : null}
 
                 </>
               ) : null}

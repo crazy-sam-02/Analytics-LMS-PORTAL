@@ -9,6 +9,9 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import PermissionDenied from "@/components/Admin/PermissionDenied";
+import usePermission from "@/hooks/usePermission";
+import { ADMIN_PERMISSIONS } from "@/features/Admin/adminPermissions";
 import {
   createQuestionBankQuestion,
   createQuestionSubject,
@@ -57,15 +60,18 @@ export default function QuestionBankPage() {
   const [previewItem, setPreviewItem] = useState(null);
   const [bulkJson, setBulkJson] = useState(bulkUploadTemplate);
   const [manualQuestions, setManualQuestions] = useState([{ ...defaultQuestion }]);
+  const canManageQuestions = usePermission(ADMIN_PERMISSIONS.MANAGE_QUESTIONS);
+  const canViewQuestionBank = usePermission(ADMIN_PERMISSIONS.VIEW_QUESTION_BANK) || canManageQuestions;
 
   useEffect(() => {
+    if (!canViewQuestionBank) return;
     dispatch(fetchQuestionSubjects());
-  }, [dispatch]);
+  }, [canViewQuestionBank, dispatch]);
 
   useEffect(() => {
-    if (!viewDialogOpen || !activeSubject?.id) return;
+    if (!canViewQuestionBank || !viewDialogOpen || !activeSubject?.id) return;
     dispatch(fetchQuestionBankQuestions({ filters: { ...filters, subjectId: activeSubject.id }, page: pagination.page, limit: pagination.limit }));
-  }, [dispatch, viewDialogOpen, activeSubject?.id, filters, pagination.page, pagination.limit]);
+  }, [canViewQuestionBank, dispatch, viewDialogOpen, activeSubject?.id, filters, pagination.page, pagination.limit]);
 
   const activeCount = useMemo(() => subjects.reduce((sum, item) => sum + Number(item.questionCount || 0), 0), [subjects]);
 
@@ -102,7 +108,7 @@ export default function QuestionBankPage() {
   const addQuestionRow = () => setManualQuestions((prev) => [...prev, { ...defaultQuestion }]);
 
   const saveManualQuestions = async () => {
-    if (!activeSubject?.id) return;
+    if (!canManageQuestions || !activeSubject?.id) return;
 
     const validItems = manualQuestions.filter((item) => String(item.question || "").trim());
     if (validItems.length === 0) {
@@ -127,7 +133,7 @@ export default function QuestionBankPage() {
   };
 
   const saveBulkQuestions = async () => {
-    if (!activeSubject?.id) return;
+    if (!canManageQuestions || !activeSubject?.id) return;
     let parsed;
 
     try {
@@ -155,11 +161,13 @@ export default function QuestionBankPage() {
   };
 
   const openAdd = (subject) => {
+    if (!canManageQuestions) return;
     setActiveSubject(subject);
     setAddDialogOpen(true);
   };
 
   const openView = (subject) => {
+    if (!canViewQuestionBank) return;
     setActiveSubject(subject);
     dispatch(setQuestionBankFilters({ subjectId: subject.id }));
     dispatch(fetchQuestionBankQuestions({ filters: { ...filters, subjectId: subject.id }, page: 1, limit: pagination.limit }));
@@ -167,14 +175,20 @@ export default function QuestionBankPage() {
   };
 
   const saveInlineEdit = async (item, patch) => {
+    if (!canManageQuestions) return;
     await dispatch(updateQuestionBankQuestion({ id: item.id, payload: patch })).unwrap();
     dispatch(fetchQuestionBankQuestions({ filters: { ...filters, subjectId: activeSubject.id }, page: pagination.page, limit: pagination.limit }));
   };
 
   const removeQuestion = async (id) => {
+    if (!canManageQuestions) return;
     await dispatch(deleteQuestionBankQuestion(id)).unwrap();
     dispatch(fetchQuestionBankQuestions({ filters: { ...filters, subjectId: activeSubject.id }, page: pagination.page, limit: pagination.limit }));
   };
+
+  if (!canViewQuestionBank) {
+    return <PermissionDenied action="access question bank" />;
+  }
 
   return (
     <div className="space-y-6">
@@ -184,25 +198,29 @@ export default function QuestionBankPage() {
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex flex-wrap items-center gap-3">
-            <Input placeholder="Create subject" value={subjectDraft} onChange={(e) => setSubjectDraft(e.target.value)} className="max-w-sm" />
-            <Button
-              onClick={async () => {
-                const name = String(subjectDraft || "").trim();
-                if (!name) return;
+            {canManageQuestions ? (
+              <>
+                <Input placeholder="Create subject" value={subjectDraft} onChange={(e) => setSubjectDraft(e.target.value)} className="max-w-sm" />
+                <Button
+                  onClick={async () => {
+                    const name = String(subjectDraft || "").trim();
+                    if (!name) return;
 
-                const duplicate = subjects.some((item) => String(item.name || "").trim().toLowerCase() === name.toLowerCase());
-                if (duplicate) {
-                  toast.error("Subject already exists");
-                  return;
-                }
+                    const duplicate = subjects.some((item) => String(item.name || "").trim().toLowerCase() === name.toLowerCase());
+                    if (duplicate) {
+                      toast.error("Subject already exists");
+                      return;
+                    }
 
-                await dispatch(createQuestionSubject({ name })).unwrap();
-                setSubjectDraft("");
-                dispatch(fetchQuestionSubjects());
-              }}
-            >
-              Add Subject
-            </Button>
+                    await dispatch(createQuestionSubject({ name })).unwrap();
+                    setSubjectDraft("");
+                    dispatch(fetchQuestionSubjects());
+                  }}
+                >
+                  Add Subject
+                </Button>
+              </>
+            ) : null}
             <Badge variant="secondary">{subjects.length} Subjects</Badge>
             <Badge variant="secondary">{activeCount} Questions</Badge>
           </div>
@@ -219,30 +237,32 @@ export default function QuestionBankPage() {
               <p className="text-sm text-text-secondary">Total Questions: <span className="font-semibold text-text-primary">{subject.questionCount || 0}</span></p>
               <p className="text-xs text-text-secondary">Updated: {new Date(subject.lastUpdated || subject.updatedAt || subject.createdAt).toLocaleString()}</p>
               <div className="flex items-center gap-2">
-                <Button size="sm" onClick={() => openAdd(subject)}>Add Questions</Button>
+                {canManageQuestions ? <Button size="sm" onClick={() => openAdd(subject)}>Add Questions</Button> : null}
                 <Button size="sm" variant="outline" onClick={() => openView(subject)}>View Questions</Button>
-                <Button
-                  size="sm"
-                  variant="destructive"
-                  onClick={async () => {
-                    try {
-                      await dispatch(deleteQuestionSubject(subject.id)).unwrap();
-                      toast.success("Subject deleted");
-                      dispatch(fetchQuestionSubjects());
-                    } catch (error) {
-                      toast.error(error?.message || "Unable to delete subject");
-                    }
-                  }}
-                >
-                  Delete
-                </Button>
+                {canManageQuestions ? (
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    onClick={async () => {
+                      try {
+                        await dispatch(deleteQuestionSubject(subject.id)).unwrap();
+                        toast.success("Subject deleted");
+                        dispatch(fetchQuestionSubjects());
+                      } catch (error) {
+                        toast.error(error?.message || "Unable to delete subject");
+                      }
+                    }}
+                  >
+                    Delete
+                  </Button>
+                ) : null}
               </div>
             </CardContent>
           </Card>
         ))}
       </div>
 
-      {addDialogOpen ? (
+      {addDialogOpen && canManageQuestions ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-primary-dark/40 p-4 backdrop-blur-sm">
           <div className="max-h-[90vh] w-full max-w-4xl overflow-hidden rounded-2xl border border-border bg-card shadow-2xl">
             <div className="flex items-center justify-between border-b border-border px-5 py-4">
@@ -393,14 +413,18 @@ export default function QuestionBankPage() {
                           <p className="font-medium text-text-primary">{item.prompt}</p>
                           <p className="text-xs text-text-secondary">{String(item.type || "").toLowerCase()} | {item.difficulty} | {item.marks} marks</p>
                         </div>
-                        <Checkbox checked={selected.includes(item.id)} onCheckedChange={() => dispatch(toggleQuestionBankSelected(item.id))} />
+                        {canManageQuestions ? <Checkbox checked={selected.includes(item.id)} onCheckedChange={() => dispatch(toggleQuestionBankSelected(item.id))} /> : null}
                       </div>
                       <div className="flex gap-2">
                         <Button size="sm" variant="outline" onClick={() => setPreviewItem(item)}>Preview</Button>
-                        <Button size="sm" variant="outline" onClick={() => saveInlineEdit(item, { isActive: item.isActive === false })}>
-                          {item.isActive === false ? "Activate" : "Deactivate"}
-                        </Button>
-                        <Button size="sm" variant="destructive" onClick={() => removeQuestion(item.id)}>Delete</Button>
+                        {canManageQuestions ? (
+                          <>
+                            <Button size="sm" variant="outline" onClick={() => saveInlineEdit(item, { isActive: item.isActive === false })}>
+                              {item.isActive === false ? "Activate" : "Deactivate"}
+                            </Button>
+                            <Button size="sm" variant="destructive" onClick={() => removeQuestion(item.id)}>Delete</Button>
+                          </>
+                        ) : null}
                       </div>
                     </CardContent>
                   </Card>
@@ -408,7 +432,7 @@ export default function QuestionBankPage() {
               </div>
 
               <div className="flex items-center justify-between pt-2">
-                <p className="text-xs text-text-secondary">Selected: {selected.length} questions</p>
+                <p className="text-xs text-text-secondary">{canManageQuestions ? `Selected: ${selected.length} questions` : `${questions.length} questions loaded`}</p>
                 <div className="flex items-center gap-2">
                   <Button
                     variant="outline"

@@ -161,28 +161,29 @@ const router = createBrowserRouter([
                 children: [{ path: "/college-admin/admins", element: <PageRoute Page={AdminManagementPage} /> }],
               },
               { path: "/college-admin/tests", element: <PageRoute Page={CollegeAdminTestsPage} /> },
+              { path: "/college-admin/tests/create", element: <PageRoute Page={CollegeAdminTestsPage} /> },
               {
                 element: <PermissionRoute permissions={[ADMIN_PERMISSIONS.VIEW_TESTS, ADMIN_PERMISSIONS.EDIT_TEST]} action="monitor live tests" />,
                 children: [{ path: "/college-admin/tests/:testId/monitoring", element: <PageRoute Page={LiveMonitoringPage} /> }],
               },
               {
-                element: <PermissionRoute permission={ADMIN_PERMISSIONS.MANAGE_QUESTIONS} action="access question bank" />,
+                element: <PermissionRoute permissions={[ADMIN_PERMISSIONS.MANAGE_QUESTIONS, ADMIN_PERMISSIONS.VIEW_QUESTION_BANK]} action="access question bank" />,
                 children: [{ path: "/college-admin/question-bank", element: <PageRoute Page={CollegeAdminQuestionBankPage} /> }],
               },
               {
-                element: <PermissionRoute permission={ADMIN_PERMISSIONS.VIEW_RESOURCES} action="access learning resources" />,
+                element: <PermissionRoute permissions={[ADMIN_PERMISSIONS.VIEW_RESOURCES, ADMIN_PERMISSIONS.MANAGE_RESOURCES]} action="access learning resources" />,
                 children: [{ path: "/college-admin/resources", element: <PageRoute Page={CollegeAdminLearningResourcesPage} /> }],
               },
               {
-                element: <PermissionRoute permission={ADMIN_PERMISSIONS.MANAGE_BATCHES} action="manage batches" />,
+                element: <PermissionRoute permissions={[ADMIN_PERMISSIONS.MANAGE_BATCHES, ADMIN_PERMISSIONS.VIEW_BATCHES]} action="access batches" />,
                 children: [{ path: "/college-admin/batches", element: <PageRoute Page={CollegeAdminBatchesPage} /> }],
               },
               {
-                element: <PermissionRoute permission={ADMIN_PERMISSIONS.MANAGE_STUDENTS} action="manage students" />,
+                element: <PermissionRoute permissions={[ADMIN_PERMISSIONS.MANAGE_STUDENTS, ADMIN_PERMISSIONS.VIEW_STUDENTS]} action="access students" />,
                 children: [{ path: "/college-admin/students", element: <PageRoute Page={CollegeAdminStudentsPage} /> }],
               },
               {
-                element: <PermissionRoute permission={ADMIN_PERMISSIONS.MANAGE_EVENTS} action="manage events" />,
+                element: <PermissionRoute permissions={[ADMIN_PERMISSIONS.MANAGE_EVENTS, ADMIN_PERMISSIONS.VIEW_EVENTS]} action="access events" />,
                 children: [{ path: "/college-admin/events", element: <PageRoute Page={CollegeAdminEventsPage} /> }],
               },
               {
