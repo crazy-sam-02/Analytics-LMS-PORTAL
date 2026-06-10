@@ -1,7 +1,7 @@
 import { NavLink } from "react-router-dom";
 import { useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
-import { LayoutDashboard, School, ShieldUser, UserCog, Users, Building2, FileCheck2, BookOpen, BookOpenCheck, Layers3, CalendarDays, FileBarChart2, ChartNoAxesCombined, Settings, LogOut, PlusSquare } from "lucide-react";
+import { LayoutDashboard, School, ShieldUser, UserCog, Users, Building2, FileCheck2, BookOpen, BookOpenCheck, Layers3, CalendarDays, FileBarChart2, ChartNoAxesCombined, Settings, LogOut } from "lucide-react";
 import { logoutSuperAdmin } from "@/features/SuperAdmin/superAdminAuthSlice";
 import ConfirmActionDialog from "@/components/Admin/ConfirmActionDialog";
 
@@ -13,7 +13,6 @@ const navItems = [
   { to: "/super-admin/students", label: "Students", icon: Users },
   { to: "/super-admin/departments", label: "Departments", icon: Building2 },
   { to: "/super-admin/tests", label: "Tests", icon: FileCheck2 },
-  { to: "/super-admin/tests?create=1", label: "Create New Test", icon: PlusSquare },
   { to: "/super-admin/question-bank", label: "Question Bank", icon: BookOpen },
   { to: "/super-admin/resources", label: "Learning Resources", icon: BookOpenCheck },
   { to: "/super-admin/batches", label: "Batches", icon: Layers3 },

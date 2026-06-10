@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useDispatch, useSelector } from "react-redux";
-import { useLocation, useNavigate } from "react-router-dom";
-import { openTestEditDialog, openTestCreationDialog } from "@/features/Admin/testCreationSlice";
+import { openTestEditDialog } from "@/features/Admin/testCreationSlice";
 import { fetchSuperColleges } from "@/features/SuperAdmin/superAdminPanelSlice";
 import { superAdminApi } from "@/services/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -88,8 +87,6 @@ const transitionConfirmationText = (testTitle, action) => {
 
 export default function TestsPage() {
   const dispatch = useDispatch();
-  const location = useLocation();
-  const navigate = useNavigate();
   const colleges = useSelector((state) => state.superAdminPanel.colleges);
 
   const [banner, setBanner] = useState({ type: "", title: "", message: "" });
@@ -158,18 +155,6 @@ export default function TestsPage() {
       setDepartmentNameById({});
     });
   }, [dispatch]);
-
-  useEffect(() => {
-    const searchParams = new URLSearchParams(location.search);
-    if (searchParams.get("create") !== "1") {
-      return;
-    }
-
-    dispatch(openTestCreationDialog());
-    searchParams.delete("create");
-    const nextSearch = searchParams.toString();
-    navigate(nextSearch ? `${location.pathname}?${nextSearch}` : location.pathname, { replace: true });
-  }, [dispatch, location.pathname, location.search, navigate]);
 
   const filteredTests = useMemo(() => {
     const term = search.trim().toLowerCase();
