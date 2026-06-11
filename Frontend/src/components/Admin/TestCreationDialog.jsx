@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
+import { useLocation } from "react-router-dom";
 import { toast } from "sonner";
 import {
   addQuestionsFromBank,
@@ -172,7 +173,10 @@ export default function TestCreationDialog({ context = "admin", onCreated, hideT
   const qbFetchSubjects = isSuperAdminContext ? fetchSuperQuestionSubjects : fetchQuestionSubjects;
   const qbFetchQuestions = isSuperAdminContext ? fetchSuperQuestionBankQuestions : fetchQuestionBankQuestions;
 
+  const location = useLocation();
+
   const resetBodyInteractionLock = () => {
+    document.body.style.overflow = "";
     document.body.style.pointerEvents = "";
   };
 
@@ -247,7 +251,7 @@ export default function TestCreationDialog({ context = "admin", onCreated, hideT
       }
       document.body.style.overflow = "hidden"; // Prevent background scroll
     } else {
-      document.body.style.overflow = "unset";
+      document.body.style.overflow = ""; // Properly reset (not "unset" which cascades)
     }
   }, [canLoadAdminBatches, canLoadAdminDepartments, canLoadAdminQuestionSubjects, canLoadAdminStudents, dispatch, isSuperAdminContext, open, qbFetchSubjects]);
 
@@ -262,11 +266,20 @@ export default function TestCreationDialog({ context = "admin", onCreated, hideT
     }
   }, [currentUserDeptId, dispatch, form.assignmentMethod, form.departmentId, isSuperAdminContext, open]);
 
+  // Route-change guard: close dialog on navigation to prevent UI/router state mismatch
+  useEffect(() => {
+    if (open) {
+      handleClose();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname]);
+
+  // Cleanup on unmount: always restore body state
   useEffect(() => {
     return () => {
-      document.body.style.overflow = "unset";
       resetBodyInteractionLock();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -939,10 +952,12 @@ export default function TestCreationDialog({ context = "admin", onCreated, hideT
 
   return (
     // --- OVERLAY WRAPPER ---
-    <div className="fixed inset-0 z-100 bg-primary-dark/40 backdrop-blur-sm animate-in fade-in duration-200">
+    // pointer-events-none: allows sidebar (z-40) and other elements outside the modal
+    // to remain clickable even though this overlay sits at z-100 visually.
+    <div className="fixed inset-0 z-100 bg-primary-dark/40 backdrop-blur-sm animate-in fade-in duration-200 pointer-events-none">
       
-      {/* --- MODAL CONTAINER (The Overlay Box) --- */}
-      <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-muted">
+      {/* --- MODAL CONTAINER: pointer-events-auto restores interactivity for the modal itself --- */}
+      <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-muted pointer-events-auto">
         
         {/* Close Button */}
         <button 
