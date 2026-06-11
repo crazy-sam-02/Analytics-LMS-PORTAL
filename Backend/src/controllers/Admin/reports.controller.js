@@ -192,7 +192,6 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
     collegeId,
     ...studentLifecycleWhere,
     ...(scopedDepartmentId ? { departmentId: scopedDepartmentId } : {}),
-    ...(filters.year ? { year: filters.year } : {}),
     ...(scopedBatchId
       ? {
           OR: [

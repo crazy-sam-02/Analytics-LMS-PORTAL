@@ -113,6 +113,18 @@ export default function ReportsPage({ basePathOverride = null, showStudentDepart
 
   const canViewReports = usePermission(ADMIN_PERMISSIONS.VIEW_REPORTS);
   const canExportReports = usePermission(ADMIN_PERMISSIONS.EXPORT_REPORTS);
+  const canViewTests = usePermission(ADMIN_PERMISSIONS.VIEW_TESTS);
+  const canEditTests = usePermission(ADMIN_PERMISSIONS.EDIT_TEST);
+  const canManageQuestions = usePermission(ADMIN_PERMISSIONS.MANAGE_QUESTIONS);
+  const canViewBatches = usePermission(ADMIN_PERMISSIONS.VIEW_BATCHES);
+  const canManageBatches = usePermission(ADMIN_PERMISSIONS.MANAGE_BATCHES);
+  const canViewStudents = usePermission(ADMIN_PERMISSIONS.VIEW_STUDENTS);
+  const canManageStudents = usePermission(ADMIN_PERMISSIONS.MANAGE_STUDENTS);
+  const canManageDepartments = usePermission(ADMIN_PERMISSIONS.MANAGE_DEPARTMENTS);
+  const canReadTests = canViewTests || canEditTests || canManageQuestions;
+  const canReadBatches = canViewBatches || canManageBatches;
+  const canReadStudents = canViewStudents || canManageStudents;
+  const canReadDepartments = canReadBatches || canManageDepartments;
 
   const mode = ADMIN_MODES.some((item) => item.key === searchParams.get("mode")) ? searchParams.get("mode") : "department";
   const testId = searchParams.get("test") || "all";
@@ -164,19 +176,21 @@ export default function ReportsPage({ basePathOverride = null, showStudentDepart
   const testsQuery = useQuery({
     queryKey: [`${queryKeyPrefix}-tests-v2`],
     queryFn: () => adminApi.getTests("?page=1&limit=100"),
+    enabled: canViewReports && canReadTests,
     staleTime: 120000,
   });
 
   const batchesQuery = useQuery({
     queryKey: [`${queryKeyPrefix}-batches-v2`],
     queryFn: () => adminApi.getBatches(),
+    enabled: canViewReports && canReadBatches,
     staleTime: 120000,
   });
 
   const departmentsQuery = useQuery({
     queryKey: [`${queryKeyPrefix}-departments-v2`],
     queryFn: () => adminApi.getDepartments(),
-    enabled: canViewReports && mode === "student" && showStudentDepartmentFilter,
+    enabled: canViewReports && canReadDepartments && mode === "student" && showStudentDepartmentFilter,
     staleTime: 120000,
   });
 
@@ -201,6 +215,7 @@ export default function ReportsPage({ basePathOverride = null, showStudentDepart
           passoutCohortId: passoutCohortId || undefined,
         })
       ),
+    enabled: canViewReports && canReadStudents && mode === "student",
     staleTime: 120000,
   });
   const studentSearchTerm = studentSearch.trim();
@@ -219,7 +234,7 @@ export default function ReportsPage({ basePathOverride = null, showStudentDepart
           passoutCohortId: passoutCohortId || undefined,
         })
       ),
-    enabled: canViewReports && mode === "student" && studentSearchTerm.length >= 2,
+    enabled: canViewReports && canReadStudents && mode === "student" && studentSearchTerm.length >= 2,
     staleTime: 30000,
   });
 

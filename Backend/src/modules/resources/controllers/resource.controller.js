@@ -17,6 +17,16 @@ const {
   updateResource,
 } = require("../services/resource.service");
 
+const sanitizeAttachmentFileName = (value) => {
+  const baseName = path.basename(String(value || "resource"));
+  const cleaned = baseName
+    .replace(/[\r\n"\\]/g, "")
+    .replace(/[^\x20-\x7E]/g, "_")
+    .trim();
+
+  return cleaned || "resource";
+};
+
 const getSubjects = asyncHandler(async (req, res) => {
   const actor = getActorFromRequest(req);
   const subjects = await getResourceSubjects({ actor, query: req.query || {} });
@@ -67,10 +77,10 @@ const downloadResource = asyncHandler(async (req, res) => {
     });
   }
 
-  const fileName = path.basename(download.originalFileName || "resource");
+  const fileName = sanitizeAttachmentFileName(download.originalFileName);
   res.setHeader("Content-Type", download.mimeType);
   res.setHeader("Content-Length", String(download.fileSize));
-  res.setHeader("Content-Disposition", `attachment; filename="${fileName.replace(/"/g, "")}"`);
+  res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
   res.setHeader("Cache-Control", "private, no-store");
 
   const stream = fs.createReadStream(download.filePath);

@@ -12,12 +12,19 @@ const {
 	transitionGlobalTestStatusSchema,
 } = require("../../schemas/SuperAdmin/super-admin-core.schema");
 const {
+	forceSubmitAttemptSchema,
+	extendAttemptTimeSchema,
+} = require("../../schemas/Admin/admin-tests.schema");
+const {
 	getTestsGlobal,
 	getGlobalTestById,
 	createGlobalTest,
 	cloneTestToCollege,
 	updateGlobalTest,
 	transitionGlobalTestStatus,
+	getLiveMonitoring,
+	forceSubmitAttempt,
+	extendAttemptTime,
 	deactivateTest,
 } = require("../../controllers/SuperAdmin/tests.controller");
 
@@ -51,6 +58,9 @@ const superAdminTestCloneLimiter = createRateLimiter({
 });
 
 router.get("/", authenticateSuperAdmin, validate(paginationQuerySchema), getTestsGlobal);
+router.get("/:testId/monitoring", authenticateSuperAdmin, validate(testIdParamSchema), getLiveMonitoring);
+router.post("/:testId/monitoring/force-submit", authenticateSuperAdmin, superAdminTestUpdateLimiter, validate(forceSubmitAttemptSchema), forceSubmitAttempt);
+router.post("/:testId/monitoring/extend-time", authenticateSuperAdmin, superAdminTestUpdateLimiter, validate(extendAttemptTimeSchema), extendAttemptTime);
 router.get("/:testId", authenticateSuperAdmin, validate(testIdParamSchema), getGlobalTestById);
 router.post("/global", authenticateSuperAdmin, superAdminTestCreateLimiter, validate(createGlobalTestSchema), createGlobalTest);
 router.post("/:testId/clone", authenticateSuperAdmin, superAdminTestCloneLimiter, validate(cloneTestSchema), cloneTestToCollege);

@@ -28,6 +28,8 @@ import {
 import { fetchAdminTests, fetchBatches, fetchDepartments, fetchStudents } from "@/features/Admin/adminPanelSlice";
 import { fetchSuperColleges } from "@/features/SuperAdmin/superAdminPanelSlice";
 import { adminApi, superAdminApi } from "@/services/api";
+import usePermission from "@/hooks/usePermission";
+import { ADMIN_PERMISSIONS } from "@/features/Admin/adminPermissions";
 import {
   fetchQuestionBankQuestions,
   fetchQuestionSubjects,
@@ -117,6 +119,17 @@ const normalizeId = (value) => String(value ?? "");
 export default function TestCreationDialog({ context = "admin", onCreated, hideTrigger = false }) {
   const dispatch = useDispatch();
   const isSuperAdminContext = context === "super_admin";
+  const canManageBatches = usePermission(ADMIN_PERMISSIONS.MANAGE_BATCHES);
+  const canViewBatches = usePermission(ADMIN_PERMISSIONS.VIEW_BATCHES);
+  const canManageDepartments = usePermission(ADMIN_PERMISSIONS.MANAGE_DEPARTMENTS);
+  const canManageStudents = usePermission(ADMIN_PERMISSIONS.MANAGE_STUDENTS);
+  const canViewStudents = usePermission(ADMIN_PERMISSIONS.VIEW_STUDENTS);
+  const canManageQuestions = usePermission(ADMIN_PERMISSIONS.MANAGE_QUESTIONS);
+  const canViewQuestionBank = usePermission(ADMIN_PERMISSIONS.VIEW_QUESTION_BANK);
+  const canLoadAdminBatches = canManageBatches || canViewBatches;
+  const canLoadAdminDepartments = canLoadAdminBatches || canManageDepartments;
+  const canLoadAdminStudents = canManageStudents || canViewStudents;
+  const canLoadAdminQuestionSubjects = canManageQuestions || canViewQuestionBank;
   const fallbackTestCreation = useMemo(() => createInitialTestCreationState(), []);
   const testCreation = useSelector((state) => state.testCreation) || fallbackTestCreation;
   const departments = useSelector((state) => state.adminPanel?.departments?.data || []);
@@ -219,16 +232,24 @@ export default function TestCreationDialog({ context = "admin", onCreated, hideT
         dispatch(fetchSuperColleges());
         dispatch(qbFetchSubjects());
       } else {
-        dispatch(fetchDepartments());
-        dispatch(fetchBatches());
-        dispatch(fetchStudents(`?page=1&limit=${ADMIN_STUDENTS_PAGE_LIMIT}`));
-        dispatch(qbFetchSubjects());
+        if (canLoadAdminDepartments) {
+          dispatch(fetchDepartments());
+        }
+        if (canLoadAdminBatches) {
+          dispatch(fetchBatches());
+        }
+        if (canLoadAdminStudents) {
+          dispatch(fetchStudents(`?page=1&limit=${ADMIN_STUDENTS_PAGE_LIMIT}`));
+        }
+        if (canLoadAdminQuestionSubjects) {
+          dispatch(qbFetchSubjects());
+        }
       }
       document.body.style.overflow = "hidden"; // Prevent background scroll
     } else {
       document.body.style.overflow = "unset";
     }
-  }, [dispatch, isSuperAdminContext, open, qbFetchSubjects]);
+  }, [canLoadAdminBatches, canLoadAdminDepartments, canLoadAdminQuestionSubjects, canLoadAdminStudents, dispatch, isSuperAdminContext, open, qbFetchSubjects]);
 
   useEffect(() => {
     if (!open || isSuperAdminContext) return;

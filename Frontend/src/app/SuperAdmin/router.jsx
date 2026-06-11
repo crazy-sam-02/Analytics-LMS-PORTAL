@@ -1,6 +1,6 @@
 import { Suspense, createElement, lazy, useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
-import { Navigate, Outlet, RouterProvider, createBrowserRouter } from "react-router-dom";
+import { Navigate, Outlet, RouterProvider, createBrowserRouter, useLocation } from "react-router-dom";
 import { injectReducer } from "@/app/store";
 import { fetchCurrentSuperAdmin } from "@/features/SuperAdmin/superAdminAuthSlice";
 import SuperAdminLoginPage from "@/pages/SuperAdmin/LoginPage";
@@ -37,6 +37,7 @@ const AdminsPage = lazyWithSuperAdminReducers(() => import("@/pages/SuperAdmin/A
 const StudentsPage = lazyWithSuperAdminReducers(() => import("@/pages/SuperAdmin/StudentsPage"));
 const DepartmentsPage = lazyWithSuperAdminReducers(() => import("@/pages/SuperAdmin/DepartmentsPage"));
 const TestsPage = lazyWithSuperAdminReducers(() => import("@/pages/SuperAdmin/TestsPage"));
+const LiveMonitoringPage = lazyWithSuperAdminReducers(() => import("@/pages/Admin/LiveMonitoringPage"));
 const BatchesPage = lazyWithSuperAdminReducers(() => import("@/pages/SuperAdmin/BatchesPage"));
 const EventsPage = lazyWithSuperAdminReducers(() => import("@/pages/SuperAdmin/EventsPage"));
 const ReportsPage = lazyWithSuperAdminReducers(() => import("@/pages/SuperAdmin/ReportsPage"));
@@ -100,11 +101,19 @@ function SuperAdminPublicOnlyRoute() {
   return superAdmin ? <Navigate to="/super-admin/dashboard" replace /> : <Outlet />;
 }
 
+function SuperAdminAliasRedirect() {
+  const location = useLocation();
+  const nextPath = location.pathname.replace(/^\/superadmin(?=\/|$)/, "/super-admin");
+  return <Navigate to={`${nextPath}${location.search}${location.hash}`} replace />;
+}
+
 const router = createBrowserRouter([
   {
     element: <SuperAdminBootstrap />,
     errorElement: <RouteErrorElement />,
     children: [
+      { path: "/superadmin", element: <SuperAdminAliasRedirect /> },
+      { path: "/superadmin/*", element: <SuperAdminAliasRedirect /> },
       {
         element: <SuperAdminPublicOnlyRoute />,
         children: [{ path: "/super-admin/login", element: <SuperAdminLoginPage /> }],
@@ -132,6 +141,7 @@ const router = createBrowserRouter([
               { path: "/super-admin/departments", element: <PageRoute Page={DepartmentsPage} /> },
               { path: "/super-admin/tests", element: <PageRoute Page={TestsPage} /> },
               { path: "/super-admin/tests/create", element: <PageRoute Page={TestsPage} /> },
+              { path: "/super-admin/tests/:testId/monitoring", element: <PageRoute Page={LiveMonitoringPage} /> },
               { path: "/super-admin/question-bank", element: <PageRoute Page={QuestionBankPage} /> },
               { path: "/super-admin/resources", element: <PageRoute Page={LearningResourcesPage} /> },
               { path: "/super-admin/batches", element: <PageRoute Page={BatchesPage} /> },

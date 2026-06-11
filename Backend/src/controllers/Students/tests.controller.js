@@ -34,6 +34,7 @@ const {
 
 const HEARTBEAT_STALE_SECONDS = 20;
 const HEARTBEAT_FORCE_AUTOSUBMIT_SECONDS = 15 * 60;
+const STUDENT_BLOCKED_TEST_STATUSES = new Set(["DRAFT", "ARCHIVED", "COMPLETED"]);
 const SENSITIVE_QUESTION_FIELDS = new Set([
   "answer",
   "answer_key",
@@ -173,6 +174,14 @@ const hasTestEnded = (test = {}) => {
   if (!endsAt) return false;
   const endsAtMs = new Date(endsAt).getTime();
   return Number.isFinite(endsAtMs) && endsAtMs <= Date.now();
+};
+
+const assertStudentCanStartPublishedTest = (test = {}) => {
+  const status = String(test?.status || "").trim().toUpperCase();
+
+  if (!test?.isPublished || STUDENT_BLOCKED_TEST_STATUSES.has(status)) {
+    throw new ApiError(403, "Test is not available for students", null, "TEST_NOT_AVAILABLE");
+  }
 };
 
 const heartbeatAgeSeconds = (lastHeartbeatAt) => {
@@ -352,15 +361,8 @@ const listUpcomingTests = asyncHandler(async (req, res) => {
   const now = new Date();
   const tests = await db.test.findMany({
     where: {
-      AND: [
-        buildStudentAssignmentScope(req.user),
-        {
-          OR: [
-            { isPublished: true },
-            { status: "UPCOMING" },
-          ],
-        },
-      ],
+      ...buildStudentAssignmentScope(req.user),
+      isPublished: true,
       startsAt: { gt: now },
     },
     orderBy: { startsAt: "asc" },
@@ -388,6 +390,22 @@ const startTest = asyncHandler(async (req, res) => {
 
       if (!test) {
         throw new ApiError(404, "Test not found");
+      }
+
+      assertStudentCanStartPublishedTest(test);
+
+      const assignedViaMapping = await db.testBatch.findFirst({
+        where: {
+          testId,
+          batchId: { in: req.user.batchIds || [] },
+        },
+      });
+      if (!isStudentAssignedToTest({
+        test,
+        student: req.user,
+        hasBatchAssignment: Boolean(assignedViaMapping),
+      })) {
+        throw new ApiError(403, "Student is not assigned to this test", null, "TEST_NOT_ASSIGNED");
       }
 
       const existingSession = await db.testSession.findUnique({
@@ -441,6 +459,8 @@ const startTest = asyncHandler(async (req, res) => {
   if (!test) {
     throw new ApiError(404, "Test not found");
   }
+
+  assertStudentCanStartPublishedTest(test);
 
   // Build sanitized question list for student view (no correct answers).
   // Cache it so 500+ concurrent startTest requests don't all hit MongoDB.

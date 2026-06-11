@@ -1,7 +1,10 @@
 const models = require("../../models");
 const { createAuditLog } = require("../../services/audit.service");
 const { completeSubmission } = require("../../services/test.service");
+const { emitToCollege, emitToTestRoom } = require("../../realtime/socket");
 const { ApiError, asyncHandler } = require("../../utils/http");
+const { getExamState } = require("../../services/exam-state-cache.service");
+const { getExamRateLimitMetricsSnapshot } = require("../../services/rate-limit-metrics.service");
 const {
   attachResolvedTestConfiguration,
   resolvePersistedTestConfiguration,
@@ -1119,6 +1122,258 @@ const transitionGlobalTestStatus = asyncHandler(async (req, res) => {
   res.status(200).json(updated);
 });
 
+const getLiveMonitoring = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
+  const { testId } = req.params;
+
+  const test = await db.test.findUnique({
+    where: { id: testId },
+    select: {
+      id: true,
+      title: true,
+      durationMins: true,
+      status: true,
+      startsAt: true,
+      endsAt: true,
+      collegeId: true,
+      isGlobal: true,
+    },
+  });
+
+  if (!test) {
+    throw new ApiError(404, "Test not found");
+  }
+
+  const [inProgress, questionCount, rateLimits] = await Promise.all([
+    db.submission.findMany({
+      where: { testId, status: "IN_PROGRESS" },
+      include: {
+        user: {
+          select: {
+            id: true,
+            fullName: true,
+            studentId: true,
+            department: { select: { name: true } },
+            batch: { select: { name: true } },
+          },
+        },
+        violations: {
+          select: { id: true, type: true, createdAt: true },
+          orderBy: { createdAt: "desc" },
+          take: 20,
+        },
+        _count: {
+          select: { answers: true, violations: true },
+        },
+      },
+      orderBy: { updatedAt: "desc" },
+    }),
+    db.question.count({ where: { testId } }),
+    getExamRateLimitMetricsSnapshot({ limit: 5, collegeId: test.collegeId }),
+  ]);
+
+  const scopedSubmissionIds = inProgress.map((submission) => submission.id).filter(Boolean);
+  const sessions = scopedSubmissionIds.length > 0
+    ? await db.testSession.findMany({
+        where: { testId, submissionId: { in: scopedSubmissionIds } },
+        select: { userId: true, submissionId: true, expiresAt: true },
+      })
+    : [];
+
+  const nowMs = Date.now();
+  const sessionMap = new Map(sessions.map((item) => [item.submissionId, item]));
+  const examStates = await Promise.all(
+    inProgress.map(async (submission) => ({
+      submissionId: submission.id,
+      state: await getExamState({ userId: submission.userId, testId }),
+    }))
+  );
+  const examStateMap = new Map(examStates.map((item) => [item.submissionId, item.state]));
+  const studentTable = inProgress.map((submission) => {
+    const answered = Number(submission?._count?.answers || 0);
+    const state = examStateMap.get(submission.id);
+    const cachedProgress = Number(state?.progress);
+    const progress = Number.isFinite(cachedProgress) && cachedProgress > 0
+      ? Math.min(100, Math.round(cachedProgress))
+      : questionCount > 0 ? Math.min(100, Math.round((answered / questionCount) * 100)) : 0;
+    const session = sessionMap.get(submission.id);
+    const baselineExpiry = submission.startedAt
+      ? new Date(new Date(submission.startedAt).getTime() + Number(test.durationMins || 0) * 60 * 1000)
+      : new Date(nowMs);
+    const expiresAt = session?.expiresAt || baselineExpiry;
+    const timeLeftSec = Math.max(0, Math.floor((new Date(expiresAt).getTime() - nowMs) / 1000));
+    const lastHeartbeat = state?.lastHeartbeatAt
+      ? new Date(state.lastHeartbeatAt).getTime()
+      : submission.lastHeartbeat
+        ? new Date(submission.lastHeartbeat).getTime()
+        : submission.lastAutoSavedAt
+          ? new Date(submission.lastAutoSavedAt).getTime()
+          : new Date(submission.updatedAt).getTime();
+    const idleSeconds = Math.max(0, Math.floor((nowMs - lastHeartbeat) / 1000));
+    const connectionStatus = state?.connectionStatus || (idleSeconds <= 45 ? "ONLINE" : idleSeconds <= 120 ? "UNSTABLE" : "OFFLINE");
+    const cachedViolations = Number(state?.violationCount);
+
+    return {
+      submissionId: submission.id,
+      studentId: submission.userId,
+      name: submission.user?.fullName || "Student",
+      department: submission.user?.department?.name || "-",
+      batch: submission.user?.batch?.name || "-",
+      progress,
+      timeLeftSec,
+      violations: Number.isFinite(cachedViolations) ? cachedViolations : Number(submission?._count?.violations || 0),
+      connectionStatus,
+      status: submission.status,
+      startedAt: submission.startedAt,
+    };
+  });
+
+  const violationFeed = inProgress.flatMap((submission) =>
+    (submission.violations || []).map((violation) => ({
+      id: violation.id,
+      submissionId: submission.id,
+      studentId: submission.userId,
+      studentName: submission.user?.fullName || "Student",
+      type: violation.type,
+      at: violation.createdAt,
+    }))
+  ).sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime()).slice(0, 100);
+
+  res.status(200).json({
+    test: {
+      ...test,
+      activeStudents: studentTable.length,
+      questionCount,
+      canAdminControl: true,
+      canAdminOperate: true,
+    },
+    canAdminControl: true,
+    canAdminOperate: true,
+    rateLimits,
+    studentTable,
+    violationFeed,
+    generatedAt: new Date().toISOString(),
+  });
+});
+
+const forceSubmitAttempt = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
+  const { testId } = req.params;
+  const { submissionId, reason } = req.body;
+
+  const submission = await db.submission.findFirst({
+    where: { id: submissionId, testId },
+    include: {
+      user: { select: { fullName: true } },
+      test: { select: { id: true, collegeId: true } },
+    },
+  });
+
+  if (!submission) {
+    throw new ApiError(404, "Submission not found");
+  }
+
+  if (submission.status !== "IN_PROGRESS") {
+    throw new ApiError(409, "Submission is already completed", null, "SUBMISSION_ALREADY_COMPLETED");
+  }
+
+  const completed = await completeSubmission({ submissionId, autoSubmitted: true });
+
+  await createAuditLog({
+    action: "SUPER_ADMIN_FORCE_SUBMIT",
+    targetType: "SUBMISSION",
+    targetId: submissionId,
+    collegeId: submission.test?.collegeId || null,
+    superAdminId: req.superAdmin.id,
+    testId,
+    afterState: {
+      reason,
+      studentId: submission.userId,
+      status: completed.status,
+    },
+  });
+
+  const payload = {
+    testId,
+    submissionId,
+    studentId: submission.userId,
+    studentName: submission.user?.fullName || "Student",
+    action: "FORCE_SUBMIT",
+    reason,
+  };
+
+  emitToTestRoom(testId, "test_status_change", payload);
+  emitToCollege(submission.test?.collegeId, "test_status_change", payload);
+
+  res.status(200).json({ message: "Submission force-submitted", submission: completed });
+});
+
+const extendAttemptTime = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
+  const { testId } = req.params;
+  const { submissionId, minutes } = req.body;
+
+  const submission = await db.submission.findFirst({
+    where: { id: submissionId, testId },
+    include: {
+      user: { select: { fullName: true } },
+      test: { select: { id: true, collegeId: true } },
+    },
+  });
+
+  if (!submission) {
+    throw new ApiError(404, "Submission not found");
+  }
+
+  if (submission.status !== "IN_PROGRESS") {
+    throw new ApiError(409, "Only in-progress attempts can be extended", null, "SUBMISSION_NOT_ACTIVE");
+  }
+
+  const session = await db.testSession.findFirst({ where: { testId, submissionId, userId: submission.userId } });
+  if (!session) {
+    throw new ApiError(404, "Active test session not found", null, "SESSION_NOT_FOUND");
+  }
+
+  const mins = Math.max(1, Number(minutes || 0));
+  const nextExpiry = new Date(new Date(session.expiresAt).getTime() + mins * 60 * 1000);
+  const updated = await db.testSession.update({
+    where: { userId_testId: { userId: submission.userId, testId } },
+    data: { expiresAt: nextExpiry },
+  });
+
+  await createAuditLog({
+    action: "SUPER_ADMIN_EXTEND_TIME",
+    targetType: "SUBMISSION",
+    targetId: submissionId,
+    collegeId: submission.test?.collegeId || null,
+    superAdminId: req.superAdmin.id,
+    testId,
+    afterState: {
+      minutesAdded: mins,
+      expiresAt: updated.expiresAt,
+      studentId: submission.userId,
+    },
+  });
+
+  const payload = {
+    testId,
+    submissionId,
+    studentId: submission.userId,
+    studentName: submission.user?.fullName || "Student",
+    action: "TIME_EXTENDED",
+    minutesAdded: mins,
+    expiresAt: updated.expiresAt,
+  };
+
+  emitToTestRoom(testId, "student_status_update", payload);
+  emitToCollege(submission.test?.collegeId, "student_status_update", payload);
+
+  res.status(200).json({ message: "Time extended", session: updated });
+});
+
 const deactivateTest = asyncHandler(async (req, res) => {
   const m = await models.init();
   const db = m.dbClient;
@@ -1179,5 +1434,8 @@ module.exports = {
   cloneTestToCollege,
   updateGlobalTest,
   transitionGlobalTestStatus,
+  getLiveMonitoring,
+  forceSubmitAttempt,
+  extendAttemptTime,
   deactivateTest,
 };

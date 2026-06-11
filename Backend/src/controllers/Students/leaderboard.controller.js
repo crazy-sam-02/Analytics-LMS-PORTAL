@@ -162,34 +162,29 @@ const getLeaderboard = asyncHandler(async (req, res) => {
     where.testId = testId;
   }
 
-  const [total, submissions] = await Promise.all([
-    db.submission.count({ where }),
-    db.submission.findMany({
-      where,
-      include: {
-        user: {
-          select: {
-            id: true,
-            fullName: true,
-            studentId: true,
-            enrollNumber: true,
-            enrollmentNumber: true,
-          },
-        },
-        test: {
-          select: {
-            id: true,
-            title: true,
-            subject: true,
-            totalMarks: true,
-          },
+  const submissions = await db.submission.findMany({
+    where,
+    include: {
+      user: {
+        select: {
+          id: true,
+          fullName: true,
+          studentId: true,
+          enrollNumber: true,
+          enrollmentNumber: true,
         },
       },
-      orderBy: [{ submittedAt: "desc" }],
-      skip,
-      take: limit,
-    }),
-  ]);
+      test: {
+        select: {
+          id: true,
+          title: true,
+          subject: true,
+          totalMarks: true,
+        },
+      },
+    },
+    orderBy: [{ submittedAt: "desc" }],
+  });
 
   const rows = submissions
     .filter((entry) => entry?.user && entry?.test)
@@ -201,9 +196,10 @@ const getLeaderboard = asyncHandler(async (req, res) => {
       if (b.scorePercent !== a.scorePercent) return b.scorePercent - a.scorePercent;
       return Number(a.timeSpentSeconds || 0) - Number(b.timeSpentSeconds || 0);
     });
+  const pagedRows = rows.slice(skip, skip + limit);
 
   const payload = {
-    data: rows.map((entry, index) => ({
+    data: pagedRows.map((entry, index) => ({
       rank: (page - 1) * limit + index + 1,
       id: entry.id,
       userId: entry.user.id,
@@ -222,8 +218,8 @@ const getLeaderboard = asyncHandler(async (req, res) => {
     pagination: {
       page,
       limit,
-      total: rows.length !== submissions.length ? rows.length : total,
-      totalPages: Math.ceil((rows.length !== submissions.length ? rows.length : total) / limit),
+      total: rows.length,
+      totalPages: Math.ceil(rows.length / limit),
     },
   };
 

@@ -5,6 +5,7 @@ const { authenticate } = require("../../middleware/auth");
 const validate = require("../../middleware/validate");
 const { createRateLimiter, examWriteKey } = require("../../middleware/rate-limit");
 const { ApiError } = require("../../utils/http");
+const { bulkSaveAnswers } = require("../../services/answer.service");
 const {
   listOngoingTests,
   getAttemptSession,
@@ -22,6 +23,7 @@ const {
   heartbeatCompatSchema,
   submitAttemptCompatSchema,
   violationCompatSchema,
+  attemptAnswersCompatSchema,
   attemptIdOnlySchema,
 } = require("../../schemas/Students/tests.schema");
 
@@ -84,62 +86,56 @@ const examSessionLimiter = createRateLimiter({
   message: "Too many session fetch requests in a short window. Please wait a moment.",
 });
 
+const loadOwnedAttempt = async (req) => {
+  const submission = await db.submission.findUnique({ where: { id: req.params.attemptId } });
+  const sameUser = submission?.userId === req.user?.id;
+  const sameCollege = !req.user?.collegeId || !submission?.collegeId || submission.collegeId === req.user.collegeId;
+
+  if (!submission || !sameUser || !sameCollege) {
+    throw new ApiError(404, "Attempt not found", null, "ATTEMPT_NOT_FOUND");
+  }
+
+  return submission;
+};
+
+const attachAttemptToTestRequest = async (req, _res, next) => {
+  try {
+    const submission = await loadOwnedAttempt(req);
+
+    req.params.testId = submission.testId;
+    req.body = {
+      ...req.body,
+      submissionId: submission.id,
+    };
+
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+};
+
+const saveAttemptAnswersCompat = async (req, res, next) => {
+  try {
+    const submission = await loadOwnedAttempt(req);
+    const result = await bulkSaveAnswers(req.body.answers, submission.id, req.user.collegeId || submission.collegeId);
+
+    return res.status(200).json({
+      saved: true,
+      success: true,
+      result,
+      message: "Answers saved successfully",
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
 router.get("/attempts/active", authenticate, examListLimiter, listOngoingTests);
 router.get("/attempts/:attemptId", authenticate, examSessionLimiter, validate(attemptIdOnlySchema), getAttemptSession);
-router.patch("/attempts/:attemptId/heartbeat", authenticate, examHeartbeatLimiter, validate(heartbeatCompatSchema), async (req, _res, next) => {
-  try {
-    const submission = await db.submission.findUnique({ where: { id: req.params.attemptId } });
-    if (!submission || submission.userId !== req.user.id) {
-      return next(new ApiError(404, "Attempt not found", null, "ATTEMPT_NOT_FOUND"));
-    }
-
-    req.params.testId = submission.testId;
-    req.body = {
-      ...req.body,
-      submissionId: submission.id,
-    };
-
-    return next();
-  } catch (error) {
-    return next(error);
-  }
-}, heartbeatTest);
-router.post("/attempts/:attemptId/submit", authenticate, examSubmitLimiter, validate(submitAttemptCompatSchema), async (req, _res, next) => {
-  try {
-    const submission = await db.submission.findUnique({ where: { id: req.params.attemptId } });
-    if (!submission || submission.userId !== req.user.id) {
-      return next(new ApiError(404, "Attempt not found", null, "ATTEMPT_NOT_FOUND"));
-    }
-
-    req.params.testId = submission.testId;
-    req.body = {
-      ...req.body,
-      submissionId: submission.id,
-    };
-
-    return next();
-  } catch (error) {
-    return next(error);
-  }
-}, submitTest);
-router.post("/attempts/:attemptId/violations", authenticate, examViolationLimiter, validate(violationCompatSchema), async (req, _res, next) => {
-  try {
-    const submission = await db.submission.findUnique({ where: { id: req.params.attemptId } });
-    if (!submission || submission.userId !== req.user.id) {
-      return next(new ApiError(404, "Attempt not found", null, "ATTEMPT_NOT_FOUND"));
-    }
-
-    req.params.testId = submission.testId;
-    req.body = {
-      ...req.body,
-      submissionId: submission.id,
-    };
-
-    return next();
-  } catch (error) {
-    return next(error);
-  }
-}, reportViolation);
+router.patch("/attempts/:attemptId/answers", authenticate, examAnswerLimiter, validate(attemptAnswersCompatSchema), saveAttemptAnswersCompat);
+router.patch("/attempts/:attemptId/heartbeat", authenticate, examHeartbeatLimiter, validate(heartbeatCompatSchema), attachAttemptToTestRequest, heartbeatTest);
+router.post("/attempts/:attemptId/submit", authenticate, examSubmitLimiter, validate(submitAttemptCompatSchema), attachAttemptToTestRequest, submitTest);
+router.post("/attempts/:attemptId/violations", authenticate, examViolationLimiter, validate(violationCompatSchema), attachAttemptToTestRequest, reportViolation);
 
 router.get("/test/:testId", authenticate, examSessionLimiter, validate(testIdOnlySchema), getSession);
 router.get("/results/:attemptId", authenticate, examSessionLimiter, validate(attemptIdOnlySchema), getAttemptResult);

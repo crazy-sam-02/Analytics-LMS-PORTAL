@@ -2,6 +2,9 @@ const models = require("../../models");
 const { asyncHandler } = require("../../utils/http");
 const { getScopedDepartmentId } = require("../../utils/admin-scope");
 
+const hasAnyPermission = (permissions, ...required) =>
+  required.some((permission) => permissions.has(permission));
+
 const mapResults = (type, items) =>
   items.map((item) => ({
     id: item.id,
@@ -34,9 +37,14 @@ const adminSearch = asyncHandler(async (req, res) => {
     return res.status(200).json({ data: [] });
   }
 
+  const permissions = new Set(Array.isArray(req.admin?.permissions) ? req.admin.permissions : []);
+  const canSearchTests = hasAnyPermission(permissions, "edit_test", "manage_questions", "view_tests");
+  const canSearchStudents = hasAnyPermission(permissions, "manage_students", "view_students");
+  const canSearchBatches = hasAnyPermission(permissions, "manage_batches", "view_batches");
+  const canSearchEvents = hasAnyPermission(permissions, "manage_events", "view_events");
   const whereCollege = req.collegeFilter || { collegeId: req.collegeId };
   const departmentId = getScopedDepartmentId(req, { requiredForDepartmentAdmin: false });
-  const departmentBatchIds = departmentId
+  const departmentBatchIds = departmentId && canSearchTests
     ? (await db.batch.findMany({
         where: { ...whereCollege, departmentId },
         select: { id: true },
@@ -65,54 +73,62 @@ const adminSearch = asyncHandler(async (req, res) => {
     : whereCollege;
 
   const [tests, students, batches, events] = await Promise.all([
-    db.test.findMany({
-      where: {
-        AND: [
-          testScope,
-          { OR: [{ title: { contains: q, mode: "insensitive" } }, { subject: { contains: q, mode: "insensitive" } }] },
-        ],
-      },
-      select: { id: true, title: true, subject: true, status: true },
-      take: 8,
-      orderBy: { updatedAt: "desc" },
-    }),
-    db.student.findMany({
-      where: {
-        AND: [
-          studentScope,
-          {
-            OR: [
-              { fullName: { contains: q, mode: "insensitive" } },
-              { studentId: { contains: q, mode: "insensitive" } },
-              { email: { contains: q, mode: "insensitive" } },
+    canSearchTests
+      ? db.test.findMany({
+          where: {
+            AND: [
+              testScope,
+              { OR: [{ title: { contains: q, mode: "insensitive" } }, { subject: { contains: q, mode: "insensitive" } }] },
             ],
           },
-        ],
-      },
-      select: { id: true, fullName: true, studentId: true, email: true },
-      take: 8,
-      orderBy: { updatedAt: "desc" },
-    }),
-    db.batch.findMany({
-      where: {
-        AND: [
-          batchScope,
-          { name: { contains: q, mode: "insensitive" } },
-        ],
-      },
-      select: { id: true, name: true, academicYear: true },
-      take: 8,
-      orderBy: { updatedAt: "desc" },
-    }),
-    db.event.findMany({
-      where: {
-        ...whereCollege,
-        OR: [{ name: { contains: q, mode: "insensitive" } }, { description: { contains: q, mode: "insensitive" } }],
-      },
-      select: { id: true, name: true, eventDate: true, type: true },
-      take: 8,
-      orderBy: { updatedAt: "desc" },
-    }),
+          select: { id: true, title: true, subject: true, status: true },
+          take: 8,
+          orderBy: { updatedAt: "desc" },
+        })
+      : Promise.resolve([]),
+    canSearchStudents
+      ? db.student.findMany({
+          where: {
+            AND: [
+              studentScope,
+              {
+                OR: [
+                  { fullName: { contains: q, mode: "insensitive" } },
+                  { studentId: { contains: q, mode: "insensitive" } },
+                  { email: { contains: q, mode: "insensitive" } },
+                ],
+              },
+            ],
+          },
+          select: { id: true, fullName: true, studentId: true, email: true },
+          take: 8,
+          orderBy: { updatedAt: "desc" },
+        })
+      : Promise.resolve([]),
+    canSearchBatches
+      ? db.batch.findMany({
+          where: {
+            AND: [
+              batchScope,
+              { name: { contains: q, mode: "insensitive" } },
+            ],
+          },
+          select: { id: true, name: true, academicYear: true },
+          take: 8,
+          orderBy: { updatedAt: "desc" },
+        })
+      : Promise.resolve([]),
+    canSearchEvents
+      ? db.event.findMany({
+          where: {
+            ...whereCollege,
+            OR: [{ name: { contains: q, mode: "insensitive" } }, { description: { contains: q, mode: "insensitive" } }],
+          },
+          select: { id: true, name: true, eventDate: true, type: true },
+          take: 8,
+          orderBy: { updatedAt: "desc" },
+        })
+      : Promise.resolve([]),
   ]);
 
   const data = [

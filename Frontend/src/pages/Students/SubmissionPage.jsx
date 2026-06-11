@@ -106,7 +106,7 @@ export default function SubmissionPage() {
 
         <Button
           type="button"
-          className="mt-8 inline-flex h-12 items-center justify-center rounded-xl bg-primary px-8 text-base font-semibold text-primary-foreground shadow-lg shadow-primary/25 transition-colors hover:bg-primary-dark"
+          className="mt-8 mx-4 inline-flex h-12 items-center justify-center rounded-xl bg-primary px-8 text-base font-semibold text-primary-foreground shadow-lg shadow-primary/25 transition-colors hover:bg-primary-dark"
           onClick={() => navigate(`/results/${submissionId}`)}
         >
           View Detailed Results
@@ -114,7 +114,7 @@ export default function SubmissionPage() {
 
         <Link
           to="/tests/ongoing"
-          className="mt-4 inline-flex h-12 items-center justify-center rounded-xl bg-primary px-8 text-base font-semibold text-primary-foreground shadow-lg shadow-primary/25 transition-colors hover:bg-primary-dark"
+          className="mt-4  mx-4 inline-flex h-12 items-center justify-center rounded-xl bg-primary px-8 text-base font-semibold text-primary-foreground shadow-lg shadow-primary/25 transition-colors hover:bg-primary-dark"
         >
           Back to On-Going Tests
         </Link>
@@ -122,7 +122,7 @@ export default function SubmissionPage() {
         <Button
           type="button"
           variant="outline"
-          className="mt-4 h-10 rounded-xl border-primary/30 text-sm font-semibold text-primary-dark"
+          className="mt-4 mx-4 h-10 rounded-xl border-primary/30 text-sm font-semibold text-primary-dark"
           onClick={() => setShowDetails((prev) => !prev)}
         >
           {showDetails ? "Hide Submission Details" : "View Submission Details"}

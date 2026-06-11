@@ -6,10 +6,14 @@ const AdminRouter = lazy(() => import("@/app/Admin/router"));
 const CollegeAdminRouter = lazy(() => import("@/app/CollegeAdmin/router"));
 const SuperAdminRouter = lazy(() => import("@/app/SuperAdmin/router"));
 
+const matchesRouteSegment = (pathname, segment) =>
+  pathname === segment || pathname.startsWith(`${segment}/`);
+
 function App() {
-  const isAdminPath = typeof window !== "undefined" && window.location.pathname.startsWith("/admin");
-  const isCollegeAdminPath = typeof window !== "undefined" && window.location.pathname.startsWith("/college-admin");
-  const isSuperAdminPath = typeof window !== "undefined" && window.location.pathname.startsWith("/super-admin");
+  const pathname = typeof window !== "undefined" ? window.location.pathname : "";
+  const isAdminPath = matchesRouteSegment(pathname, "/admin");
+  const isCollegeAdminPath = matchesRouteSegment(pathname, "/college-admin");
+  const isSuperAdminPath = matchesRouteSegment(pathname, "/super-admin") || matchesRouteSegment(pathname, "/superadmin");
 
   return (
     <AppErrorBoundary>

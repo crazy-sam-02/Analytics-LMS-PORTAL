@@ -3,7 +3,7 @@ import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { toast } from "sonner";
-import { adminApi } from "@/services/api";
+import { adminApi, superAdminApi } from "@/services/api";
 import { connectTestSocket, disconnectTestSocket, joinTestRoom, leaveTestRoom } from "@/services/testSocket";
 import usePermission from "@/hooks/usePermission";
 import { ADMIN_PERMISSIONS } from "@/features/Admin/adminPermissions";
@@ -42,7 +42,11 @@ export default function LiveMonitoringPage() {
   const { testId } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
-  const basePath = location.pathname.startsWith("/college-admin") ? "/college-admin" : "/admin";
+  const isSuperAdminRoute = location.pathname === "/super-admin" || location.pathname.startsWith("/super-admin/");
+  const isCollegeAdminRoute = location.pathname === "/college-admin" || location.pathname.startsWith("/college-admin/");
+  const basePath = isSuperAdminRoute ? "/super-admin" : isCollegeAdminRoute ? "/college-admin" : "/admin";
+  const monitoringApi = isSuperAdminRoute ? superAdminApi : adminApi;
+  const socketRole = isSuperAdminRoute ? "super-admin" : "admin";
   const canEditTest = usePermission(ADMIN_PERMISSIONS.EDIT_TEST);
   const parentRef = useRef(null);
   const [socketHealthy, setSocketHealthy] = useState(true);
@@ -52,8 +56,8 @@ export default function LiveMonitoringPage() {
   const [extendDialog, setExtendDialog] = useState({ open: false, row: null, minutes: 10 });
 
   const monitorQuery = useQuery({
-    queryKey: ["admin-live-monitoring", testId],
-    queryFn: () => adminApi.getTestMonitoring(testId),
+    queryKey: [isSuperAdminRoute ? "super-admin-live-monitoring" : "admin-live-monitoring", testId],
+    queryFn: () => monitoringApi.getTestMonitoring(testId),
     enabled: Boolean(testId),
     refetchInterval: socketHealthy ? false : 10000,
     staleTime: socketHealthy ? 5000 : 0,
@@ -70,11 +74,11 @@ export default function LiveMonitoringPage() {
   useEffect(() => {
     if (!testId) return undefined;
 
-    const socket = connectTestSocket("admin");
+    const socket = connectTestSocket(socketRole);
 
     const onConnect = () => {
       setSocketHealthy(true);
-      joinTestRoom(testId, "admin");
+      joinTestRoom(testId, socketRole);
     };
     const onDisconnect = () => {
       setSocketHealthy(false);
@@ -116,16 +120,16 @@ export default function LiveMonitoringPage() {
     }
 
     return () => {
-      leaveTestRoom(testId, "admin");
+      leaveTestRoom(testId, socketRole);
       socket.off("connect", onConnect);
       socket.off("disconnect", onDisconnect);
       socket.off("connect_error", onConnectError);
       socket.off("student_status_update", onStatusUpdate);
       socket.off("violation_event", onViolationEvent);
       socket.off("test_status_change", onTestStatusChange);
-      disconnectTestSocket("admin");
+      disconnectTestSocket(socketRole);
     };
-  }, [testId]);
+  }, [socketRole, testId]);
 
   const virtualized = studentRows.length > 50;
   const rowVirtualizer = useVirtualizer({
@@ -135,7 +139,7 @@ export default function LiveMonitoringPage() {
   });
 
   const activeStudents = useMemo(() => studentRows.length, [studentRows]);
-  const canControlMonitoring = canEditTest && Boolean(
+  const canControlMonitoring = (isSuperAdminRoute || canEditTest) && Boolean(
     monitorQuery.data?.canAdminControl ?? monitorQuery.data?.test?.canAdminControl ?? true
   );
   const rateLimits = monitorQuery.data?.rateLimits || {
@@ -153,7 +157,7 @@ export default function LiveMonitoringPage() {
   const forceSubmit = async () => {
     if (!canControlMonitoring) return;
     if (!forceDialog.row?.submissionId || !forceDialog.reason.trim()) return;
-    await adminApi.forceSubmitAttempt(testId, {
+    await monitoringApi.forceSubmitAttempt(testId, {
       submissionId: forceDialog.row.submissionId,
       reason: forceDialog.reason.trim(),
     });
@@ -165,7 +169,7 @@ export default function LiveMonitoringPage() {
   const extendTime = async () => {
     if (!canControlMonitoring) return;
     if (!extendDialog.row?.submissionId) return;
-    await adminApi.extendAttemptTime(testId, {
+    await monitoringApi.extendAttemptTime(testId, {
       submissionId: extendDialog.row.submissionId,
       minutes: Number(extendDialog.minutes || 0),
     });

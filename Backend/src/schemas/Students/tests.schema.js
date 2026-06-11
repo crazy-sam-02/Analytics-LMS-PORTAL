@@ -60,6 +60,35 @@ const saveAnswerCompatSchema = z.object({
   query: z.object({}).optional().default({}),
 });
 
+const attemptAnswerCompatItemSchema = z.object({
+  questionId: z.string().min(1).optional(),
+  question_id: z.string().min(1).optional(),
+  selectedOption: z.string().optional().nullable(),
+  selected_option: z.string().optional().nullable(),
+  selectedOptions: z.array(z.string()).optional().nullable(),
+  selected_options: z.array(z.string()).optional().nullable(),
+  answerText: z.string().optional().nullable(),
+  answer_text: z.string().optional().nullable(),
+  answerBoolean: z.boolean().optional().nullable(),
+  answer_boolean: z.boolean().optional().nullable(),
+  markedForReview: z.boolean().optional(),
+  marked_for_review: z.boolean().optional(),
+  timeSpentSeconds: z.number().nonnegative().optional(),
+  time_spent_seconds: z.number().nonnegative().optional(),
+}).passthrough().refine((value) => value.questionId || value.question_id, {
+  message: "questionId is required",
+});
+
+const attemptAnswersCompatSchema = z.object({
+  body: z.object({
+    answers: z.array(attemptAnswerCompatItemSchema).min(1).max(500),
+  }),
+  params: z.object({
+    attemptId: z.string().min(1),
+  }),
+  query: z.object({}).optional().default({}),
+});
+
 const submitSchema = z.object({
   body: z.object({
     submissionId: z.string().min(1),
@@ -160,6 +189,7 @@ module.exports = {
   startTestSchema,
   saveAnswerSchema,
   saveAnswerCompatSchema,
+  attemptAnswersCompatSchema,
   submitSchema,
   submitCompatSchema,
   violationSchema,

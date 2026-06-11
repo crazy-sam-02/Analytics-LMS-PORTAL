@@ -113,9 +113,9 @@ export default function ManageTestsPage() {
   const canCreate = usePermission(ADMIN_PERMISSIONS.CREATE_TEST);
   const canViewTests = usePermission(ADMIN_PERMISSIONS.VIEW_TESTS);
   const canViewReports = usePermission(ADMIN_PERMISSIONS.VIEW_REPORTS);
-  const canPublish = usePermission(ADMIN_PERMISSIONS.PUBLISH_TEST);
   const canEdit = usePermission(ADMIN_PERMISSIONS.EDIT_TEST);
   const canDelete = usePermission(ADMIN_PERMISSIONS.DELETE_TEST);
+  const canManageQuestions = usePermission(ADMIN_PERMISSIONS.MANAGE_QUESTIONS);
   const [activeStatus, setActiveStatus] = useState("ALL");
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState("createdAt");
@@ -130,7 +130,9 @@ export default function ManageTestsPage() {
   const [editingTestId, setEditingTestId] = useState("");
 
   const basePath = location.pathname.startsWith("/college-admin") ? "/college-admin" : "/admin";
-  const canTransition = canEdit || canPublish;
+  const canListTests = canViewTests || canEdit || canManageQuestions;
+  const canCreateTest = canCreate && canManageQuestions;
+  const canTransition = canEdit;
   const canMonitor = canViewTests || canEdit;
 
   const queryString = useMemo(() => {
@@ -145,16 +147,16 @@ export default function ManageTestsPage() {
   }, [activeStatus, page, search, sortBy, sortOrder]);
 
   useEffect(() => {
-    if (canViewTests || canEdit || canPublish || canCreate) {
+    if (canListTests) {
       dispatch(fetchAdminTests(queryString));
     }
-  }, [canCreate, canEdit, canPublish, canViewTests, dispatch, queryString]);
+  }, [canListTests, dispatch, queryString]);
 
   useEffect(() => {
     const isCreateRoute = /\/tests\/create\/?$/.test(location.pathname);
     const isCreateQuery = searchParams.get("create") === "1";
 
-    if ((!isCreateRoute && !isCreateQuery) || !canCreate) {
+    if ((!isCreateRoute && !isCreateQuery) || !canCreateTest) {
       return;
     }
 
@@ -169,7 +171,7 @@ export default function ManageTestsPage() {
     const nextSearchParams = new URLSearchParams(searchParams);
     nextSearchParams.delete("create");
     setSearchParams(nextSearchParams, { replace: true });
-  }, [basePath, canCreate, dispatch, location.pathname, navigate, searchParams, setSearchParams]);
+  }, [basePath, canCreateTest, dispatch, location.pathname, navigate, searchParams, setSearchParams]);
 
   useEffect(() => {
     setSelectedIds([]);
@@ -301,7 +303,12 @@ export default function ManageTestsPage() {
     }
   };
 
-  if (!canViewTests && !canEdit && !canPublish && !canCreate) {
+  const openCreateDialog = () => {
+    dispatch(setTestCreationContext("admin"));
+    dispatch(openTestCreationDialog());
+  };
+
+  if (!canListTests && !canCreateTest) {
     return <PermissionDenied action="view or manage tests" />;
   }
 
@@ -313,9 +320,9 @@ export default function ManageTestsPage() {
             <CardTitle>Create Test</CardTitle>
             <CardDescription>Open the multi-step modal to create, validate, and publish tests.</CardDescription>
           </div>
-          {canCreate ? (
+          {canCreateTest ? (
             <>
-              <Button onClick={() => navigate(`${basePath}/tests/create`)} className="bg-primary hover:bg-primary-dark">
+              <Button onClick={openCreateDialog} className="bg-primary hover:bg-primary-dark">
                 Create Test
               </Button>
               <TestCreationDialog hideTrigger />
@@ -324,25 +331,26 @@ export default function ManageTestsPage() {
         </CardHeader>
       </Card>
 
-      <Card className="rounded-2xl border-border">
-        <CardHeader>
-          <CardTitle>Existing Tests</CardTitle>
-          <CardDescription>Use lifecycle filters and transition actions to manage test state safely.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="grid gap-2 md:grid-cols-4">
-            <Input value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="Search by name or description" />
-            <select className="h-10 rounded-md border border-border px-3 text-sm" value={sortBy} onChange={(event) => setSortBy(event.target.value)}>
-              {SORT_FIELDS.map((item) => (
-                <option key={item.value} value={item.value}>{item.label}</option>
-              ))}
-            </select>
-            <select className="h-10 rounded-md border border-border px-3 text-sm" value={sortOrder} onChange={(event) => setSortOrder(event.target.value)}>
-              <option value="desc">Desc</option>
-              <option value="asc">Asc</option>
-            </select>
-            <Button variant="outline" onClick={() => setBulkOpen(true)} disabled={selectedIds.length === 0}>Bulk Actions ({selectedIds.length})</Button>
-          </div>
+      {canListTests ? (
+        <Card className="rounded-2xl border-border">
+          <CardHeader>
+            <CardTitle>Existing Tests</CardTitle>
+            <CardDescription>Use lifecycle filters and transition actions to manage test state safely.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="grid gap-2 md:grid-cols-4">
+              <Input value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="Search by name or description" />
+              <select className="h-10 rounded-md border border-border px-3 text-sm" value={sortBy} onChange={(event) => setSortBy(event.target.value)}>
+                {SORT_FIELDS.map((item) => (
+                  <option key={item.value} value={item.value}>{item.label}</option>
+                ))}
+              </select>
+              <select className="h-10 rounded-md border border-border px-3 text-sm" value={sortOrder} onChange={(event) => setSortOrder(event.target.value)}>
+                <option value="desc">Desc</option>
+                <option value="asc">Asc</option>
+              </select>
+              <Button variant="outline" onClick={() => setBulkOpen(true)} disabled={selectedIds.length === 0}>Bulk Actions ({selectedIds.length})</Button>
+            </div>
 
           <div className="flex flex-wrap items-center gap-2">
             {STATUS_FILTERS.map((status) => {
@@ -438,15 +446,16 @@ export default function ManageTestsPage() {
             </table>
           </div>
 
-          <div className="flex items-center justify-between">
-            <p className="text-xs text-text-secondary">Page {pagination.page || page} of {pagination.totalPages || 1}</p>
-            <div className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={() => setPage((prev) => Math.max(1, prev - 1))} disabled={(pagination.page || page) <= 1}>Previous</Button>
-              <Button variant="outline" size="sm" onClick={() => setPage((prev) => prev + 1)} disabled={(pagination.page || page) >= (pagination.totalPages || 1)}>Next</Button>
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-text-secondary">Page {pagination.page || page} of {pagination.totalPages || 1}</p>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={() => setPage((prev) => Math.max(1, prev - 1))} disabled={(pagination.page || page) <= 1}>Previous</Button>
+                <Button variant="outline" size="sm" onClick={() => setPage((prev) => prev + 1)} disabled={(pagination.page || page) >= (pagination.totalPages || 1)}>Next</Button>
+              </div>
             </div>
-          </div>
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      ) : null}
 
       <ConfirmActionDialog
         open={Boolean(pendingAction)}

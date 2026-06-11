@@ -44,6 +44,7 @@ const mockSchemas = {
   heartbeatCompatSchema: {},
   submitAttemptCompatSchema: {},
   violationCompatSchema: {},
+  attemptAnswersCompatSchema: {},
   attemptIdOnlySchema: {},
 };
 
@@ -63,6 +64,9 @@ const loadRouteWithLimiterSpy = (routeModulePath) => {
   }));
   jest.doMock("../../controllers/Students/tests.controller", () => mockControllers);
   jest.doMock("../../schemas/Students/tests.schema", () => mockSchemas);
+  jest.doMock("../../services/answer.service", () => ({
+    bulkSaveAnswers: jest.fn(),
+  }));
   jest.doMock("../../config/db", () => ({
     submission: {
       findUnique: jest.fn(),

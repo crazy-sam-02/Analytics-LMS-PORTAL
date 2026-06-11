@@ -15,7 +15,6 @@ import {
   ChartNoAxesCombined,
   Settings,
   LogOut,
-  PlusSquare,
 } from "lucide-react";
 import { ADMIN_PERMISSIONS } from "@/features/Admin/adminPermissions";
 import { logoutAdmin } from "@/features/Admin/adminAuthSlice";
@@ -33,8 +32,7 @@ const createNavItems = (basePath) => {
     { to: `${basePath}/dashboard`, label: "Dashboard", icon: LayoutDashboard },
     ...collegeAdminOnlyItems,
     { to: `${basePath}/students`, label: "Students", icon: Users, permissions: [ADMIN_PERMISSIONS.MANAGE_STUDENTS, ADMIN_PERMISSIONS.VIEW_STUDENTS] },
-    { to: `${basePath}/tests`, label: "All Tests", icon: FileCheck2, permissions: [ADMIN_PERMISSIONS.VIEW_TESTS, ADMIN_PERMISSIONS.EDIT_TEST, ADMIN_PERMISSIONS.PUBLISH_TEST] },
-    { to: `${basePath}/tests?create=1`, label: "Create New", icon: PlusSquare, permissions: [ADMIN_PERMISSIONS.CREATE_TEST] },
+    { to: `${basePath}/tests`, label: "All Tests", icon: FileCheck2, permissions: [ADMIN_PERMISSIONS.VIEW_TESTS, ADMIN_PERMISSIONS.EDIT_TEST, ADMIN_PERMISSIONS.MANAGE_QUESTIONS] },
     { to: `${basePath}/question-bank`, label: "Question Bank", icon: LibraryBig, permissions: [ADMIN_PERMISSIONS.MANAGE_QUESTIONS, ADMIN_PERMISSIONS.VIEW_QUESTION_BANK] },
     { to: `${basePath}/resources`, label: "Learning Resources", icon: BookOpenCheck, permissions: [ADMIN_PERMISSIONS.VIEW_RESOURCES, ADMIN_PERMISSIONS.MANAGE_RESOURCES] },
     { to: `${basePath}/batches`, label: "Batches", icon: Layers3, permissions: [ADMIN_PERMISSIONS.MANAGE_BATCHES, ADMIN_PERMISSIONS.VIEW_BATCHES] },
@@ -60,7 +58,13 @@ export default function AdminSidebar({
   const navItems = createNavItems(basePath);
 
   const permissionSet = new Set(permissions);
-  const canShowItem = (item) => !item.permissions || item.permissions.some((permission) => permissionSet.has(permission));
+  const canShowItem = (item) => {
+    if (item.allPermissions) {
+      return item.allPermissions.every((permission) => permissionSet.has(permission));
+    }
+
+    return !item.permissions || item.permissions.some((permission) => permissionSet.has(permission));
+  };
   const isNavItemActive = (item, isActive) => {
     const [itemPathname, itemSearch] = item.to.split("?");
     if (itemSearch) {

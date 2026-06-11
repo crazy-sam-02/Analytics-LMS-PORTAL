@@ -40,7 +40,12 @@ describe("adminSearch", () => {
           query: { q: "algebra" },
           collegeId: "college-1",
           collegeFilter: { collegeId: "college-1" },
-          admin: { id: "admin-1", role: "ADMIN", departmentId: "dept-1" },
+          admin: {
+            id: "admin-1",
+            role: "ADMIN",
+            departmentId: "dept-1",
+            permissions: ["view_tests", "view_students", "view_batches", "view_events"],
+          },
           ...reqOverrides,
         },
         res,
@@ -90,5 +95,24 @@ describe("adminSearch", () => {
         ]),
       }),
     }));
+  });
+
+  it("does not query or return result types the admin cannot access", async () => {
+    const { adminSearch, db } = loadController();
+
+    const result = await invoke(adminSearch, {
+      admin: {
+        id: "admin-1",
+        role: "ADMIN",
+        departmentId: "dept-1",
+        permissions: [],
+      },
+    });
+
+    expect(result).toEqual({ statusCode: 200, payload: { data: [] } });
+    expect(db.test.findMany).not.toHaveBeenCalled();
+    expect(db.student.findMany).not.toHaveBeenCalled();
+    expect(db.batch.findMany).not.toHaveBeenCalled();
+    expect(db.event.findMany).not.toHaveBeenCalled();
   });
 });

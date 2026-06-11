@@ -6,7 +6,8 @@ const isFormDataBody = (value) => typeof FormData !== "undefined" && value insta
 const shouldAttachJsonContentType = (options = {}) => Boolean(options.body) && !isFormDataBody(options.body);
 const isCollegeAdminRuntimeRoute = () =>
   typeof window !== "undefined" &&
-  String(window.location?.pathname || "").startsWith("/college-admin");
+  (String(window.location?.pathname || "") === "/college-admin" ||
+    String(window.location?.pathname || "").startsWith("/college-admin/"));
 
 const resolveAdminScopedPath = (path) => {
   const normalizedPath = String(path || "");
@@ -836,6 +837,9 @@ export const superAdminApi = {
       method: "PATCH",
       body: JSON.stringify({ action }),
     }),
+  getTestMonitoring: (testId) => superAdminApiRequest(`/super-admin/tests/${testId}/monitoring`),
+  forceSubmitAttempt: (testId, body) => superAdminApiRequest(`/super-admin/tests/${testId}/monitoring/force-submit`, { method: "POST", body: JSON.stringify(body) }),
+  extendAttemptTime: (testId, body) => superAdminApiRequest(`/super-admin/tests/${testId}/monitoring/extend-time`, { method: "POST", body: JSON.stringify(body) }),
   cloneTest: (testId, body) => superAdminApiRequest(`/super-admin/tests/${testId}/clone`, { method: "POST", body: JSON.stringify(body) }),
   deactivateTest: (testId) => superAdminApiRequest(`/super-admin/tests/${testId}`, { method: "DELETE" }),
   getBatches: (params = "") => superAdminApiRequest(`/super-admin/batches${params}`),

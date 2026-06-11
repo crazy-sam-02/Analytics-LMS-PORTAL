@@ -332,6 +332,11 @@ export default function TestsPage() {
     }
   };
 
+  const openCreateDialog = () => {
+    dispatch(setTestCreationContext("super_admin"));
+    dispatch(openTestCreationDialog());
+  };
+
   const onTransition = (test, action) => {
     setPendingAction({
       test,
@@ -419,7 +424,7 @@ export default function TestsPage() {
             <CardTitle>Create Global Test</CardTitle>
             <CardDescription>Uses the exact same multi-step workflow and system design as Admin test creation.</CardDescription>
           </div>
-          <Button onClick={() => navigate("/super-admin/tests/create")} className="bg-primary hover:bg-primary-dark">
+          <Button onClick={openCreateDialog} className="bg-primary hover:bg-primary-dark">
             Create Test
           </Button>
           <TestCreationDialog context="super_admin" onCreated={loadTests} hideTrigger />
@@ -609,6 +614,15 @@ export default function TestsPage() {
                       >
                         {editingTestId === test.id ? "Opening..." : "Edit Test"}
                       </Button>
+                      {status === "LIVE" ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => navigate(`/super-admin/tests/${test.id}/monitoring`)}
+                        >
+                          Monitor
+                        </Button>
+                      ) : null}
                       {canDeleteTest ? (
                         <Button
                           size="sm"
