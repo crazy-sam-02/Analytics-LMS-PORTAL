@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useDispatch, useSelector } from "react-redux";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
@@ -122,7 +122,8 @@ export default function TestsPage() {
   const dispatch = useDispatch();
   const location = useLocation();
   const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [, setSearchParams] = useSearchParams();
+  const handledCreateTriggerRef = useRef("");
   const colleges = useSelector((state) => state.superAdminPanel.colleges);
 
   const [banner, setBanner] = useState({ type: "", title: "", message: "" });
@@ -181,11 +182,18 @@ export default function TestsPage() {
 
   useEffect(() => {
     const isCreateRoute = /\/super-admin\/tests\/create\/?$/.test(location.pathname);
-    const isCreateQuery = searchParams.get("create") === "1";
+    const currentSearchParams = new URLSearchParams(location.search);
+    const isCreateQuery = currentSearchParams.get("create") === "1";
 
     if (!isCreateRoute && !isCreateQuery) {
       return;
     }
+
+    const triggerKey = `${location.pathname}${location.search}`;
+    if (handledCreateTriggerRef.current === triggerKey) {
+      return;
+    }
+    handledCreateTriggerRef.current = triggerKey;
 
     dispatch(setTestCreationContext("super_admin"));
     dispatch(openTestCreationDialog());
@@ -195,10 +203,10 @@ export default function TestsPage() {
       return;
     }
 
-    const nextSearchParams = new URLSearchParams(searchParams);
+    const nextSearchParams = new URLSearchParams(currentSearchParams);
     nextSearchParams.delete("create");
     setSearchParams(nextSearchParams, { replace: true });
-  }, [dispatch, location.pathname, navigate, searchParams, setSearchParams]);
+  }, [dispatch, location.pathname, location.search, navigate, setSearchParams]);
 
   const filteredTests = useMemo(() => {
     const term = search.trim().toLowerCase();

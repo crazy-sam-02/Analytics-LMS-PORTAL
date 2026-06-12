@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { fetchAdminTests, transitionAdminTestStatus, deleteAdminTest } from "@/features/Admin/adminPanelSlice";
@@ -105,7 +105,8 @@ export default function ManageTestsPage() {
   const dispatch = useDispatch();
   const location = useLocation();
   const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [, setSearchParams] = useSearchParams();
+  const handledCreateTriggerRef = useRef("");
   const tests = useSelector((state) => state.adminPanel.tests.data);
   const loading = useSelector((state) => state.adminPanel.tests.loading);
   const pagination = useSelector((state) => state.adminPanel.tests.pagination || {});
@@ -154,11 +155,18 @@ export default function ManageTestsPage() {
 
   useEffect(() => {
     const isCreateRoute = /\/tests\/create\/?$/.test(location.pathname);
-    const isCreateQuery = searchParams.get("create") === "1";
+    const currentSearchParams = new URLSearchParams(location.search);
+    const isCreateQuery = currentSearchParams.get("create") === "1";
 
     if ((!isCreateRoute && !isCreateQuery) || !canCreateTest) {
       return;
     }
+
+    const triggerKey = `${location.pathname}${location.search}`;
+    if (handledCreateTriggerRef.current === triggerKey) {
+      return;
+    }
+    handledCreateTriggerRef.current = triggerKey;
 
     dispatch(setTestCreationContext("admin"));
     dispatch(openTestCreationDialog());
@@ -168,10 +176,10 @@ export default function ManageTestsPage() {
       return;
     }
 
-    const nextSearchParams = new URLSearchParams(searchParams);
+    const nextSearchParams = new URLSearchParams(currentSearchParams);
     nextSearchParams.delete("create");
     setSearchParams(nextSearchParams, { replace: true });
-  }, [basePath, canCreateTest, dispatch, location.pathname, navigate, searchParams, setSearchParams]);
+  }, [basePath, canCreateTest, dispatch, location.pathname, location.search, navigate, setSearchParams]);
 
   useEffect(() => {
     setSelectedIds([]);
