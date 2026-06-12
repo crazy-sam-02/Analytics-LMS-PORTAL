@@ -44,13 +44,16 @@ const unwrapItems = (response) => {
 };
 
 const collegeScopedLimit = 50;
+const studentPageLimit = 20;
 const YEAR_PROMOTION_CONFIRMATION = "PROMOTE STUDENTS YEAR";
 
 export default function StudentsPage() {
   const dispatch = useDispatch();
   const students = useSelector((state) => state.superAdminPanel.students);
+  const studentPagination = useSelector((state) => state.superAdminPanel.studentPagination);
   const colleges = useSelector((state) => state.superAdminPanel.colleges);
   const [filters, setFilters] = useState({ search: "", collegeId: "", departmentId: "", batchId: "", year: "" });
+  const [page, setPage] = useState(1);
   const [pendingDelete, setPendingDelete] = useState(null);
   const [editingStudent, setEditingStudent] = useState(null);
   const [banner, setBanner] = useState({ type: "", title: "", message: "" });
@@ -185,12 +188,14 @@ export default function StudentsPage() {
     event.target.value = "";
   };
 
-  const runSearch = useCallback(() => {
+  const loadStudents = useCallback((targetPage = 1) => {
     if (!filters.collegeId.trim()) {
       setBanner({ type: "warning", title: "Select a college", message: "Choose a college before loading students." });
       return;
     }
     const params = new URLSearchParams();
+    params.set("page", String(targetPage));
+    params.set("limit", String(studentPageLimit));
     if (filters.search.trim()) params.set("search", filters.search.trim());
     if (filters.collegeId.trim()) params.set("collegeId", filters.collegeId.trim());
     if (filters.departmentId.trim()) params.set("departmentId", filters.departmentId.trim());
@@ -200,6 +205,11 @@ export default function StudentsPage() {
     dispatch(fetchSuperStudents(query));
   }, [dispatch, filters.batchId, filters.collegeId, filters.departmentId, filters.search, filters.year]);
 
+  const runSearch = useCallback(() => {
+    setPage(1);
+    loadStudents(1);
+  }, [loadStudents]);
+
   const createStudentMutation = useMutation({
     mutationFn: (payload) => superAdminApi.createStudent(payload),
     onSuccess: (payload) => {
@@ -207,7 +217,7 @@ export default function StudentsPage() {
       setStudentForm({ fullName: "", email: "", enrollNumber: "", year: "", collegeId: "", departmentId: "", batchId: "" });
       setBanner({ type: "success", title: "Student created", message: "Student account created with generated credentials." });
       toast.success("Student account created");
-      runSearch();
+      loadStudents(page);
     },
     onError: (error) => {
       setBanner({ type: "error", title: "Create student failed", message: error?.message || "Unable to create student account." });
@@ -234,7 +244,7 @@ export default function StudentsPage() {
       setBanner({ type: "success", title: "Student updated", message: "Student information has been updated successfully." });
       toast.success("Student updated successfully");
       setEditingStudent(null);
-      runSearch();
+      loadStudents(page);
     },
     onError: (error) => {
       setBanner({ type: "error", title: "Update failed", message: error?.message || "Unable to update student." });
@@ -268,7 +278,7 @@ export default function StudentsPage() {
       setYearPromotionConfirmation("");
       setYearPromotionVerified(false);
       setYearPromotionCollegeId("");
-      runSearch();
+      loadStudents(page);
     },
     onError: (error) => {
       setBanner({ type: "error", title: "Year update failed", message: error?.message || "Unable to promote student years." });
@@ -283,7 +293,7 @@ export default function StudentsPage() {
       });
       setBanner({ type: "success", title: "Student deleted", message: `${student.fullName} has been permanently deleted from the database.` });
       toast.success("Student deleted successfully");
-      runSearch();
+      loadStudents(page);
     } catch (error) {
       setBanner({ type: "error", title: "Delete failed", message: error?.message || "Unable to delete student." });
       toast.error(error?.message || "Unable to delete student");
@@ -328,7 +338,7 @@ export default function StudentsPage() {
 
     if (importJobQuery.data.status === "completed") {
       setBanner({ type: "success", title: "Import completed", message: "Refresh student list to review newly created accounts." });
-      runSearch();
+      loadStudents(page);
       return;
     }
 
@@ -340,19 +350,22 @@ export default function StudentsPage() {
     if (importJobQuery.data.status === "queued" || importJobQuery.data.status === "processing") {
       setBanner({ type: "warning", title: "Import in progress", message: "Job is still running. Results will appear shortly." });
     }
-  }, [importJobQuery.data, runSearch]);
+  }, [importJobQuery.data, loadStudents, page]);
 
   useEffect(() => {
     if (filters.collegeId) {
-      runSearch();
+      setPage(1);
+      loadStudents(1);
     }
-  }, [filters.collegeId, runSearch]);
+  }, [filters.collegeId, loadStudents]);
 
   const departments = useMemo(() => unwrapItems(departmentsQuery.data), [departmentsQuery.data]);
   const batches = useMemo(() => unwrapItems(batchesQuery.data), [batchesQuery.data]);
   const filterDepartments = useMemo(() => unwrapItems(filterDepartmentsQuery.data), [filterDepartmentsQuery.data]);
   const filterBatches = useMemo(() => unwrapItems(filterBatchesQuery.data), [filterBatchesQuery.data]);
   const visibleStudents = useMemo(() => (filters.collegeId ? students : []), [filters.collegeId, students]);
+  const studentTotalPages = Number(studentPagination?.totalPages ?? studentPagination?.pages ?? 1);
+  const studentCurrentPage = Number(studentPagination?.page ?? page ?? 1);
   const filteredFilterBatches = useMemo(() => {
     if (!filters.departmentId) return filterBatches;
     return filterBatches.filter((batch) => String(batch.departmentId) === String(filters.departmentId));
@@ -629,6 +642,37 @@ export default function StudentsPage() {
                 </div>
               </div>
             ))}
+            {(studentTotalPages || 1) > 1 ? (
+              <div className="flex items-center justify-between border-t border-border pt-2 text-xs text-text-secondary">
+                <p>Page {studentCurrentPage} of {studentTotalPages || 1}</p>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={studentCurrentPage <= 1}
+                    onClick={() => {
+                      const nextPage = Math.max(studentCurrentPage - 1, 1);
+                      setPage(nextPage);
+                      loadStudents(nextPage);
+                    }}
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={studentCurrentPage >= studentTotalPages}
+                    onClick={() => {
+                      const nextPage = studentCurrentPage + 1;
+                      setPage(nextPage);
+                      loadStudents(nextPage);
+                    }}
+                  >
+                    Next
+                  </Button>
+                </div>
+              </div>
+            ) : null}
           </div>
         </CardContent>
       </Card>

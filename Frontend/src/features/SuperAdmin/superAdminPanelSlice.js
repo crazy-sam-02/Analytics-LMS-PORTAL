@@ -5,6 +5,12 @@ const initialState = {
   colleges: [],
   admins: [],
   students: [],
+  studentPagination: {
+    page: 1,
+    limit: 20,
+    total: 0,
+    totalPages: 1,
+  },
   tests: [],
   batches: [],
   events: [],
@@ -50,6 +56,7 @@ const superAdminPanelSlice = createSlice({
       })
       .addCase(fetchSuperStudents.fulfilled, (state, action) => {
         state.students = action.payload.data || [];
+        state.studentPagination = action.payload.pagination || action.payload.meta?.pagination || state.studentPagination;
       })
       .addCase(fetchSuperTests.fulfilled, (state, action) => {
         state.tests = action.payload.data || [];

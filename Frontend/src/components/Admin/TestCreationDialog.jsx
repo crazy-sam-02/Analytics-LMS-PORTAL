@@ -94,6 +94,7 @@ const STUDENT_YEAR_OPTIONS = [
   { value: 4, label: "4 YEAR" },
 ];
 const ADMIN_STUDENTS_PAGE_LIMIT = 100;
+const EMPTY_ARRAY = Object.freeze([]);
 const DEFAULT_QB_STATE = Object.freeze({
   filters: {},
   subjects: [],
@@ -134,17 +135,18 @@ export default function TestCreationDialog({ context = "admin", onCreated, hideT
   const fallbackTestCreation = useMemo(() => createInitialTestCreationState(), []);
   const testCreation = useSelector((state) => state.testCreation) || fallbackTestCreation;
   const sidebarCollapsed = useSelector((state) => state.adminUi?.sidebarCollapsed);
-  const departments = useSelector((state) => state.adminPanel?.departments?.data || []);
-  const batches = useSelector((state) => state.adminPanel?.batches?.data || []);
-  const students = useSelector((state) => state.adminPanel?.students?.data || []);
+  const departments = useSelector((state) => state.adminPanel?.departments?.data ?? EMPTY_ARRAY);
+  const batches = useSelector((state) => state.adminPanel?.batches?.data ?? EMPTY_ARRAY);
+  const students = useSelector((state) => state.adminPanel?.students?.data ?? EMPTY_ARRAY);
   const studentUser = useSelector((state) => state.auth?.user || null);
   const adminUser = useSelector((state) => state.adminAuth?.admin || null);
   const superAdminUser = useSelector((state) => state.superAdminAuth?.superAdmin || null);
   const scopedUser = isSuperAdminContext ? superAdminUser : (adminUser || studentUser);
   const currentUserDeptId = resolveDepartmentId(scopedUser?.departmentId || scopedUser?.department);
-  const colleges = useSelector((state) => state.superAdminPanel?.colleges || []);
+  const colleges = useSelector((state) => state.superAdminPanel?.colleges ?? EMPTY_ARRAY);
   const qbState = useSelector((state) => (isSuperAdminContext ? state.superQuestionBank : state.questionBank));
   const qb = qbState || DEFAULT_QB_STATE;
+  const selectedQuestionBankSubjectId = qb.filters?.subjectId || qb.subjects[0]?.id || "";
   const { form, open, step, stepTitles, errors, isSubmitting, questionRenderLimit, mode } = testCreation;
   const isEditMode = mode === "edit";
   const draftKey = isSuperAdminContext ? SUPER_ADMIN_DRAFT_KEY : ADMIN_DRAFT_KEY;
@@ -429,23 +431,22 @@ export default function TestCreationDialog({ context = "admin", onCreated, hideT
       return;
     }
 
-    const selectedSubject = qb.filters.subjectId || qb.subjects[0]?.id;
-    if (!selectedSubject) {
+    if (!selectedQuestionBankSubjectId) {
       return;
     }
 
-    if (!qb.filters.subjectId && qb.subjects[0]?.id) {
+    if (!qb.filters?.subjectId && qb.subjects[0]?.id) {
       dispatch(qbSetFilters({ subjectId: qb.subjects[0].id }));
     }
 
     dispatch(
       qbFetchQuestions({
-        filters: { ...qb.filters, subjectId: selectedSubject },
+        filters: { ...qb.filters, subjectId: selectedQuestionBankSubjectId },
         page: qbPage,
         limit: qb.pagination.limit,
       })
     );
-  }, [dispatch, form.questionInputMode, open, qb.filters, qb.pagination.limit, qb.subjects, qbPage, qbFetchQuestions, qbSetFilters, step]);
+  }, [dispatch, form.questionInputMode, open, qb.filters, qb.pagination.limit, qbPage, qbFetchQuestions, qbSetFilters, selectedQuestionBankSubjectId, step]);
 
   useEffect(() => {
     if (!open) return undefined;

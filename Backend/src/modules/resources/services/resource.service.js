@@ -1166,7 +1166,11 @@ const nativeMatchForActor = (actor, query = {}) => {
   if (actor.role === ROLES.ADMIN) {
     return {
       collegeId: toObjectId(actor.collegeId),
-      departmentIds: toObjectId(actor.departmentId),
+      $or: [
+        { visibilityScope: VISIBILITY_SCOPES.COLLEGE },
+        { departmentIds: toObjectId(actor.departmentId) },
+        { uploadedBy: toObjectId(actor.id) },
+      ],
     };
   }
 
