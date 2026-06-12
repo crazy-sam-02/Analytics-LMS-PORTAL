@@ -5,8 +5,8 @@ const columns = [
   { key: "department", label: "Department" },
   { key: "batch", label: "Batch" },
   { key: "testName", label: "Test Name" },
-  { key: "score", label: "Score" },
-  { key: "accuracy", label: "Accuracy %" },
+  { key: "scorePercent", label: "Score %" },
+  { key: "obtainedMarks", label: "Marks" },
   { key: "timeTaken", label: "Time Taken" },
   { key: "attemptCount", label: "Attempt Count" },
   { key: "status", label: "Status" },
@@ -44,8 +44,8 @@ export default function StudentTable({ rows, table, pagination, loading, onSort,
             <p><strong>Department:</strong> ${row.department || "-"}</p>
             <p><strong>Batch:</strong> ${row.batch || "-"}</p>
             <p><strong>Test:</strong> ${row.testName || "-"}</p>
-            <p><strong>Score:</strong> ${Number(row.score || 0).toFixed(2)}</p>
-            <p><strong>Accuracy:</strong> ${Number(row.accuracy || 0).toFixed(1)}%</p>
+            <p><strong>Score:</strong> ${Number(row.scorePercent ?? row.accuracy ?? row.score ?? 0).toFixed(1)}%</p>
+            <p><strong>Marks:</strong> ${Number(row.obtainedMarks ?? 0).toFixed(2)} / ${Number(row.totalMarks ?? 0).toFixed(2)}</p>
             <p><strong>Time Taken:</strong> ${Math.floor(Number(row.timeTaken || 0) / 60)}m</p>
             <p><strong>Status:</strong> ${row.status || "INCOMPLETE"}</p>
           </div>
@@ -117,6 +117,9 @@ export default function StudentTable({ rows, table, pagination, loading, onSort,
                   const violations = Array.isArray(row.violations) ? row.violations : [];
                   const violationCount = Number(row.violationCount || violations.length || 0);
                   const isExpanded = expandedSubmissionId === submissionId;
+                  const scorePercent = Number(row.scorePercent ?? row.accuracy ?? row.score ?? 0);
+                  const obtainedMarks = Number(row.obtainedMarks ?? 0);
+                  const totalMarks = Number(row.totalMarks ?? 0);
 
                   return (
                     <Fragment key={row.id}>
@@ -125,10 +128,12 @@ export default function StudentTable({ rows, table, pagination, loading, onSort,
                         <td className="px-3 py-2">{row.department}</td>
                         <td className="px-3 py-2">{row.batch}</td>
                         <td className="px-3 py-2">{row.testName}</td>
-                        <td className={`px-3 py-2 font-semibold ${Number(row.score || 0) >= 75 ? "text-success" : Number(row.score || 0) < 40 ? "text-danger" : "text-warning"}`}>
-                          {Number(row.score || 0).toFixed(2)}
+                        <td className={`px-3 py-2 font-semibold ${scorePercent >= 75 ? "text-success" : scorePercent < 40 ? "text-danger" : "text-warning"}`}>
+                          {scorePercent.toFixed(1)}%
                         </td>
-                        <td className="px-3 py-2">{Number(row.accuracy || 0).toFixed(1)}%</td>
+                        <td className="px-3 py-2">
+                          {totalMarks > 0 ? `${obtainedMarks.toFixed(2)} / ${totalMarks.toFixed(2)}` : obtainedMarks.toFixed(2)}
+                        </td>
                         <td className="px-3 py-2">{Math.floor(Number(row.timeTaken || 0) / 60)}m</td>
                         <td className="px-3 py-2">{row.attemptCount || 0}</td>
                         <td className={`px-3 py-2 font-semibold ${statusTone(row.status)}`}>{row.status || "INCOMPLETE"}</td>

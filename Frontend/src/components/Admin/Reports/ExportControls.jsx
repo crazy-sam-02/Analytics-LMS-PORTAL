@@ -1,7 +1,19 @@
 const toCsv = (rows) => {
   if (!rows.length) return "";
-  const headers = Object.keys(rows[0]);
-  const lines = [headers.join(",")].concat(rows.map((row) => headers.map((key) => JSON.stringify(row[key] ?? "")).join(",")));
+  const normalizedRows = rows.map((row) => ({
+    studentName: row.studentName || "-",
+    department: row.department || "-",
+    batch: row.batch || "-",
+    testName: row.testName || "-",
+    scorePercent: Number(row.scorePercent ?? row.accuracy ?? row.score ?? 0).toFixed(1),
+    obtainedMarks: Number(row.obtainedMarks ?? 0).toFixed(2),
+    totalMarks: Number(row.totalMarks ?? 0).toFixed(2),
+    timeTakenSeconds: Number(row.timeTaken || 0),
+    status: row.status || "-",
+    violationCount: Number(row.violationCount || 0),
+  }));
+  const headers = Object.keys(normalizedRows[0]);
+  const lines = [headers.join(",")].concat(normalizedRows.map((row) => headers.map((key) => JSON.stringify(row[key] ?? "")).join(",")));
   return lines.join("\n");
 };
 
@@ -25,7 +37,7 @@ export default function ExportControls({ rows, summary, filters, disabled }) {
     const rowsHtml = (rows || [])
       .map(
         (row) =>
-          `<tr><td>${row.studentName || "-"}</td><td>${row.department || "-"}</td><td>${row.batch || "-"}</td><td>${row.testName || "-"}</td><td>${Number(row.score || 0).toFixed(2)}</td><td>${Number(row.accuracy || 0).toFixed(1)}%</td></tr>`
+          `<tr><td>${row.studentName || "-"}</td><td>${row.department || "-"}</td><td>${row.batch || "-"}</td><td>${row.testName || "-"}</td><td>${Number(row.scorePercent ?? row.accuracy ?? row.score ?? 0).toFixed(1)}%</td><td>${Number(row.obtainedMarks ?? 0).toFixed(2)} / ${Number(row.totalMarks ?? 0).toFixed(2)}</td></tr>`
       )
       .join("");
 
@@ -46,7 +58,7 @@ export default function ExportControls({ rows, summary, filters, disabled }) {
           <p>Summary: ${JSON.stringify(summary || {})}</p>
           <table>
             <thead>
-              <tr><th>Student</th><th>Department</th><th>Batch</th><th>Test</th><th>Score</th><th>Accuracy</th></tr>
+              <tr><th>Student</th><th>Department</th><th>Batch</th><th>Test</th><th>Score %</th><th>Marks</th></tr>
             </thead>
             <tbody>${rowsHtml}</tbody>
           </table>

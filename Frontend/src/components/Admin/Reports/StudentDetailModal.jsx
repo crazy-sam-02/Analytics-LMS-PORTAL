@@ -68,7 +68,7 @@ export default function StudentDetailModal({ open, onClose, detail, loading }) {
                   <div key={item.id} className="rounded-lg border border-border/70 bg-background/50 p-3">
                     <p className="text-sm font-semibold text-text-primary">{item.testName}</p>
                     <p className="text-xs text-text-secondary">
-                      Score: {Number(item.score || 0).toFixed(2)} • Accuracy: {Number(item.accuracy || 0).toFixed(1)}% • Time: {Math.floor(Number(item.timeTaken || 0) / 60)}m
+                      Score: {Number(item.scorePercent ?? item.accuracy ?? item.score ?? 0).toFixed(1)}% • Marks: {Number(item.obtainedMarks ?? 0).toFixed(2)} / {Number(item.totalMarks ?? 0).toFixed(2)} • Time: {Math.floor(Number(item.timeTaken || 0) / 60)}m
                     </p>
                     <p className="text-xs text-text-secondary">
                       Correct: {item.questionAnalysis?.correct || 0} • Incorrect: {item.questionAnalysis?.incorrect || 0}

@@ -392,6 +392,8 @@ export default function ReportsPage({ basePathOverride = null, showStudentDepart
           testId: item.testId,
           testName: item.testName || "-",
           scorePercent: clampPercent(item.scorePercent ?? item.accuracy ?? 0),
+          obtainedMarks: Number(item.obtainedMarks ?? 0),
+          totalMarks: Number(item.totalMarks ?? 0),
           percentile: item.percentile != null ? Number(item.percentile) : null,
           timeTaken: Number(item.timeTaken || 0),
           date: item.date,
@@ -1105,6 +1107,7 @@ export default function ReportsPage({ basePathOverride = null, showStudentDepart
                         </div>
                         <div className="mt-3 grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
                           <StatusBadge label={`Percentile: ${row.percentile != null ? `${row.percentile.toFixed(1)}%` : "-"}`} variant="info" />
+                          <StatusBadge label={`Marks: ${row.totalMarks > 0 ? `${row.obtainedMarks.toFixed(2)} / ${row.totalMarks.toFixed(2)}` : "-"}`} variant="default" />
                           <StatusBadge label={`Time: ${Number.isFinite(row.timeTaken) ? `${Math.round(row.timeTaken / 60)} min` : "-"}`} variant="default" />
                           <StatusBadge label={`Questions: ${row.questionAnalysis?.correct || 0}/${row.questionAnalysis?.total || 0}`} variant="default" />
                           <div className="flex items-center gap-2">

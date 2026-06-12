@@ -395,6 +395,11 @@ const createGlobalTestSchema = z.object({
   if (input.body.negativeMarkingEnabled && Number(input.body.negativeMarks || 0) <= 0) {
     ctx.addIssue({ code: "custom", message: "Negative marks must be greater than 0 when negative marking is enabled" });
   }
+
+  const marksSum = input.body.questions.reduce((sum, question) => sum + Number(question.marks || 0), 0);
+  if (marksSum !== input.body.totalMarks) {
+    ctx.addIssue({ code: "custom", message: "totalMarks must equal sum of all question marks" });
+  }
 });
 
 const testIdParamSchema = z.object({
@@ -474,6 +479,11 @@ const updateGlobalTestSchema = z.object({
 
   if (input.body.negativeMarkingEnabled && Number(input.body.negativeMarks || 0) <= 0) {
     ctx.addIssue({ code: "custom", message: "Negative marks must be greater than 0 when negative marking is enabled" });
+  }
+
+  const marksSum = input.body.questions.reduce((sum, question) => sum + Number(question.marks || 0), 0);
+  if (marksSum !== input.body.totalMarks) {
+    ctx.addIssue({ code: "custom", message: "totalMarks must equal sum of all question marks" });
   }
 });
 

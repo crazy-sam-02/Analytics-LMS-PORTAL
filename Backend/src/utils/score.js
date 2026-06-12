@@ -8,12 +8,13 @@ const roundPercent = (value) => Number(toFiniteNumber(value).toFixed(2));
 const clampPercent = (value) => Math.max(0, Math.min(100, roundPercent(value)));
 
 const getTestTotalMarks = (test = {}) => {
+  if (Array.isArray(test?.questions)) {
+    const questionTotal = test.questions.reduce((sum, question) => sum + toFiniteNumber(question?.marks, 0), 0);
+    if (questionTotal > 0) return questionTotal;
+  }
+
   const explicitTotal = toFiniteNumber(test?.totalMarks, 0);
   if (explicitTotal > 0) return explicitTotal;
-
-  if (Array.isArray(test?.questions)) {
-    return test.questions.reduce((sum, question) => sum + toFiniteNumber(question?.marks, 0), 0);
-  }
 
   return 0;
 };

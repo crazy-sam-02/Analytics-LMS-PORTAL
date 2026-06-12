@@ -7,6 +7,7 @@ const { createAuditLog } = require("../../services/audit.service");
 const { emitToRole } = require("../../realtime/socket");
 const { ApiError, asyncHandler } = require("../../utils/http");
 const { clampPercent, getSubmissionScorePercent } = require("../../utils/score");
+const { isQuestionCorrect } = require("../../services/test.service");
 const { getScopedDepartmentId } = require("../../utils/admin-scope");
 const {
   buildAdminTestVisibilityWhere,
@@ -820,6 +821,12 @@ const getReportTableDashboard = asyncHandler(async (req, res) => {
         select: {
           title: true,
           totalMarks: true,
+          questions: {
+            select: {
+              id: true,
+              marks: true,
+            },
+          },
         },
       },
       violations: {
@@ -841,8 +848,11 @@ const getReportTableDashboard = asyncHandler(async (req, res) => {
   }, {});
 
   let rows = submissions.map((submission) => {
-    const score = Number(submission.score || 0);
-    const accuracy = getScorePercent(submission);
+    const obtainedMarks = Number(submission.score || 0);
+    const totalMarks = Array.isArray(submission.test?.questions) && submission.test.questions.length > 0
+      ? submission.test.questions.reduce((sum, question) => sum + Number(question.marks || 0), 0)
+      : Number(submission.test?.totalMarks || 0);
+    const scorePercent = getScorePercent(submission);
     const date = submission.submittedAt || submission.updatedAt || submission.createdAt || new Date();
 
     return {
@@ -854,8 +864,11 @@ const getReportTableDashboard = asyncHandler(async (req, res) => {
       department: submission.user?.department?.name || "-",
       batch: submission.user?.batch?.name || "-",
       testName: submission.test?.title || "-",
-      score,
-      accuracy,
+      score: scorePercent,
+      scorePercent,
+      accuracy: scorePercent,
+      obtainedMarks,
+      totalMarks,
       timeTaken: Number(submission.timeSpentSeconds || 0),
       attemptCount: Number(attemptsPerStudent[resolveSubmissionStudentId(submission)] || 0),
       status: submission.status || "IN_PROGRESS",
@@ -968,8 +981,34 @@ const getReportStudentDetailDashboard = asyncHandler(async (req, res) => {
             : {}),
         },
         include: {
-          test: { select: { title: true, totalMarks: true } },
-          answers: { select: { questionId: true } },
+          test: {
+            select: {
+              title: true,
+              totalMarks: true,
+              questions: {
+                select: {
+                  id: true,
+                  type: true,
+                  marks: true,
+                  correctOption: true,
+                  correctOptions: true,
+                  correctBoolean: true,
+                  correctText: true,
+                },
+              },
+            },
+          },
+          answers: {
+            select: {
+              questionId: true,
+              selectedOption: true,
+              selectedOptions: true,
+              selectedBoolean: true,
+              selectedText: true,
+              answerBoolean: true,
+              answerText: true,
+            },
+          },
           violations: {
             select: {
               id: true,
@@ -990,18 +1029,35 @@ const getReportStudentDetailDashboard = asyncHandler(async (req, res) => {
   }
 
   const tests = (student.submissions || []).map((submission) => {
-    const totalQuestions = (submission.answers || []).length;
+    const questions = Array.isArray(submission.test?.questions) ? submission.test.questions : [];
+    const answers = Array.isArray(submission.answers) ? submission.answers : [];
+    const totalQuestions = questions.length || answers.length;
+    const answeredQuestionIds = new Set(answers.map((answer) => String(answer.questionId || "")).filter(Boolean));
+    const correct = questions.reduce((sum, question) => {
+      const answer = answers.find((item) => String(item.questionId) === String(question.id));
+      return sum + (isQuestionCorrect(question, answer) ? 1 : 0);
+    }, 0);
+    const incorrect = questions.length > 0
+      ? questions.reduce((sum, question) => {
+          const answered = answeredQuestionIds.has(String(question.id));
+          return sum + (answered && !isQuestionCorrect(question, answers.find((item) => String(item.questionId) === String(question.id))) ? 1 : 0);
+        }, 0)
+      : Math.max(0, answers.length - correct);
+    const totalMarks = questions.length
+      ? questions.reduce((sum, question) => sum + Number(question.marks || 0), 0)
+      : Number(submission.test?.totalMarks || 0);
+    const obtainedMarks = Number(submission.score || 0);
     const accuracy = getScorePercent(submission);
-    const correct = Math.max(0, Math.min(totalQuestions, Math.round((accuracy / 100) * totalQuestions)));
-    const incorrect = Math.max(0, totalQuestions - correct);
 
     return {
       id: submission.id,
       testId: submission.testId,
       testName: submission.test?.title || "Test",
-      score: Number(submission.score || 0),
+      score: accuracy,
       scorePercent: accuracy,
       accuracy,
+      obtainedMarks,
+      totalMarks,
       percentile: submission.percentile ?? null,
       timeTaken: Number(submission.timeSpentSeconds || 0),
       status: submission.status,

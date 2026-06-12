@@ -49,6 +49,7 @@ const NUMERIC_SORT_KEYS = new Set([
   "violations",
   "year",
   "scorePercent",
+  "obtainedMarks",
   "timeTaken",
   "violationsCount",
 ]);
@@ -389,6 +390,8 @@ export default function ReportsPage() {
     testName: row.testName || "-",
     subject: row.subject || "-",
     scorePercent: clampPercent(row.scorePercent),
+    obtainedMarks: toNumber(row.obtainedMarks),
+    totalMarks: toNumber(row.totalMarks),
     timeTaken: toNumber(row.timeTaken),
     status: row.status || "-",
     date: row.date,
@@ -921,6 +924,7 @@ export default function ReportsPage() {
                           <Th sortKey="testName" sortState={sortState} onSort={handleSort}>Test</Th>
                           <Th sortKey="subject" sortState={sortState} onSort={handleSort}>Subject</Th>
                           <Th sortKey="scorePercent" sortState={sortState} onSort={handleSort}>Score</Th>
+                          <Th sortKey="obtainedMarks" sortState={sortState} onSort={handleSort}>Marks</Th>
                           <Th sortKey="timeTaken" sortState={sortState} onSort={handleSort}>Time</Th>
                           <Th sortKey="violationsCount" sortState={sortState} onSort={handleSort}>Violations</Th>
                         </tr>
@@ -932,13 +936,16 @@ export default function ReportsPage() {
                             <td className="px-4 py-3 font-medium text-text-primary">{row.testName}</td>
                             <td className="px-4 py-3 text-text-secondary">{row.subject}</td>
                             <td className="px-4 py-3"><ScoreBadge score={row.scorePercent} /></td>
+                            <td className="px-4 py-3">
+                              {row.totalMarks > 0 ? `${row.obtainedMarks.toFixed(2)} / ${row.totalMarks.toFixed(2)}` : "-"}
+                            </td>
                             <td className="px-4 py-3">{Math.round(row.timeTaken / 60)} min</td>
                             <td className="px-4 py-3"><ViolationBadge count={row.violationsCount} /></td>
                           </tr>
                         ))}
                         {sortedAttemptRows.length === 0 ? (
                           <tr>
-                            <td colSpan={6} className="px-4 py-8">
+                            <td colSpan={7} className="px-4 py-8">
                               <EmptyState title="No submitted tests" description="This student's completed tests will appear here." />
                             </td>
                           </tr>

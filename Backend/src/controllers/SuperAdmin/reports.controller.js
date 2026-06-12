@@ -7,6 +7,7 @@ const { renderHtmlToPdfBuffer } = require("../../services/report-pdf.service");
 const { readReportPayload } = require("../../services/report-payload-store.service");
 const { ApiError, asyncHandler } = require("../../utils/http");
 const { clampPercent, getSubmissionScorePercent } = require("../../utils/score");
+const { isQuestionCorrect } = require("../../services/test.service");
 const {
   buildStudentLifecycleWhere,
   buildReportScopeMetadata,
@@ -300,6 +301,21 @@ const getSuperReportAnalytics = asyncHandler(async (req, res) => {
           title: true,
           subject: true,
           totalMarks: true,
+          ...(studentId
+            ? {
+                questions: {
+                  select: {
+                    id: true,
+                    type: true,
+                    marks: true,
+                    correctOption: true,
+                    correctOptions: true,
+                    correctBoolean: true,
+                    correctText: true,
+                  },
+                },
+              }
+            : {}),
           collegeId: true,
           departmentId: true,
         },
@@ -319,6 +335,12 @@ const getSuperReportAnalytics = asyncHandler(async (req, res) => {
               select: {
                 id: true,
                 questionId: true,
+                selectedOption: true,
+                selectedOptions: true,
+                selectedBoolean: true,
+                selectedText: true,
+                answerBoolean: true,
+                answerText: true,
               },
             },
           }
@@ -501,7 +523,22 @@ const getSuperReportAnalytics = asyncHandler(async (req, res) => {
 
   const attemptHistory = selectedStudentSubmissions
     .map((submission) => {
-      const totalQuestions = Array.isArray(submission.answers) ? submission.answers.length : 0;
+      const questions = Array.isArray(submission.test?.questions) ? submission.test.questions : [];
+      const answers = Array.isArray(submission.answers) ? submission.answers : [];
+      const totalQuestions = questions.length || answers.length;
+      const answeredQuestionIds = new Set(answers.map((answer) => String(answer.questionId || "")).filter(Boolean));
+      const findAnswer = (question) => answers.find((answer) => String(answer.questionId) === String(question.id));
+      const correct = questions.reduce((sum, question) => sum + (isQuestionCorrect(question, findAnswer(question)) ? 1 : 0), 0);
+      const incorrect = questions.length > 0
+        ? questions.reduce((sum, question) => {
+            const answered = answeredQuestionIds.has(String(question.id));
+            return sum + (answered && !isQuestionCorrect(question, findAnswer(question)) ? 1 : 0);
+          }, 0)
+        : Math.max(0, answers.length - correct);
+      const totalMarks = questions.length
+        ? questions.reduce((sum, question) => sum + Number(question.marks || 0), 0)
+        : Number(submission.test?.totalMarks || 0);
+      const obtainedMarks = Number(submission.score || 0);
       const scorePercent = getScorePercent(submission);
       const violationEvents = (submission.violations || []).map((violation) => ({
         id: violation.id,
@@ -519,7 +556,9 @@ const getSuperReportAnalytics = asyncHandler(async (req, res) => {
         testName: submission.test?.title || "Test",
         subject: submission.test?.subject || "General",
         scorePercent,
-        score: Number(submission.score || 0),
+        score: scorePercent,
+        obtainedMarks,
+        totalMarks,
         timeTaken: Number(submission.timeSpentSeconds || 0),
         status: submission.status,
         date: submission.submittedAt || submission.updatedAt || submission.createdAt,
@@ -527,7 +566,8 @@ const getSuperReportAnalytics = asyncHandler(async (req, res) => {
         violationEvents,
         questionAnalysis: {
           total: totalQuestions,
-          correct: totalQuestions ? Math.round((scorePercent / 100) * totalQuestions) : 0,
+          correct,
+          incorrect,
         },
       };
     })
