@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { ADMIN_PERMISSIONS } from "@/features/Admin/adminPermissions";
 import { logoutAdmin } from "@/features/Admin/adminAuthSlice";
+import { closeTestCreationDialog } from "@/features/Admin/testCreationSlice";
 import ConfirmActionDialog from "@/components/Admin/ConfirmActionDialog";
 
 const createNavItems = (basePath) => {
@@ -54,6 +55,7 @@ export default function AdminSidebar({
   const location = useLocation();
   const collapsed = useSelector((state) => state.adminUi?.sidebarCollapsed);
   const permissions = useSelector((state) => state.adminAuth.permissions || []);
+  const testCreationOpen = useSelector((state) => Boolean(state.testCreation?.open));
   const [logoutOpen, setLogoutOpen] = useState(false);
   const navItems = createNavItems(basePath);
 
@@ -115,6 +117,11 @@ export default function AdminSidebar({
             <NavLink
               key={item.to}
               to={item.to}
+              onClick={() => {
+                if (testCreationOpen) {
+                  dispatch(closeTestCreationDialog());
+                }
+              }}
               className={({ isActive }) => {
                 const active = isNavItemActive(item, isActive);
                 return `group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${

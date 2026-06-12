@@ -61,12 +61,22 @@ const getTestBatchIds = (test = {}) =>
     ...(Array.isArray(test.batchAssignments) ? test.batchAssignments.map((assignment) => assignment.batchId) : []),
   ]);
 
+const normalizeYearList = (values = []) =>
+  Array.isArray(values)
+    ? [...new Set(values.map((value) => Number(value)).filter((value) => Number.isInteger(value) && value >= 1 && value <= 4))]
+    : [];
+
 const isStudentAssignedToTest = (student = {}, test = null) => {
   if (!test?.id) return true;
 
   const assignmentMethod = String(test.assignmentMethod || "").trim().toLowerCase();
   const studentDepartmentId = normalizeId(student.departmentId);
   const studentBatchIds = getStudentBatchIds(student);
+  const testYears = normalizeYearList(test.years);
+
+  if (testYears.length > 0 && !testYears.includes(Number(student.year))) {
+    return false;
+  }
 
   if (assignmentMethod === "everyone") {
     return true;
@@ -220,6 +230,7 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
       title: true,
       subject: true,
       totalMarks: true,
+      years: true,
       assignmentMethod: true,
       assignedTo: true,
       departmentId: true,
