@@ -1,5 +1,6 @@
 import { act, render, waitFor } from "@testing-library/react";
 import { Provider } from "react-redux";
+import { MemoryRouter } from "react-router-dom";
 import { configureStore } from "@reduxjs/toolkit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import TestCreationDialog from "@/components/Admin/TestCreationDialog";
@@ -9,6 +10,7 @@ import testCreationReducer, {
   setTestCreationStep,
 } from "@/features/Admin/testCreationSlice";
 import superAdminPanelReducer from "@/features/SuperAdmin/superAdminPanelSlice";
+import superQuestionBankReducer from "@/features/SuperAdmin/superQuestionBankSlice";
 import { superAdminApi } from "@/services/api";
 
 vi.mock("@/services/api", () => ({
@@ -19,6 +21,7 @@ vi.mock("@/services/api", () => ({
     getColleges: vi.fn(),
     getDepartments: vi.fn(),
     getBatches: vi.fn(),
+    getQuestionSubjects: vi.fn(),
   },
 }));
 
@@ -39,6 +42,7 @@ const createStore = () => {
     reducer: {
       testCreation: testCreationReducer,
       superAdminPanel: superAdminPanelReducer,
+      superQuestionBank: superQuestionBankReducer,
       adminPanel: (
         state = {
           departments: { data: [] },
@@ -116,9 +120,11 @@ const createStore = () => {
 };
 
 const renderDialog = (store) => render(
-  <Provider store={store}>
-    <TestCreationDialog context="super_admin" />
-  </Provider>
+  <MemoryRouter>
+    <Provider store={store}>
+      <TestCreationDialog context="super_admin" />
+    </Provider>
+  </MemoryRouter>
 );
 
 describe("TestCreationDialog clone scope handling", () => {
@@ -127,6 +133,7 @@ describe("TestCreationDialog clone scope handling", () => {
     superAdminApi.getColleges.mockResolvedValue({
       data: [{ id: "college-1", name: "College 1" }],
     });
+    superAdminApi.getQuestionSubjects.mockResolvedValue([]);
   });
 
   it("keeps selected clone scope while super-admin options are still loading", async () => {

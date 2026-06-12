@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { useLocation } from "react-router-dom";
 import { toast } from "sonner";
@@ -133,6 +133,7 @@ export default function TestCreationDialog({ context = "admin", onCreated, hideT
   const canLoadAdminQuestionSubjects = canManageQuestions || canViewQuestionBank;
   const fallbackTestCreation = useMemo(() => createInitialTestCreationState(), []);
   const testCreation = useSelector((state) => state.testCreation) || fallbackTestCreation;
+  const sidebarCollapsed = useSelector((state) => state.adminUi?.sidebarCollapsed);
   const departments = useSelector((state) => state.adminPanel?.departments?.data || []);
   const batches = useSelector((state) => state.adminPanel?.batches?.data || []);
   const students = useSelector((state) => state.adminPanel?.students?.data || []);
@@ -174,6 +175,7 @@ export default function TestCreationDialog({ context = "admin", onCreated, hideT
   const qbFetchQuestions = isSuperAdminContext ? fetchSuperQuestionBankQuestions : fetchQuestionBankQuestions;
 
   const location = useLocation();
+  const previousPathnameRef = useRef(location.pathname);
 
   const resetBodyInteractionLock = () => {
     document.body.style.overflow = "";
@@ -266,8 +268,13 @@ export default function TestCreationDialog({ context = "admin", onCreated, hideT
     }
   }, [currentUserDeptId, dispatch, form.assignmentMethod, form.departmentId, isSuperAdminContext, open]);
 
-  // Route-change guard: close dialog on navigation to prevent UI/router state mismatch
+  // Route-change guard: close dialog after real navigation to prevent UI/router state mismatch.
   useEffect(() => {
+    if (previousPathnameRef.current === location.pathname) {
+      return;
+    }
+
+    previousPathnameRef.current = location.pathname;
     if (open) {
       handleClose();
     }
@@ -279,8 +286,20 @@ export default function TestCreationDialog({ context = "admin", onCreated, hideT
     return () => {
       resetBodyInteractionLock();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Escape key closes dialog (accessibility)
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKeyDown = (e) => {
+      if (e.key === "Escape" && !publishDialog.open) {
+        handleClose();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, publishDialog.open]);
 
   useEffect(() => {
     if (!isSuperAdminContext || !open) {
@@ -956,8 +975,10 @@ export default function TestCreationDialog({ context = "admin", onCreated, hideT
     // to remain clickable even though this overlay sits at z-100 visually.
     <div className="fixed inset-0 z-100 bg-primary-dark/40 backdrop-blur-sm animate-in fade-in duration-200 pointer-events-none">
       
-      {/* --- MODAL CONTAINER: pointer-events-auto restores interactivity for the modal itself --- */}
-      <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-muted pointer-events-auto">
+      {/* --- MODAL CONTAINER: pointer-events-auto restores interactivity for the modal itself.
+            Uses sidebar-aware left offset so the sidebar remains clickable underneath the overlay.
+            On mobile (< lg) the sidebar is hidden, so the modal goes full-width. --- */}
+      <div className={`fixed inset-y-0 right-0 flex flex-col overflow-hidden bg-muted pointer-events-auto transition-all duration-200 ${sidebarCollapsed ? "left-0 lg:left-16" : "left-0 lg:left-64"}`}>
         
         {/* Close Button */}
         <button 
