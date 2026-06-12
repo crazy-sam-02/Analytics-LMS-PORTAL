@@ -60,10 +60,9 @@ const emptyUploadForm = {
   resourceType: "PDF",
   visibilityScope: "COLLEGE",
   collegeId: "",
+  collegeIds: [],
   externalUrl: "",
   departmentIds: [],
-  batchIds: [],
-  studentIds: "",
   tags: "",
   file: null,
 };
@@ -134,22 +133,22 @@ export default function LearningResourcesWorkspace({
   const [uploadForm, setUploadForm] = useState(emptyUploadForm);
   const [subjectDraft, setSubjectDraft] = useState("");
   const [departments, setDepartments] = useState([]);
-  const [batches, setBatches] = useState([]);
   const [colleges, setColleges] = useState([]);
 
   const isSuper = role === "super";
   const adminRole = String(admin?.role || "").toUpperCase();
   const isDepartmentAdmin = role === "admin" && adminRole === "ADMIN";
+  const isCollegeAdmin = role === "admin" && adminRole === "COLLEGE_ADMIN";
   const canCreateSubject = isSuper || (role === "admin" && (adminRole === "COLLEGE_ADMIN" || adminRole === "ADMIN"));
 
   const visibilityOptions = useMemo(() => {
     if (isSuper) {
-      return ["GLOBAL", "COLLEGE", "DEPARTMENT", "BATCH", "STUDENT"];
+      return ["GLOBAL", "COLLEGE", "DEPARTMENT"];
     }
     if (isDepartmentAdmin) {
-      return ["DEPARTMENT", "BATCH", "STUDENT"];
+      return ["DEPARTMENT"];
     }
-    return ["COLLEGE", "DEPARTMENT", "BATCH", "STUDENT"];
+    return ["COLLEGE", "DEPARTMENT"];
   }, [isDepartmentAdmin, isSuper]);
 
   useEffect(() => {
@@ -176,19 +175,35 @@ export default function LearningResourcesWorkspace({
       return;
     }
 
-    Promise.all([
-      adminApi.getDepartments().catch(() => []),
-      adminApi.getBatches().catch(() => []),
-    ]).then(([departmentPayload, batchPayload]) => {
+    adminApi.getDepartments().then((departmentPayload) => {
       setDepartments(Array.isArray(departmentPayload) ? departmentPayload : departmentPayload?.data || []);
-      setBatches(Array.isArray(batchPayload) ? batchPayload : batchPayload?.data || []);
-    });
+    }).catch(() => setDepartments([]));
   }, [canManage, isSuper]);
+
+  useEffect(() => {
+    if (!canManage || !isSuper || uploadForm.visibilityScope === "GLOBAL" || uploadForm.collegeIds.length === 0) {
+      if (isSuper) {
+        setDepartments([]);
+      }
+      return;
+    }
+
+    Promise.all(
+      uploadForm.collegeIds.map((collegeId) =>
+        superAdminApi.getDepartments(`?limit=100&collegeId=${collegeId}`).catch(() => ({ data: [] }))
+      )
+    ).then((payloads) => {
+      const merged = payloads.flatMap((payload) => (Array.isArray(payload) ? payload : payload?.data || []));
+      setDepartments(Array.from(new Map(merged.map((department) => [department.id, department])).values()));
+    });
+  }, [canManage, isSuper, uploadForm.collegeIds, uploadForm.visibilityScope]);
 
   useEffect(() => {
     setUploadForm((current) => ({
       ...current,
       visibilityScope: visibilityOptions.includes(current.visibilityScope) ? current.visibilityScope : visibilityOptions[0],
+      collegeIds: visibilityOptions.includes(current.visibilityScope) ? current.collegeIds : [],
+      departmentIds: visibilityOptions.includes(current.visibilityScope) ? current.departmentIds : [],
     }));
   }, [visibilityOptions]);
 
@@ -207,6 +222,7 @@ export default function LearningResourcesWorkspace({
     setUploadForm((current) => ({
       ...current,
       [key]: value,
+      ...(key === "visibilityScope" ? { collegeIds: [], departmentIds: [] } : {}),
     }));
   };
 
@@ -225,12 +241,7 @@ export default function LearningResourcesWorkspace({
     });
   };
 
-  const submitUpload = async () => {
-    if (!uploadForm.title.trim() || !uploadForm.subjectId) {
-      toast.error("Title and subject are required");
-      return;
-    }
-
+  const buildUploadBody = ({ collegeId = "", departmentIds = [] } = {}) => {
     const body = new FormData();
     body.set("title", uploadForm.title.trim());
     body.set("description", uploadForm.description.trim());
@@ -238,17 +249,77 @@ export default function LearningResourcesWorkspace({
     body.set("resourceType", uploadForm.resourceType);
     body.set("visibilityScope", uploadForm.visibilityScope);
     body.set("tags", uploadForm.tags);
-    if (isSuper && uploadForm.collegeId) body.set("collegeId", uploadForm.collegeId);
+    if (collegeId) body.set("collegeId", collegeId);
     if (uploadForm.externalUrl) body.set("externalUrl", uploadForm.externalUrl);
-    body.set("departmentIds", JSON.stringify(uploadForm.departmentIds || []));
-    body.set("batchIds", JSON.stringify(uploadForm.batchIds || []));
-    body.set("studentIds", JSON.stringify(String(uploadForm.studentIds || "").split(",").map((item) => item.trim()).filter(Boolean)));
+    body.set("departmentIds", JSON.stringify(departmentIds));
     if (FILE_TYPES.has(uploadForm.resourceType) && uploadForm.file) {
       body.set("file", uploadForm.file);
     }
+    return body;
+  };
+
+  const selectedDepartmentGroups = () => {
+    const selected = departments.filter((department) => (uploadForm.departmentIds || []).includes(department.id));
+    return selected.reduce((groups, department) => {
+      const collegeId = department.collegeId || department.college?.id || uploadForm.collegeId;
+      if (!collegeId) return groups;
+      groups[collegeId] = [...(groups[collegeId] || []), department.id];
+      return groups;
+    }, {});
+  };
+
+  const submitUpload = async () => {
+    if (!uploadForm.title.trim() || !uploadForm.subjectId) {
+      toast.error("Title and subject are required");
+      return;
+    }
+
+    if (FILE_TYPES.has(uploadForm.resourceType) && !uploadForm.file) {
+      toast.error("Choose a file to upload");
+      return;
+    }
+
+    if (!FILE_TYPES.has(uploadForm.resourceType) && !uploadForm.externalUrl.trim()) {
+      toast.error("External URL is required");
+      return;
+    }
 
     try {
-      await dispatch(uploadLearningResource({ role, payload: body })).unwrap();
+      if (isDepartmentAdmin) {
+        await dispatch(uploadLearningResource({
+          role,
+          payload: buildUploadBody({ departmentIds: [admin?.departmentId].filter(Boolean) }),
+        })).unwrap();
+      } else if (isSuper && uploadForm.visibilityScope === "COLLEGE") {
+        if (!uploadForm.collegeIds.length) {
+          toast.error("Select at least one college");
+          return;
+        }
+        await Promise.all(uploadForm.collegeIds.map((collegeId) =>
+          dispatch(uploadLearningResource({ role, payload: buildUploadBody({ collegeId }) })).unwrap()
+        ));
+      } else if (isSuper && uploadForm.visibilityScope === "DEPARTMENT") {
+        const groups = selectedDepartmentGroups();
+        const entries = Object.entries(groups);
+        if (entries.length === 0) {
+          toast.error("Select at least one department");
+          return;
+        }
+        await Promise.all(entries.map(([collegeId, departmentIds]) =>
+          dispatch(uploadLearningResource({ role, payload: buildUploadBody({ collegeId, departmentIds }) })).unwrap()
+        ));
+      } else if (isCollegeAdmin && uploadForm.visibilityScope === "DEPARTMENT") {
+        if (!uploadForm.departmentIds.length) {
+          toast.error("Select at least one department");
+          return;
+        }
+        await dispatch(uploadLearningResource({
+          role,
+          payload: buildUploadBody({ departmentIds: uploadForm.departmentIds }),
+        })).unwrap();
+      } else {
+        await dispatch(uploadLearningResource({ role, payload: buildUploadBody() })).unwrap();
+      }
       toast.success("Resource uploaded");
       setUploadForm({
         ...emptyUploadForm,
@@ -485,15 +556,20 @@ export default function LearningResourcesWorkspace({
                 <Textarea value={uploadForm.description} onChange={(event) => updateUploadForm("description", event.target.value)} placeholder="Description" />
 
                 {isSuper && uploadForm.visibilityScope !== "GLOBAL" ? (
-                  <Select value={uploadForm.collegeId || "none"} onValueChange={(value) => updateUploadForm("collegeId", value === "none" ? "" : value)}>
-                    <SelectTrigger><SelectValue placeholder="College" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">Select College</SelectItem>
+                  <div className="rounded-lg border border-border p-3">
+                    <p className="mb-2 text-sm font-medium text-text-primary">Colleges</p>
+                    <div className="grid gap-2 md:grid-cols-2">
                       {colleges.map((college) => (
-                        <SelectItem key={college.id} value={college.id}>{college.name}</SelectItem>
+                        <label key={college.id} className="flex items-center gap-2 text-sm text-text-secondary">
+                          <Checkbox
+                            checked={(uploadForm.collegeIds || []).includes(college.id)}
+                            onCheckedChange={() => toggleUploadArray("collegeIds", college.id)}
+                          />
+                          {college.name}
+                        </label>
                       ))}
-                    </SelectContent>
-                  </Select>
+                    </div>
+                  </div>
                 ) : null}
 
                 {FILE_TYPES.has(uploadForm.resourceType) ? (
@@ -502,53 +578,28 @@ export default function LearningResourcesWorkspace({
                   <Input value={uploadForm.externalUrl} onChange={(event) => updateUploadForm("externalUrl", event.target.value)} placeholder="External URL" />
                 )}
 
-                {uploadForm.visibilityScope === "DEPARTMENT" || uploadForm.visibilityScope === "BATCH" || uploadForm.visibilityScope === "STUDENT" ? (
-                  <div className="grid gap-4 md:grid-cols-2">
-                    {isSuper ? (
-                      <Input
-                        value={(uploadForm.departmentIds || []).join(", ")}
-                        onChange={(event) => updateUploadForm("departmentIds", event.target.value.split(",").map((item) => item.trim()).filter(Boolean))}
-                        placeholder="Department IDs, comma separated"
-                      />
-                    ) : null}
-                    {isSuper && uploadForm.visibilityScope === "BATCH" ? (
-                      <Input
-                        value={(uploadForm.batchIds || []).join(", ")}
-                        onChange={(event) => updateUploadForm("batchIds", event.target.value.split(",").map((item) => item.trim()).filter(Boolean))}
-                        placeholder="Batch IDs, comma separated"
-                      />
-                    ) : null}
-                    {!isSuper && departments.length > 0 ? (
-                      <div className="rounded-lg border border-border p-3">
-                        <p className="mb-2 text-sm font-medium text-text-primary">Departments</p>
-                        <div className="grid gap-2">
-                          {departments.map((department) => (
-                            <label key={department.id} className="flex items-center gap-2 text-sm text-text-secondary">
-                              <Checkbox checked={(uploadForm.departmentIds || []).includes(department.id)} onCheckedChange={() => toggleUploadArray("departmentIds", department.id)} />
-                              {department.name}
-                            </label>
-                          ))}
-                        </div>
-                      </div>
-                    ) : null}
-                    {!isSuper && batches.length > 0 ? (
-                      <div className="rounded-lg border border-border p-3">
-                        <p className="mb-2 text-sm font-medium text-text-primary">Batches</p>
-                        <div className="grid gap-2">
-                          {batches.map((batch) => (
-                            <label key={batch.id} className="flex items-center gap-2 text-sm text-text-secondary">
-                              <Checkbox checked={(uploadForm.batchIds || []).includes(batch.id)} onCheckedChange={() => toggleUploadArray("batchIds", batch.id)} />
-                              {batch.name}
-                            </label>
-                          ))}
-                        </div>
-                      </div>
-                    ) : null}
+                {uploadForm.visibilityScope === "DEPARTMENT" && isDepartmentAdmin ? (
+                  <div className="rounded-lg border border-border bg-muted px-3 py-2 text-sm text-text-secondary">
+                    Resources will be assigned to your department only.
                   </div>
                 ) : null}
 
-                {uploadForm.visibilityScope === "STUDENT" ? (
-                  <Input value={uploadForm.studentIds} onChange={(event) => updateUploadForm("studentIds", event.target.value)} placeholder="Student IDs, comma separated" />
+                {uploadForm.visibilityScope === "DEPARTMENT" && !isDepartmentAdmin && departments.length > 0 ? (
+                  <div className="rounded-lg border border-border p-3">
+                    <p className="mb-2 text-sm font-medium text-text-primary">Departments</p>
+                    <div className="grid gap-2 md:grid-cols-2">
+                      {departments.map((department) => (
+                        <label key={department.id} className="flex items-center gap-2 text-sm text-text-secondary">
+                          <Checkbox
+                            checked={(uploadForm.departmentIds || []).includes(department.id)}
+                            onCheckedChange={() => toggleUploadArray("departmentIds", department.id)}
+                          />
+                          {department.name}
+                          {department.college?.name ? <span className="text-xs text-text-secondary/80">({department.college.name})</span> : null}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
                 ) : null}
 
                 <Input value={uploadForm.tags} onChange={(event) => updateUploadForm("tags", event.target.value)} placeholder="Tags, comma separated" />

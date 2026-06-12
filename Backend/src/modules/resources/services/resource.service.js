@@ -596,16 +596,25 @@ const getModels = async () => {
 };
 
 const buildSubjectWhereForActor = (actor, query = {}) => {
+  const resourceSubjectWhere = { resourceSubjectScope: { in: ["GLOBAL", "COLLEGE"] } };
+
   if (actor.role === ROLES.SUPER_ADMIN) {
-    return query.collegeId ? { OR: [{ collegeId: null }, { collegeId: query.collegeId }] } : { collegeId: null };
+    return query.collegeId
+      ? appendAnd(resourceSubjectWhere, { OR: [{ collegeId: null }, { collegeId: query.collegeId }] })
+      : appendAnd(resourceSubjectWhere, { collegeId: null });
   }
 
-  return actor.collegeId ? { OR: [{ collegeId: null }, { collegeId: actor.collegeId }] } : { collegeId: null };
+  return actor.collegeId
+    ? appendAnd(resourceSubjectWhere, { OR: [{ collegeId: null }, { collegeId: actor.collegeId }] })
+    : appendAnd(resourceSubjectWhere, { collegeId: null });
 };
 
 const findSubjectForPayload = async (db, actor, payload) => {
   const subject = await db.subject.findFirst({
-    where: { id: payload.subjectId },
+    where: {
+      id: payload.subjectId,
+      resourceSubjectScope: { in: ["GLOBAL", "COLLEGE"] },
+    },
   });
 
   if (!subject) {
@@ -633,6 +642,10 @@ const findSubjectForPayload = async (db, actor, payload) => {
 };
 
 const validateScopedReferences = async (db, actor, payload) => {
+  if ([VISIBILITY_SCOPES.BATCH, VISIBILITY_SCOPES.STUDENT].includes(payload.visibilityScope)) {
+    throw new ApiError(422, "Learning resources can only be assigned globally, college-wide, or to departments");
+  }
+
   if (payload.visibilityScope === VISIBILITY_SCOPES.GLOBAL) {
     if (actor.role !== ROLES.SUPER_ADMIN) {
       throw new ApiError(403, "Only Super Admin can publish global resources");
@@ -653,24 +666,19 @@ const validateScopedReferences = async (db, actor, payload) => {
     payload.collegeId = actor.collegeId;
   }
 
-  if (actor.role === ROLES.ADMIN && [VISIBILITY_SCOPES.GLOBAL, VISIBILITY_SCOPES.COLLEGE].includes(payload.visibilityScope)) {
-    throw new ApiError(403, "Department admins can only publish department, batch, or student scoped resources");
+  if (actor.role === ROLES.ADMIN && payload.visibilityScope !== VISIBILITY_SCOPES.DEPARTMENT) {
+    throw new ApiError(403, "Department admins can only publish resources to their own department");
   }
 
-  if (payload.visibilityScope === VISIBILITY_SCOPES.DEPARTMENT && payload.departmentIds.length === 0) {
-    payload.departmentIds = actor.role === ROLES.ADMIN ? [actor.departmentId] : payload.departmentIds;
+  if (actor.role === ROLES.ADMIN) {
+    if (!actor.departmentId) {
+      throw new ApiError(422, "departmentId is required for department admin resource assignment");
+    }
+    payload.departmentIds = [actor.departmentId];
   }
 
   if (payload.visibilityScope === VISIBILITY_SCOPES.DEPARTMENT && payload.departmentIds.length === 0) {
     throw new ApiError(422, "departmentIds are required for department visibility");
-  }
-
-  if (payload.visibilityScope === VISIBILITY_SCOPES.BATCH && payload.batchIds.length === 0) {
-    throw new ApiError(422, "batchIds are required for batch visibility");
-  }
-
-  if (payload.visibilityScope === VISIBILITY_SCOPES.STUDENT && payload.studentIds.length === 0) {
-    throw new ApiError(422, "studentIds are required for student visibility");
   }
 
   if (payload.departmentIds.length > 0) {
@@ -687,43 +695,8 @@ const validateScopedReferences = async (db, actor, payload) => {
     }
   }
 
-  if (payload.batchIds.length > 0) {
-    const batches = await db.batch.findMany({
-      where: { collegeId: payload.collegeId, id: { in: payload.batchIds } },
-    });
-
-    if (batches.length !== payload.batchIds.length) {
-      throw new ApiError(422, "One or more batches are invalid for this college");
-    }
-
-    const batchDepartmentIds = uniqueStrings(batches.flatMap((batch) => [
-      batch.departmentId,
-      ...(Array.isArray(batch.departmentIds) ? batch.departmentIds : []),
-    ]));
-
-    payload.departmentIds = uniqueStrings([...payload.departmentIds, ...batchDepartmentIds]);
-
-    if (actor.role === ROLES.ADMIN && !batchDepartmentIds.some((id) => String(id) === String(actor.departmentId))) {
-      throw new ApiError(403, "Cross-department batch resource assignment denied", null, "CROSS_DEPARTMENT_ACCESS_DENIED");
-    }
-  }
-
-  if (payload.studentIds.length > 0) {
-    const students = await db.student.findMany({
-      where: { collegeId: payload.collegeId, id: { in: payload.studentIds } },
-    });
-
-    if (students.length !== payload.studentIds.length) {
-      throw new ApiError(422, "One or more students are invalid for this college");
-    }
-
-    const studentDepartmentIds = uniqueStrings(students.map((student) => student.departmentId));
-    payload.departmentIds = uniqueStrings([...payload.departmentIds, ...studentDepartmentIds]);
-
-    if (actor.role === ROLES.ADMIN && !students.every((student) => String(student.departmentId) === String(actor.departmentId))) {
-      throw new ApiError(403, "Cross-department student resource assignment denied", null, "CROSS_DEPARTMENT_ACCESS_DENIED");
-    }
-  }
+  payload.batchIds = [];
+  payload.studentIds = [];
 
   return payload;
 };
@@ -1316,6 +1289,7 @@ const createResourceSubject = async ({ actor, body }) => {
   const duplicate = await db.subject.findFirst({
     where: {
       collegeId,
+      resourceSubjectScope: actor.role === ROLES.SUPER_ADMIN ? "GLOBAL" : "COLLEGE",
       name: { equals: name, mode: "insensitive" },
     },
   });
@@ -1348,7 +1322,12 @@ const deleteResourceSubject = async ({ actor, subjectId }) => {
   }
 
   const db = await getModels();
-  const subject = await db.subject.findFirst({ where: { id: subjectId } });
+  const subject = await db.subject.findFirst({
+    where: {
+      id: subjectId,
+      resourceSubjectScope: { in: ["GLOBAL", "COLLEGE"] },
+    },
+  });
   if (!subject) {
     throw new ApiError(404, "Subject not found");
   }

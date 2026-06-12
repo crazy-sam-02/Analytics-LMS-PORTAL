@@ -7,7 +7,10 @@ const getSubjects = asyncHandler(async (req, res) => {
   const collegeId = req.collegeId;
 
   const subjects = await db.subject.findMany({
-    where: { collegeId },
+    where: {
+      collegeId,
+      resourceSubjectScope: { not: { in: ["GLOBAL", "COLLEGE"] } },
+    },
     include: {
       createdByAdmin: true,
     },
@@ -47,6 +50,7 @@ const createSubject = asyncHandler(async (req, res) => {
   const exists = await db.subject.findFirst({
     where: {
       collegeId,
+      resourceSubjectScope: { not: { in: ["GLOBAL", "COLLEGE"] } },
       name: { equals: name, mode: "insensitive" },
     },
   });
@@ -60,6 +64,7 @@ const createSubject = asyncHandler(async (req, res) => {
       collegeId,
       name,
       createdByAdminId: req.admin.id,
+      questionSubjectScope: "COLLEGE",
     },
   });
 
@@ -73,7 +78,11 @@ const deleteSubject = asyncHandler(async (req, res) => {
   const { id } = req.params;
 
   const subject = await db.subject.findFirst({
-    where: { id, collegeId },
+    where: {
+      id,
+      collegeId,
+      resourceSubjectScope: { not: { in: ["GLOBAL", "COLLEGE"] } },
+    },
   });
 
   if (!subject) {

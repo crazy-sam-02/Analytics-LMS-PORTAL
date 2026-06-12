@@ -7,7 +7,10 @@ const getSubjects = asyncHandler(async (req, res) => {
   const superAdminId = req.superAdmin.id;
 
   const subjects = await db.subject.findMany({
-    where: { createdBySuperAdminId: superAdminId },
+    where: {
+      createdBySuperAdminId: superAdminId,
+      resourceSubjectScope: { not: { in: ["GLOBAL", "COLLEGE"] } },
+    },
     include: {
       createdBySuperAdmin: true,
     },
@@ -47,6 +50,7 @@ const createSubject = asyncHandler(async (req, res) => {
   const exists = await db.subject.findFirst({
     where: {
       createdBySuperAdminId: superAdminId,
+      resourceSubjectScope: { not: { in: ["GLOBAL", "COLLEGE"] } },
       name: { equals: name, mode: "insensitive" },
     },
   });
@@ -60,6 +64,7 @@ const createSubject = asyncHandler(async (req, res) => {
       collegeId: null,
       name,
       createdBySuperAdminId: superAdminId,
+      questionSubjectScope: "GLOBAL",
     },
   });
 
@@ -73,7 +78,11 @@ const deleteSubject = asyncHandler(async (req, res) => {
   const { id } = req.params;
 
   const subject = await db.subject.findFirst({
-    where: { id, createdBySuperAdminId: superAdminId },
+    where: {
+      id,
+      createdBySuperAdminId: superAdminId,
+      resourceSubjectScope: { not: { in: ["GLOBAL", "COLLEGE"] } },
+    },
   });
 
   if (!subject) {

@@ -12,6 +12,22 @@ const mapQuestionType = (type) => {
   return map[type];
 };
 
+const assertQuestionSubject = async (db, { subjectId, superAdminId }) => {
+  const subject = await db.subject.findFirst({
+    where: {
+      id: subjectId,
+      createdBySuperAdminId: superAdminId,
+      resourceSubjectScope: { not: { in: ["GLOBAL", "COLLEGE"] } },
+    },
+  });
+
+  if (!subject) {
+    throw new ApiError(422, "Question bank subject is invalid");
+  }
+
+  return subject;
+};
+
 /**
  * Super Admin Question Bank Controller
  * Questions created here belong to the super admin (createdBySuperAdminId).
@@ -33,6 +49,7 @@ const addQuestionBankItem = asyncHandler(async (req, res) => {
     const existingSubject = await db.subject.findFirst({
       where: {
         createdBySuperAdminId: superAdminId,
+        resourceSubjectScope: { not: { in: ["GLOBAL", "COLLEGE"] } },
         name: { equals: String(req.body.subject || "").trim(), mode: "insensitive" },
       },
     });
@@ -45,10 +62,13 @@ const addQuestionBankItem = asyncHandler(async (req, res) => {
           name: String(req.body.subject || "").trim(),
           collegeId: req.body.collegeId || null,
           createdBySuperAdminId: superAdminId,
+          questionSubjectScope: "GLOBAL",
         },
       });
       subjectId = createdSubject.id;
     }
+  } else {
+    await assertQuestionSubject(db, { subjectId, superAdminId });
   }
 
   const item = await db.questionBank.create({
@@ -236,11 +256,15 @@ const updateQuestionBankItem = asyncHandler(async (req, res) => {
   }
 
   const type = req.body.type || String(existing.type || "").toLowerCase();
+  const subjectId = req.body.subjectId || existing.subjectId || null;
+  if (subjectId) {
+    await assertQuestionSubject(db, { subjectId, superAdminId });
+  }
 
   const updated = await db.questionBank.update({
     where: { id },
     data: {
-      subjectId: req.body.subjectId || existing.subjectId || null,
+      subjectId,
       subject: req.body.subject || existing.subject || null,
       difficulty: req.body.difficulty || existing.difficulty,
       type: req.body.type ? mapQuestionType(req.body.type) : existing.type,

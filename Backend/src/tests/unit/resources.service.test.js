@@ -105,17 +105,32 @@ describe("learning resources service", () => {
     expect(buildSubjectWhereForActor({
       role: "STUDENT",
       collegeId: "college-1",
-    })).toEqual({ OR: [{ collegeId: null }, { collegeId: "college-1" }] });
+    })).toEqual({
+      AND: [
+        { resourceSubjectScope: { in: ["GLOBAL", "COLLEGE"] } },
+        { OR: [{ collegeId: null }, { collegeId: "college-1" }] },
+      ],
+    });
 
     expect(buildSubjectWhereForActor({
       role: "SUPER_ADMIN",
       collegeId: null,
-    })).toEqual({ collegeId: null });
+    })).toEqual({
+      AND: [
+        { resourceSubjectScope: { in: ["GLOBAL", "COLLEGE"] } },
+        { collegeId: null },
+      ],
+    });
 
     expect(buildSubjectWhereForActor({
       role: "SUPER_ADMIN",
       collegeId: null,
-    }, { collegeId: "college-2" })).toEqual({ OR: [{ collegeId: null }, { collegeId: "college-2" }] });
+    }, { collegeId: "college-2" })).toEqual({
+      AND: [
+        { resourceSubjectScope: { in: ["GLOBAL", "COLLEGE"] } },
+        { OR: [{ collegeId: null }, { collegeId: "college-2" }] },
+      ],
+    });
   });
 
   it("creates global subjects through super admins and college subjects through admins", async () => {
@@ -164,6 +179,33 @@ describe("learning resources service", () => {
         createdBySuperAdminId: null,
         resourceSubjectScope: "COLLEGE",
       }),
+    });
+  });
+
+  it("checks duplicate resource subjects within the resource subject scope only", async () => {
+    const db = {
+      subject: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({
+          id: "subject-1",
+          name: "Aptitude",
+          collegeId: "college-1",
+        }),
+      },
+    };
+    models.init.mockResolvedValue({ dbClient: db });
+
+    await createResourceSubject({
+      actor: { id: "admin-1", role: "ADMIN", collegeId: "college-1" },
+      body: { name: "Aptitude" },
+    });
+
+    expect(db.subject.findFirst).toHaveBeenCalledWith({
+      where: {
+        collegeId: "college-1",
+        resourceSubjectScope: "COLLEGE",
+        name: { equals: "Aptitude", mode: "insensitive" },
+      },
     });
   });
 });
