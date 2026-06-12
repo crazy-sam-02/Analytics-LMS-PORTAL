@@ -52,6 +52,45 @@ const normalizeId = (value) => String(value || "").trim();
 const normalizeIdList = (values = []) =>
   [...new Set(values.map((value) => normalizeId(value)).filter(Boolean))];
 
+const getStudentBatchIds = (student = {}) =>
+  normalizeIdList([student.batchId, ...(Array.isArray(student.batchIds) ? student.batchIds : [])]);
+
+const getTestBatchIds = (test = {}) =>
+  normalizeIdList([
+    test.batchId,
+    ...(Array.isArray(test.batchAssignments) ? test.batchAssignments.map((assignment) => assignment.batchId) : []),
+  ]);
+
+const isStudentAssignedToTest = (student = {}, test = null) => {
+  if (!test?.id) return true;
+
+  const assignmentMethod = String(test.assignmentMethod || "").trim().toLowerCase();
+  const studentDepartmentId = normalizeId(student.departmentId);
+  const studentBatchIds = getStudentBatchIds(student);
+
+  if (assignmentMethod === "everyone") {
+    return true;
+  }
+
+  if (assignmentMethod === "department_wise") {
+    const departmentIds = normalizeIdList([test.departmentId, ...(Array.isArray(test.assignedTo) ? test.assignedTo : [])]);
+    return departmentIds.length > 0 && departmentIds.includes(studentDepartmentId);
+  }
+
+  if (assignmentMethod === "batch_wise") {
+    const batchIds = getTestBatchIds(test);
+    return batchIds.length > 0 && studentBatchIds.some((batchId) => batchIds.includes(batchId));
+  }
+
+  const legacyDepartmentIds = normalizeIdList([test.departmentId, ...(Array.isArray(test.assignedTo) ? test.assignedTo : [])]);
+  const legacyBatchIds = getTestBatchIds(test);
+  return (
+    (legacyDepartmentIds.length > 0 && legacyDepartmentIds.includes(studentDepartmentId))
+    || (legacyBatchIds.length > 0 && studentBatchIds.some((batchId) => legacyBatchIds.includes(batchId)))
+    || (legacyDepartmentIds.length === 0 && legacyBatchIds.length === 0)
+  );
+};
+
 const normalizeStudentYear = (value) => {
   if (value == null || value === "") return null;
   const year = Number(value);
@@ -176,7 +215,17 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
     db,
     req,
     filters: { testId, departmentId, batchId },
-    testSelect: { id: true, title: true, subject: true, totalMarks: true, departmentId: true, batchId: true },
+    testSelect: {
+      id: true,
+      title: true,
+      subject: true,
+      totalMarks: true,
+      assignmentMethod: true,
+      assignedTo: true,
+      departmentId: true,
+      batchId: true,
+      batchAssignments: { select: { batchId: true } },
+    },
   });
 
   if (!scope.ok || scope.testIds.length === 0) {
@@ -210,7 +259,14 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
       batch: { select: { id: true, name: true } },
     },
   });
-  const scopedStudentIds = students.map((student) => String(student.id));
+  const hasSelectedTest = Boolean(testId);
+  const selectedTest = hasSelectedTest
+    ? tests.find((test) => normalizeId(test.id) === normalizeId(testId)) || tests[0]
+    : null;
+  const reportStudents = hasSelectedTest
+    ? students.filter((student) => isStudentAssignedToTest(student, selectedTest))
+    : students;
+  const scopedStudentIds = reportStudents.map((student) => String(student.id));
   const submissionStudentFilter = studentId
     ? (scopedStudentIds.includes(String(studentId)) ? { userId: studentId } : { userId: { in: [] } })
     : { userId: { in: scopedStudentIds } };
@@ -293,7 +349,7 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
     submissionsByStudent.set(key, list);
   });
 
-  const studentRows = students.map((student) => {
+  const studentRows = reportStudents.map((student) => {
     const rows = submissionsByStudent.get(student.id) || [];
     const average = rows.length ? rows.reduce((sum, row) => sum + getScorePercent(row), 0) / rows.length : 0;
     const violations = rows.reduce((sum, row) => sum + Number(row.violationCount || row.violations?.length || 0), 0);
@@ -320,6 +376,7 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
       departmentId: student.departmentId,
       departmentName: student.department?.name || "-",
       batchId: student.batchId,
+      batchIds: getStudentBatchIds(student),
       batchName: student.batch?.name || "-",
       year: student.year || null,
       avgScore: toPercent(average),
@@ -330,10 +387,6 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
     };
   });
 
-  const hasSelectedTest = Boolean(testId);
-  const selectedTest = hasSelectedTest
-    ? tests.find((test) => normalizeId(test.id) === normalizeId(testId)) || tests[0]
-    : null;
   const notAttendedRows = hasSelectedTest ? studentRows.filter((row) => row.testsTaken === 0) : [];
   const notAttendedStudents = notAttendedRows.map((row) => ({
     studentId: row.studentId,
@@ -381,10 +434,11 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
   }));
 
   const departmentComparative = departments.map((department) => {
-    const rows = ranked.filter((row) => row.departmentId === department.id);
-    const deptAvg = rows.length ? rows.reduce((sum, row) => sum + row.avgScore, 0) / rows.length : 0;
-    const deptParticipation = rows.length ? (rows.filter((row) => row.testsTaken > 0).length / rows.length) * 100 : 0;
-    const deptPassRate = rows.length ? (rows.filter((row) => row.avgScore >= 40).length / rows.length) * 100 : 0;
+    const rows = studentRows.filter((row) => row.departmentId === department.id);
+    const attendedDepartmentRows = rows.filter((row) => row.testsTaken > 0);
+    const deptAvg = attendedDepartmentRows.length ? attendedDepartmentRows.reduce((sum, row) => sum + row.avgScore, 0) / attendedDepartmentRows.length : 0;
+    const deptParticipation = rows.length ? (attendedDepartmentRows.length / rows.length) * 100 : 0;
+    const deptPassRate = attendedDepartmentRows.length ? (attendedDepartmentRows.filter((row) => row.avgScore >= 40).length / attendedDepartmentRows.length) * 100 : 0;
     return {
       departmentId: department.id,
       departmentName: department.name,
@@ -395,14 +449,17 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
   });
 
   const batchComparative = batches.map((batch) => {
-    const rows = ranked.filter((row) => row.batchId === batch.id);
-    const value = rows.length ? rows.reduce((sum, row) => sum + row.avgScore, 0) / rows.length : 0;
-    const pass = rows.length ? (rows.filter((row) => row.avgScore >= 40).length / rows.length) * 100 : 0;
+    const rows = studentRows.filter((row) => row.batchId === batch.id || row.batchIds.includes(batch.id));
+    const attendedBatchRows = rows.filter((row) => row.testsTaken > 0);
+    const value = attendedBatchRows.length ? attendedBatchRows.reduce((sum, row) => sum + row.avgScore, 0) / attendedBatchRows.length : 0;
+    const pass = attendedBatchRows.length ? (attendedBatchRows.filter((row) => row.avgScore >= 40).length / attendedBatchRows.length) * 100 : 0;
+    const participation = rows.length ? (attendedBatchRows.length / rows.length) * 100 : 0;
     return {
       batchId: batch.id,
       batchName: batch.name,
       avgScore: toPercent(value),
       passRate: toPercent(pass),
+      participationRate: toPercent(participation),
     };
   });
 
