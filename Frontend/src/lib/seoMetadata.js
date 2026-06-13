@@ -1,5 +1,6 @@
 export const SITE_URL = "https://lms.analyticsedify.com";
-export const LOGO_URL = `${SITE_URL}/analytics-logo-final.png`;
+export const SITE_NAME = "Analytics Edify LMS";
+export const LOGO_URL = `${SITE_URL}/analytics-edify-logo.png`;
 export const TWITTER_HANDLE = "@analyticsedify";
 export const COMPANY_LEGAL_NAME = "Analytics Edifying Solutions Private Limited";
 export const COMPANY_INCORPORATED_DATE = "2017-07-20";
@@ -9,8 +10,8 @@ export const STUDENT_LOGIN_STRUCTURED_DATA = {
   "@type": "EducationalOrganization",
   name: "Analytics Edify",
   legalName: COMPANY_LEGAL_NAME,
-  alternateName: ["Analytics LMS", "Analytics Edify LMS"],
-  url: SITE_URL,
+  alternateName: ["Analytics LMS", SITE_NAME],
+  url: "https://analyticsedify.com",
   logo: LOGO_URL,
   foundingDate: COMPANY_INCORPORATED_DATE,
   address: {
@@ -29,62 +30,60 @@ export const STUDENT_LOGIN_STRUCTURED_DATA = {
     value: "Chennai, Tamil Nadu",
   },
   description:
-    "Analytics Edify LMS is operated by Analytics Edifying Solutions Private Limited, an Indian private limited company incorporated on July 20, 2017 and registered with the Registrar of Companies in Chennai, Tamil Nadu. It provides aptitude, coding, communication, and placement training for college students.",
-  sameAs: ["https://analyticsedify.com"],
+    "Analytics Edify provides aptitude, coding, communication, and placement training for college students.",
+  sameAs: ["https://twitter.com/analyticsedify"],
 };
 
 export const LOGIN_SEO = {
   student: {
-    title: "Student Login | Analytics Edify LMS",
+    title: `Student Login | ${SITE_NAME}`,
     description:
-      "Student portal for Analytics Edify LMS by Analytics Edifying Solutions Private Limited, Chennai, for courses, tests, and placement prep.",
+      "Log in to Analytics Edify LMS to access your aptitude, coding, and placement training courses.",
     keywords:
       "Analytics Edifying Solutions Private Limited, Analytics Edify LMS, Analytics LMS student login, Chennai LMS, Tamil Nadu LMS, student portal, online test portal, placement preparation",
     canonicalUrl: `${SITE_URL}/login`,
     robots: "index, follow",
-    ogTitle: "Student Login | Analytics Edify LMS",
+    googlebot: "index, follow",
+    ogTitle: `Student Login | ${SITE_NAME}`,
     ogDescription:
-      "Access courses, aptitude tests, and placement preparation from Analytics Edify LMS, operated by Analytics Edifying Solutions Private Limited.",
+      "Log in to Analytics Edify LMS to access your aptitude, coding, and placement training courses.",
     ogUrl: `${SITE_URL}/login`,
     structuredData: STUDENT_LOGIN_STRUCTURED_DATA,
   },
   admin: {
-    title: "Admin Login | Analytics LMS",
-    description:
-      "Admin portal login for Analytics LMS — manage students, content, and platform settings.",
+    title: `Admin Login | ${SITE_NAME}`,
+    description: "Admin portal login for Analytics Edify LMS.",
     keywords:
-      "Analytics LMS admin login, Analytics LMS admin portal, college LMS admin, assessment management portal",
+      "Analytics Edify LMS admin login, Analytics Edify LMS admin portal, college LMS admin, assessment management portal",
     canonicalUrl: `${SITE_URL}/admin/login`,
     robots: "noindex, nofollow",
-    ogTitle: "Admin Login | Analytics LMS",
-    ogDescription:
-      "Analytics LMS admin portal. Manage students, content, and settings.",
+    googlebot: "noindex, nofollow",
+    ogTitle: `Admin Login | ${SITE_NAME}`,
+    ogDescription: "Admin portal login for Analytics Edify LMS.",
     ogUrl: `${SITE_URL}/admin/login`,
   },
   collegeAdmin: {
-    title: "College Admin Login | Analytics LMS",
-    description:
-      "College administrator login for Analytics LMS — manage your institution's students and performance.",
+    title: `College Admin Login | ${SITE_NAME}`,
+    description: "College administrator login for Analytics Edify LMS.",
     keywords:
-      "Analytics LMS college admin login, college admin portal, institutional LMS analytics",
+      "Analytics Edify LMS college admin login, college admin portal, institutional LMS analytics",
     canonicalUrl: `${SITE_URL}/college-admin/login`,
     robots: "noindex, nofollow",
-    ogTitle: "College Admin Login | Analytics LMS",
-    ogDescription:
-      "College admin portal for Analytics LMS. Manage institutional students and analytics.",
+    googlebot: "noindex, nofollow",
+    ogTitle: `College Admin Login | ${SITE_NAME}`,
+    ogDescription: "College administrator login for Analytics Edify LMS.",
     ogUrl: `${SITE_URL}/college-admin/login`,
   },
   superAdmin: {
-    title: "Super Admin Login | Analytics LMS",
-    description:
-      "Super admin login for Analytics LMS — platform-wide supervision and management.",
+    title: `Super Admin Login | ${SITE_NAME}`,
+    description: "Super admin login for Analytics Edify LMS.",
     keywords:
-      "Analytics LMS super admin, Analytics LMS super admin portal, LMS platform admin, global LMS analytics",
+      "Analytics Edify LMS super admin, Analytics Edify LMS super admin portal, LMS platform admin, global LMS analytics",
     canonicalUrl: `${SITE_URL}/super-admin/login`,
     robots: "noindex, nofollow",
-    ogTitle: "Super Admin Login | Analytics LMS",
-    ogDescription:
-      "Analytics LMS super admin portal for platform-level control and oversight.",
+    googlebot: "noindex, nofollow",
+    ogTitle: `Super Admin Login | ${SITE_NAME}`,
+    ogDescription: "Super admin login for Analytics Edify LMS.",
     ogUrl: `${SITE_URL}/super-admin/login`,
   },
 };

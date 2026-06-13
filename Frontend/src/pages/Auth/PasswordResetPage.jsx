@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useSeo } from "@/hooks/useSeo";
+import { SITE_NAME } from "@/lib/seoMetadata";
 
 const extractResetUrl = (payload) => {
   if (!payload || typeof payload !== "object") {
@@ -47,9 +48,9 @@ export default function PasswordResetPage({
   );
 
   useSeo({
-    title: `${title} | Analytics LMS`,
-    description: `${portalName} password recovery for Analytics LMS.`,
-    keywords: `${portalName} forgot password, ${portalName} reset password, Analytics LMS password reset`,
+    title: `${title} | ${SITE_NAME}`,
+    description: `${portalName} password recovery for ${SITE_NAME}.`,
+    keywords: `${portalName} forgot password, ${portalName} reset password, Analytics Edify LMS password reset`,
   });
 
   const submitForgotPassword = async (event) => {

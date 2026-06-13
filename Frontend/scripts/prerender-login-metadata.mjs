@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { LOGIN_SEO, LOGO_URL, TWITTER_HANDLE } from "../src/lib/seoMetadata.js";
+import { LOGIN_SEO, LOGO_URL, SITE_NAME, TWITTER_HANDLE } from "../src/lib/seoMetadata.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const frontendRoot = path.resolve(__dirname, "..");
@@ -40,12 +40,16 @@ const renderSeoBlock = (seo) => `    <!-- SEO_META_START -->
     <meta name="description" content="${escapeAttr(seo.description)}" />
     <meta name="keywords" content="${escapeAttr(seo.keywords)}" />
     <meta name="robots" content="${escapeAttr(seo.robots)}" />
+    <meta name="googlebot" content="${escapeAttr(seo.googlebot || seo.robots)}" />
     <meta property="og:type" content="website" />
     <meta property="og:title" content="${escapeAttr(seo.ogTitle)}" />
     <meta property="og:description" content="${escapeAttr(seo.ogDescription)}" />
     <meta property="og:url" content="${escapeAttr(seo.ogUrl)}" />
     <meta property="og:image" content="${escapeAttr(LOGO_URL)}" />
-    <meta property="og:site_name" content="Analytics LMS" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="${escapeAttr(SITE_NAME)}" />
+    <meta property="og:site_name" content="${escapeAttr(SITE_NAME)}" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:image" content="${escapeAttr(LOGO_URL)}" />
     <meta name="twitter:site" content="${escapeAttr(TWITTER_HANDLE)}" />
