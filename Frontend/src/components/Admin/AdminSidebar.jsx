@@ -50,10 +50,13 @@ export default function AdminSidebar({
   portalDescription = "College control and test management",
   logoutTitle = "Logout from Admin Portal",
   logoutDescription = "You will be signed out from this admin session and need to login again to continue.",
+  mobile = false,
+  onNavigate,
 }) {
   const dispatch = useDispatch();
   const location = useLocation();
-  const collapsed = useSelector((state) => state.adminUi?.sidebarCollapsed);
+  const desktopCollapsed = useSelector((state) => state.adminUi?.sidebarCollapsed);
+  const collapsed = mobile ? false : desktopCollapsed;
   const permissions = useSelector((state) => state.adminAuth.permissions || []);
   const testCreationOpen = useSelector((state) => Boolean(state.testCreation?.open));
   const [logoutOpen, setLogoutOpen] = useState(false);
@@ -82,8 +85,8 @@ export default function AdminSidebar({
 
   return (
     <aside
-      className={`fixed inset-y-0 left-0 z-40 hidden border-r border-sidebar-border bg-linear-to-b from-primary-dark to-sidebar py-5 text-sidebar-foreground transition-all duration-200 lg:flex lg:flex-col ${
-        collapsed ? "w-16 px-2" : "w-64 px-4"
+      className={`${mobile ? "flex h-full w-full" : "fixed inset-y-0 left-0 z-40 hidden lg:flex"} flex-col border-r border-sidebar-border bg-linear-to-b from-primary-dark to-sidebar py-5 text-sidebar-foreground transition-all duration-200 ${
+        collapsed ? "w-16 px-2" : mobile ? "px-4" : "w-64 px-4"
       }`}
     >
       <div className={`mb-6 flex items-start gap-3 ${collapsed ? "justify-center" : "justify-between"}`}>
@@ -109,7 +112,7 @@ export default function AdminSidebar({
         </div>
       </div>
 
-      <nav className="space-y-1.5">
+      <nav className="min-h-0 flex-1 space-y-1.5 overflow-y-auto overscroll-contain pr-1">
         {navItems.filter(canShowItem).map((item) => {
           const IconComponent = item.icon;
 
@@ -121,6 +124,7 @@ export default function AdminSidebar({
                 if (testCreationOpen) {
                   dispatch(closeTestCreationDialog());
                 }
+                onNavigate?.();
               }}
               className={({ isActive }) => {
                 const active = isNavItemActive(item, isActive);

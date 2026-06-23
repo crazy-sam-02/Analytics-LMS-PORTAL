@@ -22,15 +22,16 @@ const navItems = [
   { to: "/super-admin/settings", label: "Settings", icon: Settings },
 ];
 
-export default function SuperAdminSidebar() {
+export default function SuperAdminSidebar({ mobile = false, onNavigate }) {
   const dispatch = useDispatch();
-  const collapsed = useSelector((state) => state.superAdminUi?.sidebarCollapsed);
+  const desktopCollapsed = useSelector((state) => state.superAdminUi?.sidebarCollapsed);
+  const collapsed = mobile ? false : desktopCollapsed;
   const [logoutOpen, setLogoutOpen] = useState(false);
 
   return (
     <aside
-      className={`fixed inset-y-0 left-0 z-40 hidden border-r border-sidebar-border bg-linear-to-b from-primary-dark to-sidebar py-5 text-sidebar-foreground transition-all duration-200 lg:flex lg:flex-col ${
-        collapsed ? "w-16 px-2" : "w-64 px-4"
+      className={`${mobile ? "flex h-full w-full" : "fixed inset-y-0 left-0 z-40 hidden lg:flex"} flex-col border-r border-sidebar-border bg-linear-to-b from-primary-dark to-sidebar py-5 text-sidebar-foreground transition-all duration-200 ${
+        collapsed ? "w-16 px-2" : mobile ? "px-4" : "w-64 px-4"
       }`}
     >
       <div className={`mb-6 flex items-start gap-3 ${collapsed ? "justify-center" : "justify-between"}`}>
@@ -57,13 +58,14 @@ export default function SuperAdminSidebar() {
         
       </div>
 
-      <nav className="space-y-1.5">
+      <nav className="min-h-0 flex-1 space-y-1.5 overflow-y-auto overscroll-contain pr-1">
         {navItems.map((item) => {
           const IconComponent = item.icon;
           return (
             <NavLink
               key={item.to}
               to={item.to}
+              onClick={onNavigate}
               className={({ isActive }) =>
                 `group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
                   isActive
