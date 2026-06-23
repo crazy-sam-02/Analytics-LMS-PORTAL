@@ -2,12 +2,14 @@ import { Suspense, createElement, lazy, useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { Navigate, Outlet, RouterProvider, createBrowserRouter } from "react-router-dom";
 import { injectReducer } from "@/app/store";
-import { fetchCurrentAdmin } from "@/features/Admin/adminAuthSlice";
+import { fetchCurrentAdmin, logoutAdmin } from "@/features/Admin/adminAuthSlice";
 import { ADMIN_PERMISSIONS } from "@/features/Admin/adminPermissions";
 import { isAdminRole, isCollegeAdminRole } from "@/features/Admin/adminRole";
 import CollegeAdminLoginPage from "@/pages/CollegeAdmin/LoginPage";
 import HardRedirect from "@/components/common/HardRedirect";
+import IdleSessionTimeout from "@/components/common/IdleSessionTimeout";
 import RouteErrorElement from "@/components/common/RouteErrorElement";
+import { useNoIndexRoute } from "@/hooks/useNoIndexRoute";
 
 const injectAdminReducers = async () => {
   const [adminDashboard, adminPanel, testCreation, adminUi, questionBank, reports, learningResources] = await Promise.all([
@@ -90,6 +92,8 @@ function PermissionRoute({ permission, permissions, action }) {
 function CollegeAdminBootstrap() {
   const dispatch = useDispatch();
   const initialized = useSelector((state) => state.adminAuth.initialized);
+  const admin = useSelector((state) => state.adminAuth.admin);
+  useNoIndexRoute();
 
   useEffect(() => {
     dispatch(fetchCurrentAdmin());
@@ -99,7 +103,12 @@ function CollegeAdminBootstrap() {
     return <div className="grid min-h-screen place-items-center text-text-secondary">Initializing college admin session...</div>;
   }
 
-  return <Outlet />;
+  return (
+    <>
+      <Outlet />
+      <IdleSessionTimeout enabled={Boolean(admin)} onLogout={() => dispatch(logoutAdmin())} />
+    </>
+  );
 }
 
 function CollegeAdminProtectedRoute() {

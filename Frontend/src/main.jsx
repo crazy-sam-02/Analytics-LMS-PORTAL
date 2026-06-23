@@ -9,8 +9,10 @@ import { queryClient } from '@/app/queryClient'
 import ThemeSync from '@/components/common/ThemeSync'
 import DeferredToaster from '@/components/common/DeferredToaster'
 import { registerChunkReloadHandler } from '@/lib/chunkReload'
+import { registerRumMetrics } from '@/services/rum'
 
 registerChunkReloadHandler()
+registerRumMetrics()
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>

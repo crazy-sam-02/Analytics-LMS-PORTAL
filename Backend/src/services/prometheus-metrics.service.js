@@ -3,6 +3,7 @@ const { getIO } = require("../realtime/socket");
 const { getApiMetricsSnapshot } = require("./api-metrics.service");
 const { getOperationalHealthSnapshot } = require("./operational-health.service");
 const { getRateLimitMetricsSnapshot } = require("./rate-limit-metrics.service");
+const { getRumMetricsSnapshot } = require("./rum-metrics.service");
 const { getDb } = require("../utils/db");
 
 const toMetricValue = (value) => {
@@ -34,12 +35,13 @@ const getMongoSnapshot = async () => {
 };
 
 const getPrometheusMetrics = async () => {
-  const [mongodb, redis, api, rateLimits, operational] = await Promise.all([
+  const [mongodb, redis, api, rateLimits, operational, rum] = await Promise.all([
     getMongoSnapshot(),
     getRedisHealthSnapshot(),
     getApiMetricsSnapshot(),
     getRateLimitMetricsSnapshot({ limit: 1 }),
     getOperationalHealthSnapshot(),
+    getRumMetricsSnapshot(),
   ]);
 
   const memory = process.memoryUsage();
@@ -111,6 +113,26 @@ const getPrometheusMetrics = async () => {
     help: "Rate-limited requests recorded in the current metrics retention window.",
     type: "counter",
     value: rateLimits.totalBlocked,
+  });
+  appendMetric(lines, {
+    name: "lms_rum_metric_count",
+    help: "Real user monitoring metric samples in the rolling retention window.",
+    value: rum.count,
+  });
+  appendMetric(lines, {
+    name: "lms_rum_lcp_p75_ms",
+    help: "Rolling p75 largest contentful paint in milliseconds.",
+    value: rum.lcpP75Ms,
+  });
+  appendMetric(lines, {
+    name: "lms_rum_cls_p75",
+    help: "Rolling p75 cumulative layout shift.",
+    value: rum.clsP75,
+  });
+  appendMetric(lines, {
+    name: "lms_rum_fid_p75_ms",
+    help: "Rolling p75 first input delay in milliseconds.",
+    value: rum.fidP75Ms,
   });
   appendMetric(lines, {
     name: "lms_upload_disk_used_percent",

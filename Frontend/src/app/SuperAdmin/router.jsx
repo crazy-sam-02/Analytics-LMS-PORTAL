@@ -2,9 +2,11 @@ import { Suspense, createElement, lazy, useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { Navigate, Outlet, RouterProvider, createBrowserRouter, useLocation } from "react-router-dom";
 import { injectReducer } from "@/app/store";
-import { fetchCurrentSuperAdmin } from "@/features/SuperAdmin/superAdminAuthSlice";
+import { fetchCurrentSuperAdmin, logoutSuperAdmin } from "@/features/SuperAdmin/superAdminAuthSlice";
 import SuperAdminLoginPage from "@/pages/SuperAdmin/LoginPage";
+import IdleSessionTimeout from "@/components/common/IdleSessionTimeout";
 import RouteErrorElement from "@/components/common/RouteErrorElement";
+import { useNoIndexRoute } from "@/hooks/useNoIndexRoute";
 
 const injectSuperAdminReducers = async () => {
   const [dashboard, panel, ui, questionBank, testCreation, learningResources] = await Promise.all([
@@ -79,6 +81,8 @@ function PageRoute({ Page, fallback = <div className="grid min-h-[40vh] place-it
 function SuperAdminBootstrap() {
   const dispatch = useDispatch();
   const initialized = useSelector((state) => state.superAdminAuth.initialized);
+  const superAdmin = useSelector((state) => state.superAdminAuth.superAdmin);
+  useNoIndexRoute();
 
   useEffect(() => {
     dispatch(fetchCurrentSuperAdmin());
@@ -88,7 +92,12 @@ function SuperAdminBootstrap() {
     return <div className="grid min-h-screen place-items-center text-text-secondary">Initializing super admin session...</div>;
   }
 
-  return <Outlet />;
+  return (
+    <>
+      <Outlet />
+      <IdleSessionTimeout enabled={Boolean(superAdmin)} onLogout={() => dispatch(logoutSuperAdmin())} />
+    </>
+  );
 }
 
 function SuperAdminProtectedRoute() {

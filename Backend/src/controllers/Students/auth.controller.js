@@ -18,6 +18,12 @@ const {
   canStudentAuthenticate,
   normalizeStudentLifecycleStatus,
 } = require("../../services/student-lifecycle.service");
+const {
+  assertLoginAllowed,
+  clearLoginFailures,
+  recordLoginFailure,
+} = require("../../services/login-attempt.service");
+const { recordSecurityEvent } = require("../../services/security-audit.service");
 
 const STUDENT_REFRESH_COOKIE = "student_refresh_token";
 const getEnrollmentDisplay = (user = {}) => user.enrollNumber || user.enrollmentNumber || user.studentId;
@@ -53,6 +59,8 @@ const login = asyncHandler(async (req, res) => {
   }
 
   const { identifier, password, keepLoggedIn = true } = req.body;
+  const loginIdentifier = identifier;
+  await assertLoginAllowed({ scope: "student", identifier: loginIdentifier });
 
   const m = await models.init();
   const Student = m.Student;
@@ -83,18 +91,47 @@ const login = asyncHandler(async (req, res) => {
   }
 
   if (!user) {
+    await recordLoginFailure({ scope: "student", identifier: loginIdentifier });
+    await recordSecurityEvent({
+      action: "STUDENT_LOGIN_FAILED",
+      req,
+      targetType: "STUDENT_AUTH",
+      targetId: "unknown",
+      outcome: "failed",
+      metadata: { reason: "unknown_identifier" },
+    });
     const isEmailIdentifier = String(identifier || "").includes("@");
     throw new ApiError(401, isEmailIdentifier ? "Email is wrong" : "Student ID is wrong", null, isEmailIdentifier ? "EMAIL_WRONG" : "IDENTIFIER_WRONG");
   }
 
   const passwordMatch = await bcrypt.compare(password, user.passwordHash);
   if (!passwordMatch) {
+    await recordLoginFailure({ scope: "student", identifier: loginIdentifier });
+    await recordSecurityEvent({
+      action: "STUDENT_LOGIN_FAILED",
+      req,
+      targetType: "STUDENT_AUTH",
+      targetId: user.id,
+      collegeId: user.collegeId || null,
+      outcome: "failed",
+      metadata: { reason: "bad_password" },
+    });
     throw new ApiError(401, "Password is wrong", null, "PASSWORD_WRONG");
   }
 
   if (!canStudentAuthenticate(user)) {
     throw new ApiError(403, "Account is inactive", null, "ACCOUNT_INACTIVE");
   }
+
+  await clearLoginFailures({ scope: "student", identifier: loginIdentifier });
+  await recordSecurityEvent({
+    action: "STUDENT_LOGIN_SUCCEEDED",
+    req,
+    targetType: "STUDENT_AUTH",
+    targetId: user.id,
+    collegeId: user.collegeId || null,
+    outcome: "succeeded",
+  });
 
   const accessToken = createAccessToken(user);
   const { refreshToken, refreshRecord } = await createRefreshTokenRecord({

@@ -14,6 +14,13 @@ const {
 } = require("../../services/refresh-token-session.service");
 const { revokeAccessTokenFromRequest } = require("../../services/access-token-revocation.service");
 const { requestPasswordReset, resetPasswordWithToken } = require("../../services/password-reset.service");
+const { toPublicAdmin } = require("../../utils/serializers");
+const {
+  assertLoginAllowed,
+  clearLoginFailures,
+  recordLoginFailure,
+} = require("../../services/login-attempt.service");
+const { recordSecurityEvent } = require("../../services/security-audit.service");
 
 const ADMIN_REFRESH_COOKIE = "lms_admin_refresh_token";
 
@@ -29,6 +36,9 @@ const adminLogin = asyncHandler(async (req, res) => {
   const m = await models.init();
   const db = m.dbClient;
   const { email, password } = req.body;
+  const loginIdentifier = email;
+  const loginScope = req.baseUrl && req.baseUrl.startsWith("/api/college-admin/auth") ? "college-admin" : "admin";
+  await assertLoginAllowed({ scope: loginScope, identifier: loginIdentifier });
 
   const admin = await db.admin.findFirst({
     where: {
@@ -42,13 +52,45 @@ const adminLogin = asyncHandler(async (req, res) => {
   });
 
   if (!admin) {
+    await recordLoginFailure({ scope: loginScope, identifier: loginIdentifier });
+    await recordSecurityEvent({
+      action: "ADMIN_LOGIN_FAILED",
+      req,
+      targetType: "ADMIN_AUTH",
+      targetId: "unknown",
+      outcome: "failed",
+      metadata: { portal: loginScope, reason: "invalid_credentials" },
+    });
     throw new ApiError(401, "Invalid credentials");
   }
 
   const isMatch = await bcrypt.compare(password, admin.passwordHash);
   if (!isMatch) {
+    await recordLoginFailure({ scope: loginScope, identifier: loginIdentifier });
+    await recordSecurityEvent({
+      action: "ADMIN_LOGIN_FAILED",
+      req,
+      targetType: "ADMIN_AUTH",
+      targetId: admin.id,
+      collegeId: admin.collegeId || null,
+      adminId: admin.id,
+      outcome: "failed",
+      metadata: { portal: loginScope, reason: "invalid_credentials" },
+    });
     throw new ApiError(401, "Invalid credentials");
   }
+
+  await clearLoginFailures({ scope: loginScope, identifier: loginIdentifier });
+  await recordSecurityEvent({
+    action: "ADMIN_LOGIN_SUCCEEDED",
+    req,
+    targetType: "ADMIN_AUTH",
+    targetId: admin.id,
+    collegeId: admin.collegeId || null,
+    adminId: admin.id,
+    outcome: "succeeded",
+    metadata: { portal: loginScope, role: normalizeRole(admin.role) },
+  });
 
   const permissions = resolveAdminPermissions(admin);
   const accessToken = createAccessToken({ ...admin, permissions });
@@ -66,16 +108,7 @@ const adminLogin = asyncHandler(async (req, res) => {
 
   res.status(200).json({
     accessToken,
-    admin: {
-      id: admin.id,
-      employeeId: admin.employeeId,
-      fullName: admin.fullName,
-      email: admin.email,
-      role: normalizeRole(admin.role),
-      permissions,
-      college: admin.college,
-      department: admin.department,
-    },
+    admin: toPublicAdmin({ ...admin, permissions }),
   });
 });
 
@@ -164,7 +197,7 @@ const adminLogout = asyncHandler(async (req, res) => {
 });
 
 const adminMe = asyncHandler(async (req, res) => {
-  res.status(200).json(req.admin);
+  res.status(200).json(toPublicAdmin(req.admin));
 });
 
 const adminForgotPassword = asyncHandler(async (req, res) => {

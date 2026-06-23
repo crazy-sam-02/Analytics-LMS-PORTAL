@@ -310,12 +310,12 @@ export default function SettingsPage() {
 
             <p className="text-sm text-text-secondary">
               <span className="font-semibold">Emergency Contact:</span> +91
-              9876543210
+             9025895743
             </p>
 
             <p className="text-sm text-text-secondary">
               <span className="font-semibold">Working Hours:</span> Mon - Sat |
-              9:00 AM - 6:00 PM
+              9:00 AM - 5:00 PM
             </p>
 
             <p className="text-sm text-text-secondary">

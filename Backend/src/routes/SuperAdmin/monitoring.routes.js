@@ -7,6 +7,7 @@
 
 const express = require("express");
 const router = express.Router();
+const { authenticateSuperAdmin } = require("../../middleware/auth");
 const { asyncHandler, ApiError } = require("../../utils/http");
 const {
   getMetricsSnapshot,
@@ -14,6 +15,8 @@ const {
   detectAnomalies,
   exportMetrics,
 } = require("../../services/validation-monitoring.service");
+
+router.use(authenticateSuperAdmin);
 
 /**
  * GET /api/super-admin/metrics

@@ -11,6 +11,7 @@ const {
 } = require("../../constants/admin-access-profiles");
 const { ROLES, normalizeRole } = require("../../constants/roles");
 const { getPagination } = require("../../utils/pagination");
+const { toPublicAdmin, toPublicAdmins } = require("../../utils/serializers");
 
 const revokeAdminRefreshTokens = async (db, adminId) => {
   await bumpPrincipalTokenVersion(db, "admin", adminId);
@@ -165,7 +166,7 @@ const getAdmins = asyncHandler(async (req, res) => {
   ]);
 
   res.status(200).json({
-    data: items,
+    data: toPublicAdmins(items),
     pagination: {
       page,
       limit,
@@ -275,7 +276,7 @@ const createAdmin = asyncHandler(async (req, res) => {
     },
   });
 
-  res.status(201).json(admin);
+  res.status(201).json(toPublicAdmin(admin));
 });
 
 const updateAdmin = asyncHandler(async (req, res) => {
@@ -362,7 +363,7 @@ const updateAdmin = asyncHandler(async (req, res) => {
   }
 
   if (data.isActive === false) {
-    await bumpPrincipalTokenVersion(db, "admin", existing.id);
+    await bumpPrincipalTokenVersion(m.dbClient, "admin", existing.id);
   } else {
     await invalidatePrincipalAuthCache("admin", existing.id);
   }
@@ -377,7 +378,7 @@ const updateAdmin = asyncHandler(async (req, res) => {
     afterState: updated,
   });
 
-  res.status(200).json(updated);
+  res.status(200).json(toPublicAdmin(updated));
 });
 
 const resetAdminPassword = asyncHandler(async (req, res) => {

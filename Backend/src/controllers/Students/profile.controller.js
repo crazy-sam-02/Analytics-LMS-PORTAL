@@ -17,7 +17,7 @@ const uploadAvatar = asyncHandler(async (req, res) => {
   if (!req.file?.buffer) throw new ApiError(400, "Avatar file is required", null, "AVATAR_REQUIRED");
   const previousPublicId = req.user.avatarPublicId || null;
   const updated = await profileService.uploadAvatar(req.user.id, req.file.buffer, req.file.mimetype, previousPublicId);
-  res.status(200).json({ avatarUrl: updated.avatarUrl, avatar_url: updated.avatarUrl, avatarPublicId: updated.avatarPublicId });
+  res.status(200).json({ avatarUrl: updated.avatarUrl, avatar_url: updated.avatarUrl });
 });
 
 const changePassword = asyncHandler(async (req, res) => {
@@ -33,10 +33,17 @@ const updatePreferences = asyncHandler(async (req, res) => {
   res.status(200).json(result);
 });
 
+const requestAccountDeletion = asyncHandler(async (req, res) => {
+  const currentPassword = req.body?.currentPassword ?? req.body?.current_password;
+  const result = await profileService.requestAccountDeletion(req.user.id, currentPassword);
+  res.status(202).json(result);
+});
+
 module.exports = {
   getProfile,
   updateProfile,
   uploadAvatar,
   changePassword,
   updatePreferences,
+  requestAccountDeletion,
 };

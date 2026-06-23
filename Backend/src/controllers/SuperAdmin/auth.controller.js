@@ -14,6 +14,12 @@ const {
 } = require("../../services/refresh-token-session.service");
 const { revokeAccessTokenFromRequest } = require("../../services/access-token-revocation.service");
 const { requestPasswordReset, resetPasswordWithToken } = require("../../services/password-reset.service");
+const {
+  assertLoginAllowed,
+  clearLoginFailures,
+  recordLoginFailure,
+} = require("../../services/login-attempt.service");
+const { recordSecurityEvent } = require("../../services/security-audit.service");
 
 const SUPER_ADMIN_REFRESH_COOKIE = "lms_super_admin_refresh_token";
 const SUPER_ADMIN_AUTH_COOKIE_PATHS = ["/api/super-admin/auth", "/api/superadmin/auth"];
@@ -40,6 +46,8 @@ const clearRefreshCookie = (res) => {
 
 const performSuperAdminLogin = async (req, res) => {
   const { email, password } = req.body;
+  const loginIdentifier = email;
+  await assertLoginAllowed({ scope: "super-admin", identifier: loginIdentifier });
 
   const m = await models.init();
   const SuperAdmin = m.dbClient.superAdmin;
@@ -51,13 +59,42 @@ const performSuperAdminLogin = async (req, res) => {
   });
 
   if (!superAdmin || !superAdmin.isActive || normalizeRole(superAdmin.role) !== ROLES.SUPER_ADMIN) {
+    await recordLoginFailure({ scope: "super-admin", identifier: loginIdentifier });
+    await recordSecurityEvent({
+      action: "SUPER_ADMIN_LOGIN_FAILED",
+      req,
+      targetType: "SUPER_ADMIN_AUTH",
+      targetId: "unknown",
+      outcome: "failed",
+      metadata: { reason: "invalid_credentials" },
+    });
     throw new ApiError(401, "Invalid credentials");
   }
 
   const isMatch = await bcrypt.compare(password, superAdmin.passwordHash);
   if (!isMatch) {
+    await recordLoginFailure({ scope: "super-admin", identifier: loginIdentifier });
+    await recordSecurityEvent({
+      action: "SUPER_ADMIN_LOGIN_FAILED",
+      req,
+      targetType: "SUPER_ADMIN_AUTH",
+      targetId: superAdmin.id,
+      superAdminId: superAdmin.id,
+      outcome: "failed",
+      metadata: { reason: "invalid_credentials" },
+    });
     throw new ApiError(401, "Invalid credentials");
   }
+
+  await clearLoginFailures({ scope: "super-admin", identifier: loginIdentifier });
+  await recordSecurityEvent({
+    action: "SUPER_ADMIN_LOGIN_SUCCEEDED",
+    req,
+    targetType: "SUPER_ADMIN_AUTH",
+    targetId: superAdmin.id,
+    superAdminId: superAdmin.id,
+    outcome: "succeeded",
+  });
 
   const accessToken = createAccessToken(superAdmin);
   const { refreshToken } = await createRefreshTokenRecord({

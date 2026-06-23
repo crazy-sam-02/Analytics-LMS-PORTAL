@@ -41,6 +41,10 @@ const errorHandler = (error, _req, res, _next) => {
     ? "SERVICE_UNAVAILABLE"
     : (error.code || (statusCode >= 500 ? "INTERNAL_SERVER_ERROR" : "REQUEST_FAILED"));
   const requestId = getRequestId(_req);
+  const retryAfterSeconds = Number(error.details?.retryAfterSeconds || 0);
+  if (statusCode === 429 && Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+    res.setHeader("Retry-After", String(Math.ceil(retryAfterSeconds)));
+  }
 
   if (statusCode >= 500) {
     console.error(`[api-error] request_id=${requestId || "-"} ${_req.method} ${_req.originalUrl}`, error);

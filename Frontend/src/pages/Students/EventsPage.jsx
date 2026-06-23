@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { EventsSkeleton } from "@/components/common/page-skeletons";
+import LazyImage from "@/components/common/LazyImage";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -144,14 +145,13 @@ export default function EventsPage() {
         {filteredEvents.map((event) => (
           <Card key={event.id} className={`${ui.cardPadding} cursor-pointer`} onClick={() => openEventDetails(event)}>
             {getEventImageUrl(event, { width: 960, height: 540, crop: "fill" }) ? (
-              <img
+              <LazyImage
                 src={getEventImageUrl(event, { width: 960, height: 540, crop: "fill" })}
                 alt={sanitizeText(event.title || event.name || "Event")}
                 width="960"
                 height="540"
-                loading="lazy"
-                decoding="async"
                 className="h-44 w-full rounded-xl object-cover"
+                fallback={<div className="h-44 rounded-xl bg-linear-to-br from-primary/15 via-background to-muted" />}
               />
             ) : (
               <div className="h-44 rounded-xl bg-linear-to-br from-primary/15 via-background to-muted" />
@@ -205,13 +205,11 @@ export default function EventsPage() {
           {selectedEvent ? (
             <div className="grid gap-3 text-sm">
               {getEventImageUrl(selectedEvent, { width: 1280, height: 720, crop: "fill" }) ? (
-                <img
+                <LazyImage
                   src={getEventImageUrl(selectedEvent, { width: 1280, height: 720, crop: "fill" })}
                   alt={sanitizeText(selectedEvent.title || "Event Details")}
                   width="1280"
                   height="720"
-                  loading="lazy"
-                  decoding="async"
                   className="h-56 w-full rounded-2xl object-cover"
                 />
               ) : null}

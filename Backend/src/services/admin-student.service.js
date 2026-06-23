@@ -6,6 +6,7 @@ const { createAuditLog } = require("./audit.service");
 const { getPagination } = require("../utils/pagination");
 const { invalidatePrincipalAuthCache } = require("./auth-revocation.service");
 const { appendLifecycleFilters } = require("./report-scope.service");
+const { toPublicStudent } = require("../utils/serializers");
 const {
   buildDepartmentLookupIndex,
   getInvalidDepartmentReason,
@@ -307,12 +308,12 @@ const listStudents = async (collegeId, opts = {}) => {
       student.batchId,
     ].filter(Boolean).map((id) => String(id)))];
 
-    return {
+    return toPublicStudent({
       ...student,
       studentId: getStudentNumber(student),
       batchIds: mergedBatchIds,
       batch: student.batch || (Array.isArray(student.batches) ? student.batches[0] : null),
-    };
+    });
   });
 
   return { data: normalized, total, page, limit };
@@ -366,10 +367,10 @@ const createStudent = async (collegeId, adminId, payload) => {
   await createAuditLog({ action: "ADMIN_STUDENT_CREATED", targetType: "STUDENT", targetId: student.id, collegeId, adminId, afterState: { email: student.email, studentId: student.studentId, departmentId: student.departmentId } });
 
   return {
-    student: {
+    student: toPublicStudent({
       ...student,
       batch: Array.isArray(student.batches) ? student.batches[0] : null,
-    },
+    }),
     credentials: { identifier: student.email, studentId: student.studentId, password: plainPassword },
   };
 };
@@ -378,7 +379,7 @@ const getStudentPerformance = async (collegeId, studentId) => {
   const m = await models.init();
   const db = m.dbClient;
   const student = await db.student.findFirst({ where: { id: studentId, collegeId }, include: { submissions: { include: { test: { select: { title: true, subject: true } } }, orderBy: { createdAt: "desc" } } } });
-  return student;
+  return toPublicStudent(student);
 };
 
 const getStudentProfile = async (collegeId, studentId) => {
@@ -393,12 +394,12 @@ const getStudentProfile = async (collegeId, studentId) => {
     ...(Array.isArray(student.batchIds) ? student.batchIds : []),
     student.batchId,
   ].filter(Boolean).map((id) => String(id)))];
-  return {
+  return toPublicStudent({
     ...student,
     studentId: getStudentNumber(student),
     batchIds: mergedBatchIds,
     batch: student.batch || (Array.isArray(student.batches) ? student.batches[0] : null),
-  };
+  });
 };
 
 const assignStudentToBatch = async (collegeId, adminId, studentId, batchId) => {
@@ -427,10 +428,10 @@ const assignStudentToBatch = async (collegeId, adminId, studentId, batchId) => {
   await createAuditLog({ action: "ADMIN_STUDENT_BATCH_ASSIGNED", targetType: "STUDENT", targetId: studentId, collegeId, adminId, afterState: { batchId, departmentId: batch.isGlobal ? student.departmentId : batch.departmentId, isGlobalBatch: Boolean(batch.isGlobal) } });
   await invalidatePrincipalAuthCache("student", studentId);
 
-  return {
+  return toPublicStudent({
     ...updated,
     batch: updated.batch || (Array.isArray(updated.batches) ? updated.batches[0] : null),
-  };
+  });
 };
 
 const bulkImportStudents = async (collegeId, adminId, csvData, adminDepartmentId = null) => {

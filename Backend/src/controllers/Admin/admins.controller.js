@@ -7,6 +7,7 @@ const { invalidateRefreshTokenRecord } = require("../../services/refresh-token-c
 const { bumpPrincipalTokenVersion, invalidatePrincipalAuthCache } = require("../../services/auth-revocation.service");
 const { ROLES } = require("../../constants/roles");
 const { ADMIN_ACCESS_PROFILES, resolvePermissionsFromProfile } = require("../../constants/admin-access-profiles");
+const { toPublicAdmin, toPublicAdmins } = require("../../utils/serializers");
 
 const revokeAdminRefreshTokens = async (db, adminId) => {
   await bumpPrincipalTokenVersion(db, "admin", adminId);
@@ -67,7 +68,7 @@ const getManagedAdmins = asyncHandler(async (req, res) => {
   ]);
 
   res.status(200).json({
-    data: items,
+    data: toPublicAdmins(items),
     pagination: {
       page,
       limit,
@@ -152,7 +153,7 @@ const createManagedAdmin = asyncHandler(async (req, res) => {
     },
   });
 
-  res.status(201).json(admin);
+  res.status(201).json(toPublicAdmin(admin));
 });
 
 const updateManagedAdmin = asyncHandler(async (req, res) => {
@@ -219,7 +220,7 @@ const updateManagedAdmin = asyncHandler(async (req, res) => {
     afterState: updated,
   });
 
-  res.status(200).json(updated);
+  res.status(200).json(toPublicAdmin(updated));
 });
 
 const resetManagedAdminPassword = asyncHandler(async (req, res) => {

@@ -178,6 +178,13 @@ const metrics = {
   token: process.env.METRICS_TOKEN || "",
 };
 
+const loginLockout = {
+  maxAttempts: toPositiveInt(process.env.LOGIN_LOCKOUT_MAX_ATTEMPTS, 5),
+  windowMs: toPositiveInt(process.env.LOGIN_LOCKOUT_WINDOW_MS, 15 * 60 * 1000),
+  baseLockoutMs: toPositiveInt(process.env.LOGIN_LOCKOUT_BASE_LOCKOUT_MS, 5 * 60 * 1000),
+  maxLockoutMs: toPositiveInt(process.env.LOGIN_LOCKOUT_MAX_LOCKOUT_MS, 30 * 60 * 1000),
+};
+
 const email = {
   resendApiKey: process.env.RESEND_API_KEY || "",
   resendFromEmail: process.env.RESEND_FROM_EMAIL || "noreply@analyticsedify.com",
@@ -258,6 +265,7 @@ module.exports = {
   redisUrl: process.env.REDIS_URL || "",
   redis,
   metrics,
+  loginLockout,
   email,
   resourceUpload,
   operations,

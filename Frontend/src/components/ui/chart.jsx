@@ -15,6 +15,19 @@ const INITIAL_DIMENSION = {
   height: 200
 }
 
+const CSS_IDENTIFIER_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_-]*$/
+const SAFE_COLOR_PATTERN = /^(#[0-9a-fA-F]{3,8}|(?:rgb|hsl)a?\([\d\s,%.+-]+\)|[a-zA-Z]+|var\(--[a-zA-Z0-9_-]+\))$/
+
+const toSafeCssIdentifier = (value) => {
+  const normalized = String(value || "").trim()
+  return CSS_IDENTIFIER_PATTERN.test(normalized) ? normalized : null
+}
+
+const toSafeCssColor = (value) => {
+  const normalized = String(value || "").trim()
+  return SAFE_COLOR_PATTERN.test(normalized) ? normalized : null
+}
+
 const ChartContext = React.createContext(null)
 
 function useChart() {
@@ -61,7 +74,9 @@ const ChartStyle = ({
   id,
   config
 }) => {
-  const colorConfig = Object.entries(config).filter(([, config]) => config.theme ?? config.color)
+  const colorConfig = Object.entries(config)
+    .map(([key, config]) => [toSafeCssIdentifier(key), config])
+    .filter(([key, config]) => key && (config.theme ?? config.color))
 
   if (!colorConfig.length) {
     return null
@@ -78,7 +93,8 @@ ${colorConfig
 const color =
   itemConfig.theme?.[theme] ??
   itemConfig.color
-return color ? `  --color-${key}: ${color};` : null
+const safeColor = toSafeCssColor(color)
+return safeColor ? `  --color-${key}: ${safeColor};` : null
 })
 .join("\n")}
 }

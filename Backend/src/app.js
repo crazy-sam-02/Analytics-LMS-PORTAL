@@ -65,6 +65,7 @@ const { setupCompleteValidationSystem } = require("./config/validation-integrati
 const { getDb } = require("./utils/db");
 const { asyncHandler } = require("./utils/http");
 const { getPrometheusMetrics } = require("./services/prometheus-metrics.service");
+const { recordRumMetric } = require("./services/rum-metrics.service");
 const {
   authenticateAdmin,
   authenticateCollegeAdmin,
@@ -165,6 +166,17 @@ const generalApiLimiter = isRateLimitDisabled
       max: env.rateLimit.generalApiMax,
       skip: shouldSkipGeneralApiLimit,
       message: "Too many requests. Please slow down and try again.",
+    });
+
+const rumLimiter = isRateLimitDisabled
+  ? createRateLimiter({ scope: "noop", windowMs: 1, max: 999999999, skip: () => true })
+  : createRateLimiter({
+      scope: "rum",
+      routeLabel: "/api/rum",
+      windowMs: 60 * 1000,
+      max: 120,
+      keySelector: authKeyByIp,
+      message: "Too many metrics requests.",
     });
 
 const collegeAdminApiLimiter = isRateLimitDisabled
@@ -384,6 +396,8 @@ app.use(
       return callback(new Error("Not allowed by CORS"));
     },
     credentials: true,
+    allowedHeaders: ["Authorization", "Content-Type", "X-Request-Id"],
+    exposedHeaders: ["RateLimit-Limit", "RateLimit-Remaining", "RateLimit-Reset", "Retry-After", "X-Request-Id"],
   })
 );
 app.use(
@@ -396,6 +410,8 @@ app.use(
         imgSrc: ["'self'", "data:", "https:"],
         fontSrc: ["'self'", "data:"],
         connectSrc: ["'self'", "https://lms.analyticsedify.com", "wss://lms.analyticsedify.com"],
+        objectSrc: ["'none'"],
+        workerSrc: ["'self'", "blob:"],
         frameAncestors: ["'none'"],
         baseUri: ["'self'"],
         formAction: ["'self'"],
@@ -457,6 +473,11 @@ app.get("/api/metrics", metricsAuth, asyncHandler(async (_req, res) => {
   res.setHeader("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
   res.status(200).send(metrics);
 }));
+
+app.post("/api/rum", rumLimiter, (req, res) => {
+  recordRumMetric(req.body || {});
+  res.status(202).json({ accepted: true });
+});
 
 app.use("/api", generalApiLimiter);
 

@@ -230,6 +230,25 @@ export const studentApi = {
     }
   },
 
+  requestAccountDeletion: async (payload) => {
+    try {
+      const response = await httpClient.delete("/profile", { data: payload });
+      return response.data;
+    } catch (error) {
+      const parsed = toApiError(error);
+      if (parsed.status !== 404) {
+        throw parsed;
+      }
+
+      try {
+        const fallback = await httpClient.delete("/students/me", { data: payload });
+        return fallback.data;
+      } catch (fallbackError) {
+        throw toApiError(fallbackError);
+      }
+    }
+  },
+
   getActiveAttempts: async () => {
     if (activeAttemptsInFlight) {
       return activeAttemptsInFlight;

@@ -6,11 +6,13 @@ import {
   applyRefreshPayload,
   markInitialized,
   refreshSession,
+  logoutStudent,
   sessionExpired,
   setSessionConflict,
 } from "@/features/Students/authSlice";
 import { injectReducer } from "@/app/store";
 import OfflineBanner from "@/components/common/OfflineBanner";
+import IdleSessionTimeout from "@/components/common/IdleSessionTimeout";
 import LoginPage from "@/pages/Students/LoginPage";
 import { registerAuthInterceptorHandlers } from "@/services/httpClient";
 import RouteErrorElement from "@/components/common/RouteErrorElement";
@@ -208,6 +210,7 @@ function AuthBootstrap() {
     <>
       <OfflineBanner />
       <Outlet />
+      <IdleSessionTimeout enabled={Boolean(user)} onLogout={() => dispatch(logoutStudent())} />
       {sessionConflict ? (
         <Suspense fallback={null}>
           <SessionConflictDialog />

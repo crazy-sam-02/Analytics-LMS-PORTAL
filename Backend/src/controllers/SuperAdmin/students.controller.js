@@ -18,6 +18,7 @@ const {
   resolveBatchLookup,
   resolveDepartmentLookup,
 } = require("../../utils/student-import");
+const { toPublicStudent, toPublicStudents } = require("../../utils/serializers");
 
 let Queue = null;
 let Worker = null;
@@ -381,10 +382,10 @@ const getStudentsGlobal = asyncHandler(async (req, res) => {
     db.student.count({ where }),
   ]);
 
-  const data = items.map((student) => ({
+  const data = toPublicStudents(items.map((student) => ({
     ...student,
     studentId: getStudentNumber(student),
-  }));
+  })));
 
   res.status(200).json({
     data,
@@ -480,7 +481,7 @@ const toggleStudentStatus = asyncHandler(async (req, res) => {
     afterState: { isActive: student.isActive },
   });
 
-  res.status(200).json(student);
+  res.status(200).json(toPublicStudent(student));
 });
 
 const resetStudentPassword = asyncHandler(async (req, res) => {
@@ -612,7 +613,7 @@ const createStudentGlobal = asyncHandler(async (req, res) => {
   });
 
   res.status(201).json({
-    student,
+    student: toPublicStudent(student),
     credentials: {
       identifier: student.email,
       studentId: student.studentId,
@@ -762,7 +763,7 @@ const updateStudentGlobal = asyncHandler(async (req, res) => {
     afterState: student,
   });
 
-  res.status(200).json(student);
+  res.status(200).json(toPublicStudent(student));
 });
 
 const deleteStudentGlobal = asyncHandler(async (req, res) => {
