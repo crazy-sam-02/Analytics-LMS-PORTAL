@@ -62,6 +62,7 @@ describe("admin auth refresh", () => {
             id: "session-1",
             tokenHash: "old-token-hash",
             adminId: "admin-1",
+            keepLoggedIn: true,
             revokedAt: null,
             expiresAt: nowPlusOneHour,
           }),
@@ -105,6 +106,7 @@ describe("admin auth refresh", () => {
     expect(createRefreshRecord).toHaveBeenCalledWith({
       data: expect.objectContaining({
         adminId: "admin-1",
+        keepLoggedIn: true,
         tokenHash: expect.any(String),
       }),
     });
@@ -112,7 +114,11 @@ describe("admin auth refresh", () => {
     expect(res.cookie).toHaveBeenCalledWith(
       "lms_admin_refresh_token",
       "rotated-refresh-token",
-      expect.objectContaining({ path: "/api/college-admin/auth" })
+      expect.objectContaining({
+        maxAge: 1000 * 60 * 60 * 24 * 30,
+        path: "/api/college-admin/auth",
+        sameSite: "lax",
+      })
     );
   });
 });

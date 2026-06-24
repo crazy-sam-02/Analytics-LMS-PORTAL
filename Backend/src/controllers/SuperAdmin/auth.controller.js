@@ -24,17 +24,17 @@ const { recordSecurityEvent } = require("../../services/security-audit.service")
 const SUPER_ADMIN_REFRESH_COOKIE = "lms_super_admin_refresh_token";
 const SUPER_ADMIN_AUTH_COOKIE_PATHS = ["/api/super-admin/auth", "/api/superadmin/auth"];
 
-const getRefreshCookieOptions = (path = "/api/super-admin/auth") => ({
+const getRefreshCookieOptions = (path = "/api/super-admin/auth", { keepLoggedIn = false } = {}) => ({
   httpOnly: true,
   secure: process.env.NODE_ENV === "production",
-  sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+  sameSite: "lax",
   path,
-  maxAge: 1000 * 60 * 60 * 24 * 7,
+  ...(keepLoggedIn ? { maxAge: 1000 * 60 * 60 * 24 * 30 } : {}),
 });
 
-const setRefreshCookie = (res, refreshToken) => {
+const setRefreshCookie = (res, refreshToken, { keepLoggedIn = false } = {}) => {
   SUPER_ADMIN_AUTH_COOKIE_PATHS.forEach((path) => {
-    res.cookie(SUPER_ADMIN_REFRESH_COOKIE, refreshToken, getRefreshCookieOptions(path));
+    res.cookie(SUPER_ADMIN_REFRESH_COOKIE, refreshToken, getRefreshCookieOptions(path, { keepLoggedIn }));
   });
 };
 
@@ -45,7 +45,7 @@ const clearRefreshCookie = (res) => {
 };
 
 const performSuperAdminLogin = async (req, res) => {
-  const { email, password } = req.body;
+  const { email, password, keepLoggedIn = false } = req.body;
   const loginIdentifier = email;
   await assertLoginAllowed({ scope: "super-admin", identifier: loginIdentifier });
 
@@ -103,8 +103,9 @@ const performSuperAdminLogin = async (req, res) => {
     scope: "super-admin",
     principal: superAdmin,
     ownerField: "superAdminId",
+    metadata: { keepLoggedIn: Boolean(keepLoggedIn) },
   });
-  setRefreshCookie(res, refreshToken);
+  setRefreshCookie(res, refreshToken, { keepLoggedIn });
   const updatedSuperAdmin = await recordSuperAdminLogin({ db: m.dbClient, superAdminId: superAdmin.id }) || superAdmin;
 
   res.status(200).json({
@@ -150,6 +151,7 @@ const superAdminRefresh = asyncHandler(async (req, res) => {
   }
 
   const accessToken = createAccessToken(superAdmin);
+  const keepLoggedIn = dbToken.keepLoggedIn === true;
   const { refreshToken: newRefreshToken, refreshRecord } = await rotateRefreshTokenRecord({
     db,
     modelName: "superAdminRefreshToken",
@@ -158,8 +160,9 @@ const superAdminRefresh = asyncHandler(async (req, res) => {
     oldRefreshToken: refreshToken,
     oldRecord: dbToken,
     principal: superAdmin,
+    metadata: { keepLoggedIn },
   });
-  setRefreshCookie(res, newRefreshToken);
+  setRefreshCookie(res, newRefreshToken, { keepLoggedIn });
 
   res.status(200).json({
     accessToken,

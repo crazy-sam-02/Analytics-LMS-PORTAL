@@ -63,7 +63,7 @@ const { createResponseCache, createResponseCacheInvalidationHook } = require("./
 const { notFound, errorHandler } = require("./middleware/error-handler");
 const { setupCompleteValidationSystem } = require("./config/validation-integration.setup");
 const { getDb } = require("./utils/db");
-const { asyncHandler } = require("./utils/http");
+const { ApiError, asyncHandler } = require("./utils/http");
 const { getPrometheusMetrics } = require("./services/prometheus-metrics.service");
 const { recordRumMetric } = require("./services/rum-metrics.service");
 const {
@@ -359,6 +359,7 @@ const buildCoreHealthSnapshot = async () => {
 };
 
 const allowedOrigins = env.frontendOrigins || [env.frontendOrigin].filter(Boolean);
+app.disable("x-powered-by");
 const unsafeMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const getOriginFromReferer = (referer) => {
   if (!referer) return null;
@@ -393,7 +394,7 @@ app.use(
       if (!origin || allowedOrigins.includes(origin)) {
         return callback(null, true);
       }
-      return callback(new Error("Not allowed by CORS"));
+      return callback(new ApiError(403, "Untrusted request origin", null, "CORS_ORIGIN_DENIED"));
     },
     credentials: true,
     allowedHeaders: ["Authorization", "Content-Type", "X-Request-Id"],

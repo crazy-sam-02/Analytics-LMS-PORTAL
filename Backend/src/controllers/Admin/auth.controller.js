@@ -24,18 +24,18 @@ const { recordSecurityEvent } = require("../../services/security-audit.service")
 
 const ADMIN_REFRESH_COOKIE = "lms_admin_refresh_token";
 
-const getRefreshCookieOptions = (path = "/api/admin/auth") => ({
+const getRefreshCookieOptions = (path = "/api/admin/auth", { keepLoggedIn = false } = {}) => ({
   httpOnly: true,
   secure: process.env.NODE_ENV === "production",
-  sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+  sameSite: "lax",
   path,
-  maxAge: 1000 * 60 * 60 * 24 * 7,
+  ...(keepLoggedIn ? { maxAge: 1000 * 60 * 60 * 24 * 30 } : {}),
 });
 
 const adminLogin = asyncHandler(async (req, res) => {
   const m = await models.init();
   const db = m.dbClient;
-  const { email, password } = req.body;
+  const { email, password, keepLoggedIn = false } = req.body;
   const loginIdentifier = email;
   const loginScope = req.baseUrl && req.baseUrl.startsWith("/api/college-admin/auth") ? "college-admin" : "admin";
   await assertLoginAllowed({ scope: loginScope, identifier: loginIdentifier });
@@ -100,11 +100,12 @@ const adminLogin = asyncHandler(async (req, res) => {
     scope: "admin",
     principal: admin,
     ownerField: "adminId",
+    metadata: { keepLoggedIn: Boolean(keepLoggedIn) },
   });
   const cookiePath = req.baseUrl && req.baseUrl.startsWith("/api/college-admin/auth")
     ? "/api/college-admin/auth"
     : "/api/admin/auth";
-  res.cookie(ADMIN_REFRESH_COOKIE, refreshToken, getRefreshCookieOptions(cookiePath));
+  res.cookie(ADMIN_REFRESH_COOKIE, refreshToken, getRefreshCookieOptions(cookiePath, { keepLoggedIn }));
 
   res.status(200).json({
     accessToken,
@@ -153,6 +154,7 @@ const adminRefresh = asyncHandler(async (req, res) => {
   }
 
   const permissions = resolveAdminPermissions(admin);
+  const keepLoggedIn = dbToken.keepLoggedIn === true;
   const newAccessToken = createAccessToken({ ...admin, permissions });
   const { refreshToken: newRefreshToken, refreshRecord } = await rotateRefreshTokenRecord({
     db,
@@ -162,11 +164,12 @@ const adminRefresh = asyncHandler(async (req, res) => {
     oldRefreshToken: refreshToken,
     oldRecord: dbToken,
     principal: admin,
+    metadata: { keepLoggedIn },
   });
   const cookiePath = req.baseUrl && req.baseUrl.startsWith("/api/college-admin/auth")
     ? "/api/college-admin/auth"
     : "/api/admin/auth";
-  res.cookie(ADMIN_REFRESH_COOKIE, newRefreshToken, getRefreshCookieOptions(cookiePath));
+  res.cookie(ADMIN_REFRESH_COOKIE, newRefreshToken, getRefreshCookieOptions(cookiePath, { keepLoggedIn }));
 
   res.status(200).json({
     accessToken: newAccessToken,

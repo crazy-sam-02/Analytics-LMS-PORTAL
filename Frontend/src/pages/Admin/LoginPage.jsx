@@ -21,7 +21,7 @@ export default function AdminLoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [rememberAdmin, setRememberAdmin] = useState(true);
+  const [rememberAdmin, setRememberAdmin] = useState(false);
   const [localError, setLocalError] = useState("");
 
   if (admin && isCollegeAdminRole(admin.role)) {
@@ -41,7 +41,7 @@ export default function AdminLoginPage() {
       return;
     }
 
-    const result = await dispatch(loginAdmin({ email: normalizedEmail, password }));
+    const result = await dispatch(loginAdmin({ email: normalizedEmail, password, keepLoggedIn: rememberAdmin }));
 
     if (loginAdmin.rejected.match(result)) {
       setLocalError(result.error?.message || "Unable to sign in. Please try again.");
@@ -129,12 +129,14 @@ export default function AdminLoginPage() {
             <h2 className="mt-6 text-4xl leading-tight font-semibold tracking-tight text-slate-950 sm:text-5xl">Welcome Back</h2>
             <p className="mt-3 max-w-md text-base leading-7 text-slate-600">Please enter your credentials to access your admin portal.</p>
 
-            <form onSubmit={onSubmit} className="mt-10 space-y-6">
+            <form method="post" onSubmit={onSubmit} className="mt-10 space-y-6">
               <div>
                 <label className="mb-2.5 block text-xs font-bold tracking-wide text-slate-600 uppercase">Admin Email</label>
                 <div className="flex h-14 items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 shadow-[0_1px_2px_rgba(15,23,42,0.04),inset_0_1px_0_rgba(255,255,255,0.9)] transition focus-within:border-blue-500 focus-within:shadow-[0_0_0_4px_rgba(37,99,235,0.10)]">
                   <User className="size-5 text-slate-500" />
                   <Input
+                    name="email"
+                    autoComplete="username"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     type="email"
@@ -155,6 +157,8 @@ export default function AdminLoginPage() {
                 <div className="flex h-14 items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 shadow-[0_1px_2px_rgba(15,23,42,0.04),inset_0_1px_0_rgba(255,255,255,0.9)] transition focus-within:border-blue-500 focus-within:shadow-[0_0_0_4px_rgba(37,99,235,0.10)]">
                   <Lock className="size-5 text-slate-500" />
                   <Input
+                    name="password"
+                    autoComplete="current-password"
                     type={showPassword ? "text" : "password"}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}

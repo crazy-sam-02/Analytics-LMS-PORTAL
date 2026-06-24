@@ -4,6 +4,7 @@ const adminLoginSchema = z.object({
   body: z.object({
     email: z.string().email("Invalid email"),
     password: z.string().min(8, "Password must be at least 8 characters"),
+    keepLoggedIn: z.boolean().optional().default(false),
   }),
   params: z.object({}).optional().default({}),
   query: z.object({}).optional().default({}),

@@ -45,10 +45,10 @@ const buildStudentProfilePayload = (user = {}) => ({
   isActive: user.isActive !== false,
 });
 
-const getRefreshCookieOptions = ({ keepLoggedIn = true } = {}) => ({
+const getRefreshCookieOptions = ({ keepLoggedIn = false } = {}) => ({
   httpOnly: true,
   secure: process.env.NODE_ENV === "production",
-  sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+  sameSite: "lax",
   path: "/api/auth",
   ...(keepLoggedIn ? { maxAge: 1000 * 60 * 60 * 24 * 30 } : {}),
 });
@@ -58,7 +58,7 @@ const login = asyncHandler(async (req, res) => {
     return performSuperAdminLogin(req, res);
   }
 
-  const { identifier, password, keepLoggedIn = true } = req.body;
+  const { identifier, password, keepLoggedIn = false } = req.body;
   const loginIdentifier = identifier;
   await assertLoginAllowed({ scope: "student", identifier: loginIdentifier });
 

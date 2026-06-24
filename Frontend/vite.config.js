@@ -32,11 +32,7 @@ export default defineConfig({
     cssCodeSplit: true,
     modulePreload: {
       polyfill: false,
-      resolveDependencies(_filename, deps, context) {
-        if (context.hostType !== "html") {
-          return deps;
-        }
-
+      resolveDependencies(_filename, deps) {
         return deps.filter((dep) =>
           /(?:vendor-react|vendor-router|vendor-redux|vendor-query|store-|authSlice-|adminAuthSlice-|superAdminAuthSlice-|router-|useSeo-|vendor-icons-)/.test(dep)
         );

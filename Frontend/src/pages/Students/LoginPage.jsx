@@ -20,7 +20,7 @@ export default function LoginPage() {
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [keepLoggedIn, setKeepLoggedIn] = useState(true);
+  const [keepLoggedIn, setKeepLoggedIn] = useState(false);
 
   if (user) return <Navigate to="/resume" replace />;
 
@@ -89,12 +89,14 @@ export default function LoginPage() {
             <h2 className="mt-6 text-4xl leading-tight font-semibold tracking-tight text-slate-950 sm:text-5xl">Welcome Back</h2>
             <p className="mt-3 max-w-md text-base leading-7 text-slate-600">Please enter your credentials to access your test portal.</p>
 
-            <form onSubmit={handleSubmit} className="mt-10 space-y-6">
+            <form method="post" onSubmit={handleSubmit} className="mt-10 space-y-6">
               <div>
                 <label className="mb-2.5 block text-xs font-bold tracking-wide text-slate-600 uppercase">Student ID or Email</label>
                 <div className="flex h-14 items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 shadow-[0_1px_2px_rgba(15,23,42,0.04),inset_0_1px_0_rgba(255,255,255,0.9)] transition focus-within:border-blue-500 focus-within:shadow-[0_0_0_4px_rgba(37,99,235,0.10)]">
                   <User className="size-5 text-slate-500" />
                   <Input
+                    name="identifier"
+                    autoComplete="username"
                     value={identifier}
                     onChange={(event) => setIdentifier(event.target.value)}
                     className="h-auto border-0 bg-transparent p-0 text-base text-slate-700 shadow-none ring-0 placeholder:text-slate-400 focus-visible:ring-0"
@@ -114,6 +116,8 @@ export default function LoginPage() {
                 <div className="flex h-14 items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 shadow-[0_1px_2px_rgba(15,23,42,0.04),inset_0_1px_0_rgba(255,255,255,0.9)] transition focus-within:border-blue-500 focus-within:shadow-[0_0_0_4px_rgba(37,99,235,0.10)]">
                   <Lock className="size-5 text-slate-500" />
                   <Input
+                    name="password"
+                    autoComplete="current-password"
                     type={showPassword ? "text" : "password"}
                     value={password}
                     onChange={(event) => setPassword(event.target.value)}

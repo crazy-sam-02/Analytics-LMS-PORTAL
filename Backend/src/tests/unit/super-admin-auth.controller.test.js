@@ -105,13 +105,17 @@ describe("super-admin auth refresh", () => {
     expect(res.cookie).toHaveBeenCalledWith(
       "lms_super_admin_refresh_token",
       "new-super-refresh-token",
-      expect.objectContaining({ path: "/api/super-admin/auth" })
+      expect.objectContaining({ path: "/api/super-admin/auth", sameSite: "lax" })
     );
     expect(res.cookie).toHaveBeenCalledWith(
       "lms_super_admin_refresh_token",
       "new-super-refresh-token",
       expect.objectContaining({ path: "/api/superadmin/auth" })
     );
+    expect(res.cookie.mock.calls[0][2]).not.toHaveProperty("maxAge");
+    expect(db.superAdminRefreshToken.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ keepLoggedIn: false }),
+    });
     expect(db.superAdmin.findFirst).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({ role: "SUPER_ADMIN" }),
     }));
@@ -127,6 +131,7 @@ describe("super-admin auth refresh", () => {
             id: "session-1",
             tokenHash: "hash:old-super-refresh-token",
             superAdminId: "super-1",
+            keepLoggedIn: true,
             revokedAt: null,
             expiresAt: nowPlusOneHour,
           }),
@@ -170,7 +175,11 @@ describe("super-admin auth refresh", () => {
     expect(res.cookie).toHaveBeenCalledWith(
       "lms_super_admin_refresh_token",
       "rotated-super-refresh-token",
-      expect.objectContaining({ path: "/api/super-admin/auth" })
+      expect.objectContaining({
+        maxAge: 1000 * 60 * 60 * 24 * 30,
+        path: "/api/super-admin/auth",
+        sameSite: "lax",
+      })
     );
     expect(res.cookie).toHaveBeenCalledWith(
       "lms_super_admin_refresh_token",

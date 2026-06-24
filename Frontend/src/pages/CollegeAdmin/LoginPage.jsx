@@ -33,7 +33,7 @@ export default function CollegeAdminLoginPage() {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [localError, setLocalError] = useState("");
-  const [rememberMe, setRememberMe] = useState(true);
+  const [rememberMe, setRememberMe] = useState(false);
 
   if (isAdminRole(admin?.role)) {
     return <HardRedirect to="/admin/dashboard" message="Redirecting to Admin portal..." />;
@@ -52,7 +52,7 @@ export default function CollegeAdminLoginPage() {
       return;
     }
 
-    const result = await dispatch(loginAdmin({ email: normalizedEmail, password }));
+    const result = await dispatch(loginAdmin({ email: normalizedEmail, password, keepLoggedIn: rememberMe }));
 
     if (loginAdmin.rejected.match(result)) {
       setLocalError(result.error?.message || "Unable to sign in. Please try again.");
@@ -137,7 +137,7 @@ export default function CollegeAdminLoginPage() {
               Please enter your credentials to access your test portal.
             </p>
 
-            <form onSubmit={onSubmit} className="mt-10 space-y-6">
+            <form method="post" onSubmit={onSubmit} className="mt-10 space-y-6">
               <div>
                 <label className="mb-2.5 block text-xs font-bold tracking-wide text-slate-600 uppercase">
                   College Admin Email
@@ -145,6 +145,8 @@ export default function CollegeAdminLoginPage() {
                 <div className="flex h-14 items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 shadow-[0_1px_2px_rgba(15,23,42,0.04),inset_0_1px_0_rgba(255,255,255,0.9)] transition focus-within:border-blue-500 focus-within:shadow-[0_0_0_4px_rgba(37,99,235,0.10)]">
                   <User className="size-5 text-slate-500" />
                   <Input
+                    name="email"
+                    autoComplete="username"
                     value={email}
                     onChange={(event) => setEmail(event.target.value)}
                     type="email"
@@ -168,6 +170,8 @@ export default function CollegeAdminLoginPage() {
                 <div className="flex h-14 items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 shadow-[0_1px_2px_rgba(15,23,42,0.04),inset_0_1px_0_rgba(255,255,255,0.9)] transition focus-within:border-blue-500 focus-within:shadow-[0_0_0_4px_rgba(37,99,235,0.10)]">
                   <Lock className="size-5 text-slate-500" />
                   <Input
+                    name="password"
+                    autoComplete="current-password"
                     type={showPassword ? "text" : "password"}
                     value={password}
                     onChange={(event) => setPassword(event.target.value)}
