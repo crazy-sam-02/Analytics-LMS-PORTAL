@@ -14,6 +14,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import SkeletonBlock from "@/components/common/SkeletonBlock";
+import { SUPPORT_EMAIL, openSupportMail } from "@/lib/supportMail";
 
 export default function AdminSettingsPage() {
   const authenticatedAdmin = useSelector((state) => state.adminAuth.admin);
@@ -21,6 +22,7 @@ export default function AdminSettingsPage() {
     currentPassword: "",
     newPassword: "",
   });
+  const [feedback, setFeedback] = useState("");
   const [banner, setBanner] = useState({ type: "", title: "", message: "" });
 
   const settingsQuery = useQuery({
@@ -50,6 +52,29 @@ export default function AdminSettingsPage() {
   });
 
   const profile = settingsQuery.data?.profile || settingsQuery.data?.admin || authenticatedAdmin;
+
+  const submitFeedback = () => {
+    const message = feedback.trim();
+
+    if (!message) {
+      toast.error("Please write your feedback before opening mail.");
+      return;
+    }
+
+    openSupportMail({
+      category: "Admin feedback",
+      subject: "LMS Admin Panel Feedback",
+      message,
+      reporter: {
+        name: profile?.fullName,
+        email: profile?.email,
+        role: profile?.role || "Admin",
+        id: profile?.employeeId,
+        college: profile?.college?.name,
+        department: profile?.department?.name,
+      },
+    });
+  };
 
   const passwordError = (() => {
     if (!passwordForm.currentPassword && !passwordForm.newPassword) return "";
@@ -178,11 +203,17 @@ export default function AdminSettingsPage() {
           <CardContent className="space-y-4">
             <textarea
               placeholder="Write your feedback here..."
+              value={feedback}
+              onChange={(event) => setFeedback(event.target.value)}
               className="min-h-[120px] w-full rounded-xl border border-border bg-background px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-primary"
             />
 
             <div className="flex justify-end">
-              <button className="rounded-xl bg-primary px-4 py-2 text-sm font-medium text-white transition hover:opacity-90">
+              <button
+                type="button"
+                onClick={submitFeedback}
+                className="rounded-xl bg-primary px-4 py-2 text-sm font-medium text-white transition hover:opacity-90"
+              >
                 Submit Feedback
               </button>
             </div>
@@ -201,7 +232,7 @@ export default function AdminSettingsPage() {
           <CardContent className="grid gap-3">
             <p className="text-sm text-text-secondary">
               <span className="font-semibold">Support Email:</span>{" "}
-              support@prionex.com
+              {SUPPORT_EMAIL}
             </p>
 
             <p className="text-sm text-text-secondary">

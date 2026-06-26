@@ -1,24 +1,31 @@
 import { useMemo, useState } from "react";
 import { LockKeyhole, ShieldCheck, SlidersHorizontal } from "lucide-react";
 import { useDispatch, useSelector } from "react-redux";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { setTheme } from "@/features/Students/uiSlice";
 import { studentApi } from "@/services/studentApi";
+import { profileQueryOptions } from "@/services/studentQueries";
+import { openSupportMail } from "@/lib/supportMail";
 import { ui } from "@/styles/ui-tokens";
 
 export default function SettingsPage() {
   const dispatch = useDispatch();
   const selectedTheme = useSelector((state) => state.ui.theme || "system");
+  const profileQuery = useQuery(profileQueryOptions());
+  const user = profileQuery.data;
 
   const [passwordForm, setPasswordForm] = useState({
     currentPassword: "",
     newPassword: "",
     confirmPassword: "",
   });
+  const [feedback, setFeedback] = useState("");
+  const [complaint, setComplaint] = useState("");
   const [inlineError, setInlineError] = useState("");
 
   const passwordValidationError = useMemo(() => {
@@ -70,6 +77,30 @@ export default function SettingsPage() {
     }
 
     updatePasswordMutation.mutate();
+  };
+
+  const openStudentMail = (type) => {
+    const isComplaint = type === "complaint";
+    const message = (isComplaint ? complaint : feedback).trim();
+
+    if (!message) {
+      toast.error(`Please write your ${isComplaint ? "complaint" : "feedback"} before opening mail.`);
+      return;
+    }
+
+    openSupportMail({
+      category: isComplaint ? "Student complaint" : "Student feedback",
+      subject: isComplaint ? "LMS Student Complaint" : "LMS Student Feedback",
+      message,
+      reporter: {
+        name: user?.fullName || user?.name,
+        email: user?.email,
+        role: "Student",
+        id: user?.rollNumber || user?.studentId,
+        college: user?.college?.name || user?.college,
+        department: user?.department?.name || user?.department,
+      },
+    });
   };
 
   return (
@@ -134,6 +165,43 @@ export default function SettingsPage() {
               <SelectItem value="system">System</SelectItem>
             </SelectContent>
           </Select>
+        </div>
+      </article>
+
+      <article className={`${ui.card} ${ui.cardPadding} xl:col-span-2`}>
+        <div className="mb-4 flex items-center gap-2">
+          <div className="grid size-9 place-items-center rounded-lg bg-primary/15 text-primary"><ShieldCheck className="size-4" /></div>
+          <h2 className="text-lg font-semibold text-text-primary">Feedback & Complaint</h2>
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          <div className="space-y-3 rounded-xl border border-border bg-background p-3">
+            <label htmlFor="student-feedback" className="text-sm font-semibold text-text-primary">Feedback</label>
+            <Textarea
+              id="student-feedback"
+              value={feedback}
+              onChange={(event) => setFeedback(event.target.value)}
+              placeholder="Write your feedback here..."
+              className="min-h-32 bg-card"
+            />
+            <Button type="button" onClick={() => openStudentMail("feedback")}>
+              Send Feedback
+            </Button>
+          </div>
+
+          <div className="space-y-3 rounded-xl border border-border bg-background p-3">
+            <label htmlFor="student-complaint" className="text-sm font-semibold text-text-primary">Raise Complaint</label>
+            <Textarea
+              id="student-complaint"
+              value={complaint}
+              onChange={(event) => setComplaint(event.target.value)}
+              placeholder="Describe your complaint here..."
+              className="min-h-32 bg-card"
+            />
+            <Button type="button" onClick={() => openStudentMail("complaint")}>
+              Raise Complaint
+            </Button>
+          </div>
         </div>
       </article>
     </section>
