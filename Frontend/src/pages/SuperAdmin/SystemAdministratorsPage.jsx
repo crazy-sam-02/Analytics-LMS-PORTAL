@@ -158,7 +158,7 @@ export default function SystemAdministratorsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-3 sm:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Card className="rounded-2xl border-border">
           <CardContent className="p-4">
             <p className="text-xs font-semibold uppercase text-text-secondary">Total</p>
@@ -189,11 +189,11 @@ export default function SystemAdministratorsPage() {
         <CardHeader>
           <CardTitle>Create System Administrator</CardTitle>
         </CardHeader>
-        <CardContent className="grid gap-3 sm:grid-cols-3">
+        <CardContent className="grid gap-3 lg:grid-cols-3">
           <Input placeholder="Name" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
           <Input placeholder="Email" type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} />
           <Input placeholder="Password" type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} />
-          <Button className="gap-2 bg-primary hover:bg-primary sm:col-span-3" onClick={createAdmin} disabled={createMutation.isPending || remainingSlots <= 0}>
+          <Button className="w-full gap-2 bg-primary hover:bg-primary lg:col-span-3" onClick={createAdmin} disabled={createMutation.isPending || remainingSlots <= 0}>
             <Plus className="size-4" />
             {createMutation.isPending ? "Creating..." : "Create System Administrator"}
           </Button>
@@ -205,7 +205,7 @@ export default function SystemAdministratorsPage() {
           <CardTitle>System Administrators</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="grid gap-3 sm:grid-cols-[1fr_180px_auto_auto]">
+          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_180px_auto_auto]">
             <Input
               placeholder="Search by name or email"
               value={filters.search}
@@ -220,14 +220,63 @@ export default function SystemAdministratorsPage() {
               <option value="active">Active</option>
               <option value="inactive">Inactive</option>
             </select>
-            <Button className="bg-primary hover:bg-primary" onClick={applyFilters}>Search</Button>
-            <Button variant="outline" className="gap-2" onClick={resetFilters}>
+            <Button className="w-full bg-primary hover:bg-primary md:w-auto" onClick={applyFilters}>Search</Button>
+            <Button variant="outline" className="w-full gap-2 md:w-auto" onClick={resetFilters}>
               <RotateCcw className="size-4" />
               Reset
             </Button>
           </div>
 
-          <div className="overflow-x-auto rounded-xl border border-border">
+          <div className="space-y-3 md:hidden">
+            {adminsQuery.isLoading ? (
+              <div className="rounded-xl border border-border px-3 py-6 text-sm text-text-secondary">Loading system administrators...</div>
+            ) : null}
+            {!adminsQuery.isLoading && systemAdmins.length === 0 ? (
+              <div className="rounded-xl border border-border px-3 py-6 text-sm text-text-secondary">No system administrators found.</div>
+            ) : null}
+            {systemAdmins.map((admin) => (
+              <div key={admin.id} className="rounded-xl border border-border p-3">
+                <div className="min-w-0 space-y-1">
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="min-w-0 truncate font-medium text-text-primary">{admin.fullName || admin.name}</p>
+                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${admin.isActive ? "bg-emerald-500/10 text-emerald-700" : "bg-rose-500/10 text-rose-700"}`}>
+                      {admin.isActive ? "Active" : "Inactive"}
+                    </span>
+                  </div>
+                  <p className="break-words text-xs text-text-secondary">{admin.email}</p>
+                </div>
+                <div className="mt-3 grid gap-2 text-xs text-text-secondary">
+                  <div className="flex items-center justify-between gap-3">
+                    <span>Created</span>
+                    <span className="text-right">{formatDate(admin.createdAt)}</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <span>Last Login</span>
+                    <span className="text-right">{formatDate(admin.lastLoginAt)}</span>
+                  </div>
+                </div>
+                <div className="mt-3 grid gap-2">
+                  <Button size="sm" variant="outline" className="w-full gap-2" onClick={() => openReset(admin)}>
+                    <KeyRound className="size-4" />
+                    Reset Password
+                  </Button>
+                  {admin.isActive ? (
+                    <Button size="sm" variant="destructive" className="w-full gap-2" onClick={() => openDeactivate(admin)} disabled={activeCount <= 1}>
+                      <ShieldOff className="size-4" />
+                      Deactivate
+                    </Button>
+                  ) : (
+                    <Button size="sm" className="w-full gap-2 bg-primary hover:bg-primary" onClick={() => openReactivate(admin)}>
+                      <ShieldCheck className="size-4" />
+                      Reactivate
+                    </Button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="hidden overflow-x-auto rounded-xl border border-border md:block">
             <div className="grid min-w-[860px] grid-cols-[1.3fr_1.4fr_110px_170px_170px_250px] bg-muted/60 px-3 py-2 text-xs font-semibold uppercase text-text-secondary">
               <span>Name</span>
               <span>Email</span>
@@ -244,8 +293,8 @@ export default function SystemAdministratorsPage() {
             ) : null}
             {systemAdmins.map((admin) => (
               <div key={admin.id} className="grid min-w-[860px] grid-cols-[1.3fr_1.4fr_110px_170px_170px_250px] items-center border-t border-border px-3 py-3 text-sm">
-                <span className="font-medium text-text-primary">{admin.fullName || admin.name}</span>
-                <span className="text-text-secondary">{admin.email}</span>
+                <span className="truncate font-medium text-text-primary">{admin.fullName || admin.name}</span>
+                <span className="truncate text-text-secondary">{admin.email}</span>
                 <span>
                   <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${admin.isActive ? "bg-emerald-500/10 text-emerald-700" : "bg-rose-500/10 text-rose-700"}`}>
                     {admin.isActive ? "Active" : "Inactive"}

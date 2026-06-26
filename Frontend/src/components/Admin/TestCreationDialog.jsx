@@ -70,7 +70,7 @@ import { X, FileText, Clock, Users, HelpCircle, ShieldCheck, Send, AlertTriangle
 
 const ADMIN_DRAFT_KEY = "admin-test-creation-draft";
 const SUPER_ADMIN_DRAFT_KEY = "super-admin-test-creation-draft";
-const SUBJECT_OPTIONS = ["Data Structures", "Algorithms", "DBMS", "Operating Systems", "Computer Networks", "Aptitude"];
+const SUBJECT_OPTIONS = ["Quantitative aptitude", "Programming","DBMS", "Logical Reasoning", "Verbal", "Aptitude","other"];
 const EVALUATION_RULE_OPTIONS = [
   { value: "BEST_ATTEMPT", label: "Best Attempt" },
   { value: "LAST_ATTEMPT", label: "Last Attempt" },

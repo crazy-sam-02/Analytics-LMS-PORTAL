@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { useSelector } from "react-redux";
 import { toast } from "sonner";
 import { adminApi } from "@/services/api";
 import {
@@ -15,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import SkeletonBlock from "@/components/common/SkeletonBlock";
 
 export default function AdminSettingsPage() {
+  const authenticatedAdmin = useSelector((state) => state.adminAuth.admin);
   const [passwordForm, setPasswordForm] = useState({
     currentPassword: "",
     newPassword: "",
@@ -47,7 +49,7 @@ export default function AdminSettingsPage() {
     },
   });
 
-  const profile = settingsQuery.data?.profile;
+  const profile = settingsQuery.data?.profile || settingsQuery.data?.admin || authenticatedAdmin;
 
   const passwordError = (() => {
     if (!passwordForm.currentPassword && !passwordForm.newPassword) return "";
@@ -75,6 +77,15 @@ export default function AdminSettingsPage() {
             <SkeletonBlock className="h-12" />
           </CardContent>
         </Card>
+      ) : null}
+
+      {settingsQuery.isError ? (
+        <Alert variant="destructive">
+          <AlertTitle>Profile fetch failed</AlertTitle>
+          <AlertDescription>
+            {settingsQuery.error?.message || "Could not load the latest admin profile. Showing saved session details where available."}
+          </AlertDescription>
+        </Alert>
       ) : null}
 
       <Card className="rounded-2xl border-border">

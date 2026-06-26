@@ -80,20 +80,22 @@ export default function AdminDashboardPage() {
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard title="Total Students" value={cards.totalStudents || 0} />
-        <StatCard title="Total Tests Created" value={cards.totalTestsCreated || 0} />
-        <StatCard title="Active Tests" value={cards.activeTests || 0} />
-        <StatCard title="Upcoming Tests" value={cards.upcomingTests || 0} />
+      <div className="-mx-1 overflow-x-auto pb-1 sm:mx-0">
+        <div className="grid min-w-[500px] grid-cols-4 gap-3 px-1 sm:min-w-0 sm:gap-4 sm:px-0">
+          <StatCard title="Total Students" value={cards.totalStudents || 0} />
+          <StatCard title="Total Tests Created" value={cards.totalTestsCreated || 0} />
+          <StatCard title="Active Tests" value={cards.activeTests || 0} />
+          <StatCard title="Upcoming Tests" value={cards.upcomingTests || 0} />
+        </div>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
-        <Card className="rounded-xl">
+        <Card className="min-w-0 rounded-xl">
           <CardHeader>
             <CardTitle>Exam Participation Trend</CardTitle>
           </CardHeader>
           <CardContent>
-            <ChartContainer config={lineConfig} className="h-72 w-full">
+            <ChartContainer config={lineConfig} className="h-64 w-full sm:h-72">
               <LineChart data={trend}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="month" />
@@ -105,12 +107,12 @@ export default function AdminDashboardPage() {
           </CardContent>
         </Card>
 
-        <Card className="rounded-xl">
+        <Card className="min-w-0 rounded-xl">
           <CardHeader>
             <CardTitle>Average Score Per Test</CardTitle>
           </CardHeader>
           <CardContent>
-            <ChartContainer config={barConfig} className="h-72 w-full">
+            <ChartContainer config={barConfig} className="h-64 w-full sm:h-72">
               <BarChart data={avgScore}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="testName" hide />
@@ -123,7 +125,7 @@ export default function AdminDashboardPage() {
         </Card>
       </div>
 
-      <Card className="rounded-xl">
+      <Card className="min-w-0 rounded-xl">
         <CardHeader>
           <CardTitle>Recent Exam Submissions</CardTitle>
         </CardHeader>
@@ -131,7 +133,8 @@ export default function AdminDashboardPage() {
           {isLoading ? <p className="text-sm text-text-secondary">Loading dashboard...</p> : null}
           {!isLoading && submissions.length === 0 ? <p className="text-sm text-text-secondary">No submissions yet.</p> : null}
           {submissions.length > 0 ? (
-            <Table>
+            <div className="-mx-2 overflow-x-auto px-2">
+              <Table className="min-w-[760px]">
               <TableHeader>
                 <TableRow>
                   <TableHead>Student</TableHead>
@@ -196,7 +199,8 @@ export default function AdminDashboardPage() {
                   );
                 })}
               </TableBody>
-            </Table>
+              </Table>
+            </div>
           ) : null}
         </CardContent>
       </Card>

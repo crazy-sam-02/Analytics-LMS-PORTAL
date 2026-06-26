@@ -331,7 +331,7 @@ export default function AdminsPage() {
             </select>
           ) : (
             <div className="flex h-8 items-center rounded-lg border border-border px-2 text-xs text-text-secondary">
-              College admins are college-scoped (no department binding)
+              College admins are college-scoped; up to 5 active admins per college
             </div>
           )}
           <select className="h-8 rounded-lg border border-border px-2" value={form.accessProfile} onChange={(e) => setForm({ ...form, accessProfile: e.target.value })}>

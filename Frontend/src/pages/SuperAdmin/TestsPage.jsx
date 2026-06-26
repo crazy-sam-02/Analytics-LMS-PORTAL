@@ -146,6 +146,11 @@ export default function TestsPage() {
   const [editingTestId, setEditingTestId] = useState("");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
+  const [topicFilter, setTopicFilter] = useState("");
+  const [collegeFilter, setCollegeFilter] = useState("");
+  const [departmentFilter, setDepartmentFilter] = useState("");
+  const [departmentFilterOptions, setDepartmentFilterOptions] = useState([]);
+  const [loadingDepartmentFilterOptions, setLoadingDepartmentFilterOptions] = useState(false);
   const [page, setPage] = useState(1);
 
   const loadTests = async () => {
@@ -181,6 +186,29 @@ export default function TestsPage() {
   }, [dispatch]);
 
   useEffect(() => {
+    setDepartmentFilter("");
+
+    const loadDepartmentFilterOptions = async () => {
+      if (!collegeFilter) {
+        setDepartmentFilterOptions([]);
+        return;
+      }
+
+      setLoadingDepartmentFilterOptions(true);
+      try {
+        const rows = await fetchAllPages(superAdminApi.getDepartments, { collegeId: collegeFilter });
+        setDepartmentFilterOptions(rows);
+      } catch {
+        setDepartmentFilterOptions([]);
+      } finally {
+        setLoadingDepartmentFilterOptions(false);
+      }
+    };
+
+    loadDepartmentFilterOptions();
+  }, [collegeFilter]);
+
+  useEffect(() => {
     const isCreateRoute = /\/super-admin\/tests\/create\/?$/.test(location.pathname);
     const currentSearchParams = new URLSearchParams(location.search);
     const isCreateQuery = currentSearchParams.get("create") === "1";
@@ -210,14 +238,27 @@ export default function TestsPage() {
 
   const filteredTests = useMemo(() => {
     const term = search.trim().toLowerCase();
+    const topicTerm = topicFilter.trim().toLowerCase();
     return tests.filter((item) => {
       const statusOk = statusFilter === "ALL" || normalizeStatus(String(item.status || "").toUpperCase()) === statusFilter;
       if (!statusOk) return false;
+      if (collegeFilter && String(item.collegeId || item.college?.id || "") !== String(collegeFilter)) return false;
+      if (departmentFilter) {
+        const assignedDepartmentIds = getAssignedDepartmentIds(item);
+        const relatedDepartmentIds = [
+          item.departmentId,
+          item.department?.id,
+          item.batch?.departmentId,
+          ...assignedDepartmentIds,
+        ].filter(Boolean).map((id) => String(id));
+        if (!relatedDepartmentIds.includes(String(departmentFilter))) return false;
+      }
+      if (topicTerm && !String(item.subject || "").toLowerCase().includes(topicTerm)) return false;
       if (!term) return true;
       const haystack = `${item.title || ""} ${item.subject || ""} ${item.college?.name || ""}`.toLowerCase();
       return haystack.includes(term);
     });
-  }, [search, statusFilter, tests]);
+  }, [collegeFilter, departmentFilter, search, statusFilter, tests, topicFilter]);
 
   const totalPages = Math.max(1, Math.ceil(filteredTests.length / PAGE_SIZE));
   const pagedTests = useMemo(() => {
@@ -227,7 +268,15 @@ export default function TestsPage() {
 
   useEffect(() => {
     setPage(1);
-  }, [search, statusFilter]);
+  }, [collegeFilter, departmentFilter, search, statusFilter, topicFilter]);
+
+  const resetAllTestFilters = () => {
+    setSearch("");
+    setStatusFilter("ALL");
+    setTopicFilter("");
+    setCollegeFilter("");
+    setDepartmentFilter("");
+  };
 
   useEffect(() => {
     const loadScopeOptions = async () => {
@@ -565,10 +614,54 @@ export default function TestsPage() {
           <CardDescription>Admin-like searchable test inventory with lifecycle visibility and archive actions.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="grid gap-3 sm:grid-cols-3">
-            <div className="space-y-1.5 sm:col-span-2">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+            <div className="space-y-1.5 xl:col-span-2">
               <label htmlFor="test-search" className="text-sm font-medium text-text-secondary">Search</label>
               <Input id="test-search" placeholder="Search by title, subject, or college" value={search} onChange={(e) => setSearch(e.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="test-topic-filter" className="text-sm font-medium text-text-secondary">Topic</label>
+              <Input
+                id="test-topic-filter"
+                placeholder="Filter topic"
+                value={topicFilter}
+                onChange={(e) => setTopicFilter(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="test-college-filter" className="text-sm font-medium text-text-secondary">College</label>
+              <select
+                id="test-college-filter"
+                className="h-10 w-full rounded-lg border border-border px-2"
+                value={collegeFilter}
+                onChange={(e) => setCollegeFilter(e.target.value)}
+              >
+                <option value="">All colleges</option>
+                {colleges.map((college) => (
+                  <option key={college.id} value={college.id}>{college.name}</option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="test-department-filter" className="text-sm font-medium text-text-secondary">Department</label>
+              <select
+                id="test-department-filter"
+                className="h-10 w-full rounded-lg border border-border px-2 disabled:cursor-not-allowed disabled:opacity-60"
+                value={departmentFilter}
+                onChange={(e) => setDepartmentFilter(e.target.value)}
+                disabled={!collegeFilter || loadingDepartmentFilterOptions}
+              >
+                <option value="">
+                  {!collegeFilter
+                    ? "Select college first"
+                    : loadingDepartmentFilterOptions
+                      ? "Loading departments..."
+                      : "All departments"}
+                </option>
+                {departmentFilterOptions.map((department) => (
+                  <option key={department.id} value={department.id}>{department.name}</option>
+                ))}
+              </select>
             </div>
             <div className="space-y-1.5">
               <label htmlFor="test-status-filter" className="text-sm font-medium text-text-secondary">Status</label>
@@ -577,6 +670,11 @@ export default function TestsPage() {
                   <option key={item} value={item}>{item}</option>
                 ))}
               </select>
+            </div>
+            <div className="flex items-end xl:col-span-6 xl:justify-end">
+              <Button variant="outline" className="w-full xl:w-auto" onClick={resetAllTestFilters}>
+                Clear Filters
+              </Button>
             </div>
           </div>
 

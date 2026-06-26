@@ -71,19 +71,21 @@ export default function SuperAdminDashboardPage() {
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-        <StatCard title="Total Colleges" value={cards.totalColleges || 0} />
-        <StatCard title="Total Admins" value={cards.totalAdmins || 0} />
-        <StatCard title="Total Students" value={cards.totalStudents || 0} />
-        <StatCard title="Total Tests" value={cards.totalTests || 0} />
-        <StatCard title="Active Users" value={cards.activeUsers || 0} />
+      <div className="-mx-1 overflow-x-auto pb-1 sm:mx-0">
+        <div className="grid min-w-[620px] grid-cols-5 gap-3 px-1 sm:min-w-0 sm:gap-4 sm:px-0">
+          <StatCard title="Total Colleges" value={cards.totalColleges || 0} />
+          <StatCard title="Total Admins" value={cards.totalAdmins || 0} />
+          <StatCard title="Total Students" value={cards.totalStudents || 0} />
+          <StatCard title="Total Tests" value={cards.totalTests || 0} />
+          <StatCard title="Active Users" value={cards.activeUsers || 0} />
+        </div>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
-        <Card className="rounded-2xl">
+        <Card className="min-w-0 rounded-2xl">
           <CardHeader><CardTitle>Daily Active Users</CardTitle></CardHeader>
           <CardContent>
-            <ChartContainer config={{ users: { label: "Users", color: "var(--warning)" } }} className="h-72 w-full">
+            <ChartContainer config={{ users: { label: "Users", color: "var(--warning)" } }} className="h-64 w-full sm:h-72">
               <LineChart data={daily}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="day" hide />
@@ -95,10 +97,10 @@ export default function SuperAdminDashboardPage() {
           </CardContent>
         </Card>
 
-        <Card className="rounded-2xl">
+        <Card className="min-w-0 rounded-2xl">
           <CardHeader><CardTitle>Test Participation Trends</CardTitle></CardHeader>
           <CardContent>
-            <ChartContainer config={{ count: { label: "Count", color: "var(--warning)" } }} className="h-72 w-full">
+            <ChartContainer config={{ count: { label: "Count", color: "var(--warning)" } }} className="h-64 w-full sm:h-72">
               <LineChart data={participation}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="day" hide />
@@ -111,11 +113,11 @@ export default function SuperAdminDashboardPage() {
         </Card>
       </div>
 
-      <Card className="rounded-2xl">
+      <Card className="min-w-0 rounded-2xl">
         <CardHeader><CardTitle>College-wise Performance</CardTitle></CardHeader>
         <CardContent>
           {loading ? <p className="text-sm text-text-secondary">Loading dashboard...</p> : null}
-          <ChartContainer config={{ avgScore: { label: "Avg Score", color: "var(--warning)" } }} className="h-72 w-full">
+          <ChartContainer config={{ avgScore: { label: "Avg Score", color: "var(--warning)" } }} className="h-64 w-full sm:h-72">
             <BarChart data={performance}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="collegeName" hide />

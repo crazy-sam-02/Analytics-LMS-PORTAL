@@ -13,6 +13,8 @@ const { ROLES, normalizeRole } = require("../../constants/roles");
 const { getPagination } = require("../../utils/pagination");
 const { toPublicAdmin, toPublicAdmins } = require("../../utils/serializers");
 
+const MAX_ACTIVE_COLLEGE_ADMINS_PER_COLLEGE = 5;
+
 const revokeAdminRefreshTokens = async (db, adminId) => {
   await bumpPrincipalTokenVersion(db, "admin", adminId);
 
@@ -47,6 +49,26 @@ const resolveAdminUpdateWhere = (adminId, existing) => {
     return { _id: new mongoose.Types.ObjectId(adminId) };
   }
   return { _id: adminId };
+};
+
+const assertCollegeAdminLimitAvailable = async (Admin, collegeId, excludeAdminId = null) => {
+  const activeCollegeAdminCount = await Admin.count({
+    where: {
+      collegeId,
+      role: ROLES.COLLEGE_ADMIN,
+      isActive: true,
+      ...(excludeAdminId ? { id: { not: excludeAdminId } } : {}),
+    },
+  });
+
+  if (activeCollegeAdminCount >= MAX_ACTIVE_COLLEGE_ADMINS_PER_COLLEGE) {
+    throw new ApiError(
+      409,
+      `A college can have up to ${MAX_ACTIVE_COLLEGE_ADMINS_PER_COLLEGE} active college admins`,
+      { limit: MAX_ACTIVE_COLLEGE_ADMINS_PER_COLLEGE, activeCollegeAdminCount },
+      "COLLEGE_ADMIN_LIMIT_REACHED"
+    );
+  }
 };
 
 const parseCsvRecords = (csvText) => {
@@ -217,17 +239,7 @@ const createAdmin = asyncHandler(async (req, res) => {
   }
 
   if (normalizedRole === ROLES.COLLEGE_ADMIN) {
-    const existingCollegeAdmin = await Admin.findFirst({
-      where: {
-        collegeId,
-        role: ROLES.COLLEGE_ADMIN,
-        isActive: true,
-      },
-    });
-
-    if (existingCollegeAdmin) {
-      throw new ApiError(409, "An active college admin already exists for this college", null, "DUPLICATE_COLLEGE_ADMIN");
-    }
+    await assertCollegeAdminLimitAvailable(Admin, collegeId);
   }
 
   const existing = await Admin.findFirst({
@@ -323,19 +335,9 @@ const updateAdmin = asyncHandler(async (req, res) => {
     }
   }
 
-  if (nextRole === ROLES.COLLEGE_ADMIN) {
-    const existingCollegeAdmin = await Admin.findFirst({
-      where: {
-        collegeId: nextCollegeId,
-        role: ROLES.COLLEGE_ADMIN,
-        isActive: true,
-        id: { not: existing.id },
-      },
-    });
-
-    if (existingCollegeAdmin) {
-      throw new ApiError(409, "An active college admin already exists for this college", null, "DUPLICATE_COLLEGE_ADMIN");
-    }
+  const nextIsActive = req.body.isActive !== undefined ? req.body.isActive : existing.isActive;
+  if (nextRole === ROLES.COLLEGE_ADMIN && nextIsActive) {
+    await assertCollegeAdminLimitAvailable(Admin, nextCollegeId, existing.id);
   }
 
   const nextAccessProfile = req.body.accessProfile ?? existing.accessProfile ?? ADMIN_ACCESS_PROFILES.EDITOR;

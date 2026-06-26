@@ -335,6 +335,7 @@ export default function CollegeAdminStudentsPage() {
           </div>
           <p className="text-xs text-text-secondary">Student ID uses the entered enroll number exactly. Password rule: First 3 letters of full name (first letter capitalized) + @ + last 3 digits of enroll number.</p>
           <Button
+            className="w-full sm:w-auto"
             onClick={() => createStudentMutation.mutate({
               ...studentForm,
               year: studentForm.year ? Number(studentForm.year) : undefined,
@@ -372,16 +373,16 @@ export default function CollegeAdminStudentsPage() {
             <p className="mt-1">Student ID will use the enrollNumber value exactly.</p>
             <p className="mt-1">Example: Alice Doe, alice@example.com, 20261001, Computer Science, 1, CSE-2027-A</p>
           </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <Input type="file" accept=".xlsx,.csv" onChange={handleImportFile} className="max-w-md" />
+          <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+            <Input type="file" accept=".xlsx,.csv" onChange={handleImportFile} className="w-full" />
             {importFileName ? <p className="text-xs text-text-secondary">Loaded: {importFileName}</p> : null}
           </div>
           <Textarea rows={8} value={csvData} onChange={(event) => setCsvData(event.target.value)} />
-          <div className="flex items-center gap-2">
-            <Button onClick={() => importMutation.mutate({ csvData })} disabled={importMutation.isPending}>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <Button className="w-full sm:w-auto" onClick={() => importMutation.mutate({ csvData })} disabled={importMutation.isPending}>
               {importMutation.isPending ? "Queueing..." : "Start Import"}
             </Button>
-            {activeImportJobId ? <p className="text-xs text-text-secondary">Job: {activeImportJobId}</p> : null}
+            {activeImportJobId ? <p className="break-all text-xs text-text-secondary">Job: {activeImportJobId}</p> : null}
           </div>
 
           {importJobQuery.data ? (
@@ -404,7 +405,7 @@ export default function CollegeAdminStudentsPage() {
           <CardDescription>Search college students, inspect profiles, assign batches, and monitor import jobs.</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="mb-4 grid gap-2 md:grid-cols-5">
+          <div className="mb-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
             <Input placeholder="Search by name/email" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} />
             <select
               className="h-10 rounded-md border border-border px-3 text-sm"
@@ -449,7 +450,7 @@ export default function CollegeAdminStudentsPage() {
                 <option key={year} value={year}>{year} YEAR</option>
               ))}
             </select>
-            <Button variant="outline" onClick={() => studentsQuery.refetch()}>Search</Button>
+            <Button className="w-full" variant="outline" onClick={() => studentsQuery.refetch()}>Search</Button>
           </div>
           <div className="grid gap-6 xl:grid-cols-[1fr_1.2fr]">
             <div className="space-y-2">
@@ -474,25 +475,25 @@ export default function CollegeAdminStudentsPage() {
                       setSelectedStudentId(student.id);
                       setBatchIdInput("");
                     }}
-                    className={`flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left ${selectedStudentId === student.id ? "border-primary/40 bg-primary/10" : "border-border"}`}
+                    className={`flex w-full flex-col gap-3 rounded-xl border px-3 py-3 text-left sm:flex-row sm:items-center sm:justify-between ${selectedStudentId === student.id ? "border-primary/40 bg-primary/10" : "border-border"}`}
                   >
-                    <div>
-                      <p className="font-medium text-text-primary">{student.fullName}</p>
-                      <p className="text-xs text-text-secondary">{student.email} | {student.studentId}</p>
+                    <div className="min-w-0">
+                      <p className="truncate font-medium text-text-primary">{student.fullName}</p>
+                      <p className="mt-1 break-words text-xs leading-5 text-text-secondary">{student.email} | {student.studentId}</p>
                     </div>
-                    <div className="text-right text-xs text-text-secondary">
-                      <p>{student.department?.name || "-"}</p>
-                      <p className="max-w-35 truncate">{batchLabel}</p>
+                    <div className="min-w-0 text-xs text-text-secondary sm:text-right">
+                      <p className="truncate">{student.department?.name || "-"}</p>
+                      <p className="truncate sm:max-w-35">{batchLabel}</p>
                     </div>
                   </button>
                 );
               })}
               {(studentPagination?.totalPages || 1) > 1 ? (
-                <div className="flex items-center justify-between border-t border-border pt-2 text-xs text-text-secondary">
+                <div className="flex flex-col gap-3 border-t border-border pt-3 text-xs text-text-secondary sm:flex-row sm:items-center sm:justify-between">
                   <p>Page {studentPagination?.page || page} of {studentPagination?.totalPages || 1}</p>
-                  <div className="flex items-center gap-2">
-                    <Button variant="outline" size="sm" disabled={(studentPagination?.page || page) <= 1} onClick={() => setPage((prev) => Math.max(prev - 1, 1))}>Previous</Button>
-                    <Button variant="outline" size="sm" disabled={(studentPagination?.page || 1) >= (studentPagination?.totalPages || 1)} onClick={() => setPage((prev) => prev + 1)}>Next</Button>
+                  <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center">
+                    <Button className="w-full sm:w-auto" variant="outline" size="sm" disabled={(studentPagination?.page || page) <= 1} onClick={() => setPage((prev) => Math.max(prev - 1, 1))}>Previous</Button>
+                    <Button className="w-full sm:w-auto" variant="outline" size="sm" disabled={(studentPagination?.page || 1) >= (studentPagination?.totalPages || 1)} onClick={() => setPage((prev) => prev + 1)}>Next</Button>
                   </div>
                 </div>
               ) : null}
@@ -510,7 +511,7 @@ export default function CollegeAdminStudentsPage() {
               {selectedStudent ? (
                 <>
                   <p className="text-base font-semibold text-text-primary">{selectedStudent.fullName}</p>
-                  <p className="text-xs text-text-secondary">{selectedStudent.email} | {selectedStudent.studentId}</p>
+                  <p className="break-words text-xs leading-5 text-text-secondary">{selectedStudent.email} | {selectedStudent.studentId}</p>
                   <p className="text-xs text-text-secondary">Department: {selectedStudent.department?.name || "-"}</p>
                   <p className="text-xs text-text-secondary">Year: {selectedStudent.year ? `${selectedStudent.year} YEAR` : "-"}</p>
                   <p className="text-xs text-text-secondary">Total submissions: {selectedStudent._count?.submissions || 0}</p>
@@ -520,7 +521,7 @@ export default function CollegeAdminStudentsPage() {
                       <div className="space-y-1">
                         {selectedStudent.batches.map((batch) => (
                           <div key={batch.id} className="flex items-center justify-between rounded-md bg-primary/5 px-2 py-1 text-xs">
-                            <span className="text-text-primary">{batch.name}</span>
+                            <span className="min-w-0 break-words text-text-primary">{batch.name}</span>
                           </div>
                         ))}
                       </div>
@@ -529,14 +530,15 @@ export default function CollegeAdminStudentsPage() {
                     <p className="text-xs text-text-secondary italic">No batches assigned yet</p>
                   )}
 
-                  <div className="grid gap-2 border-t border-border pt-2 sm:grid-cols-3">
-                    <select className="h-10 rounded-md border border-border px-3 text-sm sm:col-span-2" value={batchIdInput} onChange={(event) => setBatchIdInput(event.target.value)}>
+                    <div className="grid gap-2 border-t border-border pt-2 md:grid-cols-3">
+                    <select className="h-10 rounded-md border border-border px-3 text-sm md:col-span-2" value={batchIdInput} onChange={(event) => setBatchIdInput(event.target.value)}>
                       <option value="">Select batch to add</option>
                       {Array.isArray(batches) && batches.map((batch) => (
                         <option key={batch.id} value={batch.id}>{batch.name} ({batch.department?.name || "-"})</option>
                       ))}
                     </select>
                     <Button
+                      className="w-full"
                       onClick={() => assignBatchMutation.mutate({ studentId: selectedStudent.id, batchId: batchIdInput })}
                       disabled={assignBatchMutation.isPending || !batchIdInput}
                     >
@@ -571,7 +573,7 @@ export default function CollegeAdminStudentsPage() {
                   setYearPromotionVerified(false);
                 }}
                 placeholder={YEAR_PROMOTION_CONFIRMATION}
-                className="max-w-md"
+                className="w-full md:max-w-md"
               />
             </div>
             <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-border bg-background px-3 py-3 text-sm text-text-secondary">
@@ -587,6 +589,7 @@ export default function CollegeAdminStudentsPage() {
             <div className="flex flex-col gap-2 text-xs text-text-secondary sm:flex-row sm:items-center sm:justify-between">
               <p>Verification text must exactly match: {YEAR_PROMOTION_CONFIRMATION}</p>
               <Button
+                className="w-full sm:w-auto"
                 variant="destructive"
                 onClick={() => promoteStudentsYearMutation.mutate({ confirmationText: yearPromotionConfirmation })}
                 disabled={

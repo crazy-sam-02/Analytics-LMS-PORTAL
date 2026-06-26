@@ -624,29 +624,30 @@ export default function StudentsPage() {
             {!filters.collegeId ? <p className="text-sm text-text-secondary">Select a college to view students.</p> : null}
             {filters.collegeId && visibleStudents.length === 0 ? <p className="text-sm text-text-secondary">No students found.</p> : null}
             {visibleStudents.map((student) => (
-              <div key={student.id} className="flex items-center justify-between rounded-xl border border-border px-3 py-2">
-                <div>
-                  <p className="font-medium text-text-primary">{student.fullName}</p>
-                  <p className="text-xs text-text-secondary">{student.email} • {student.studentId} • {student.college?.name} • Year {student.year || "-"}</p>
+              <div key={student.id} className="flex flex-col gap-3 rounded-xl border border-border px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <p className="truncate font-medium text-text-primary">{student.fullName}</p>
+                  <p className="mt-1 break-words text-xs leading-5 text-text-secondary">{student.email} • {student.studentId} • {student.college?.name} • Year {student.year || "-"}</p>
                 </div>
-                <div className="flex items-center justify-center gap-4">
-                  <Button size="sm" variant="destructive" onClick={() => openResetConfirm(student)} disabled={resetPasswordMutation.isPending}>
+                <div className="grid grid-cols-1 gap-2 sm:flex sm:shrink-0 sm:items-center sm:justify-end">
+                  <Button className="w-full sm:w-auto" size="sm" variant="destructive" onClick={() => openResetConfirm(student)} disabled={resetPasswordMutation.isPending}>
                     Reset Password
                   </Button>
-                  <Button size="sm" className="bg-blue-600 text-white hover:bg-blue-700 px-4 py-2 rounded-md" onClick={() => openEditForm(student)}>
+                  <Button size="sm" className="w-full rounded-md bg-blue-600 px-4 py-2 text-white hover:bg-blue-700 sm:w-auto" onClick={() => openEditForm(student)}>
                     Edit
                   </Button>
-                  <Button size="sm" className="bg-gray-600 text-white hover:bg-red-700 px-4 py-2 rounded-md" onClick={() => setPendingDelete(student)}>
+                  <Button size="sm" className="w-full rounded-md bg-gray-600 px-4 py-2 text-white hover:bg-red-700 sm:w-auto" onClick={() => setPendingDelete(student)}>
                     Delete
                   </Button>
                 </div>
               </div>
             ))}
             {(studentTotalPages || 1) > 1 ? (
-              <div className="flex items-center justify-between border-t border-border pt-2 text-xs text-text-secondary">
+              <div className="flex flex-col gap-3 border-t border-border pt-3 text-xs text-text-secondary sm:flex-row sm:items-center sm:justify-between">
                 <p>Page {studentCurrentPage} of {studentTotalPages || 1}</p>
-                <div className="flex items-center gap-2">
+                <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center">
                   <Button
+                    className="w-full sm:w-auto"
                     variant="outline"
                     size="sm"
                     disabled={studentCurrentPage <= 1}
@@ -659,6 +660,7 @@ export default function StudentsPage() {
                     Previous
                   </Button>
                   <Button
+                    className="w-full sm:w-auto"
                     variant="outline"
                     size="sm"
                     disabled={studentCurrentPage >= studentTotalPages}
