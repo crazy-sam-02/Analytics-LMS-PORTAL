@@ -158,6 +158,7 @@ describe("high-risk route rate limit wiring", () => {
         createTest: mockMiddleware,
         getTests: mockMiddleware,
         getTestById: mockMiddleware,
+        getTestShareLink: mockMiddleware,
         duplicateTest: mockMiddleware,
         cloneTest: mockMiddleware,
         updateTest: mockMiddleware,
