@@ -15,6 +15,7 @@ const {
   getScopedDepartmentId,
   isCollegeAdminRequest,
 } = require("../../utils/admin-scope");
+const env = require("../../config/env");
 const {
   buildAdminTestVisibilityWhereForRequest,
   assertAdminCanViewTest,
@@ -48,6 +49,12 @@ const ASSIGNMENT_METHOD = {
   BATCH_WISE: "batch_wise",
 };
 const DEFAULT_STUDENT_YEARS = [1, 2, 3, 4];
+const DEFAULT_TEST_INSTRUCTIONS = [
+  "Read every question carefully before answering.",
+  "Do not refresh, close, or switch tabs unless instructed by an invigilator.",
+  "Keep a stable internet connection. Saved answers will sync automatically when possible.",
+  "Submit before the timer ends. The system may auto-submit when time expires.",
+].join("\n");
 
 const ALLOWED_TRANSITIONS = {
   [TEST_STATUS.DRAFT]: [TEST_STATUS.SCHEDULED, TEST_STATUS.LIVE, TEST_STATUS.ARCHIVED],
@@ -274,6 +281,17 @@ const normalizeStudentYears = (years) => {
   return normalized.length ? normalized.sort((a, b) => a - b) : DEFAULT_STUDENT_YEARS;
 };
 
+const buildStudentTestLink = (testId) => {
+  const baseUrl = String(env.frontendOrigin || "").replace(/\/+$/, "");
+  return `${baseUrl || "http://localhost:5173"}/tests/${encodeURIComponent(testId)}/instructions`;
+};
+
+const withShareLink = (test) => ({
+  ...test,
+  instructions: test?.instructions || DEFAULT_TEST_INSTRUCTIONS,
+  shareLink: test?.id ? buildStudentTestLink(test.id) : null,
+});
+
 const getAssignmentDepartmentIdForRequest = (req, requestedDepartmentId = null) => {
   const scopedDepartmentId = getScopedDepartmentId(req, { requiredForDepartmentAdmin: false });
   if (scopedDepartmentId) {
@@ -355,6 +373,7 @@ const createTest = asyncHandler(async (req, res) => {
   const {
     name,
     description,
+    instructions,
     subject,
     durationMins,
     totalMarks,
@@ -417,6 +436,7 @@ const createTest = asyncHandler(async (req, res) => {
       data: {
         title: name,
         description,
+        instructions: instructions || DEFAULT_TEST_INSTRUCTIONS,
         subject,
         durationMins,
         totalMarks,
@@ -473,9 +493,10 @@ const createTest = asyncHandler(async (req, res) => {
       collegeId,
       adminId,
       testId: createdTest.id,
-      afterState: {
+    afterState: {
         title: name,
         subject,
+        hasInstructions: Boolean(instructions || DEFAULT_TEST_INSTRUCTIONS),
         publishState,
         assignmentMethod: resolvedAssignmentMethod,
         batchIds: resolvedBatchIds,
@@ -490,7 +511,7 @@ const createTest = asyncHandler(async (req, res) => {
   // Invalidate any cached test data so students see fresh content.
   await invalidateTestCache(test.id);
 
-  res.status(201).json(attachResolvedTestConfiguration(test));
+  res.status(201).json(withShareLink(attachResolvedTestConfiguration(test)));
 });
 
 const getTests = asyncHandler(async (req, res) => {
@@ -605,7 +626,7 @@ const getTests = asyncHandler(async (req, res) => {
       }
 
       return {
-        ...attachResolvedTestConfiguration(item),
+        ...withShareLink(attachResolvedTestConfiguration(item)),
         status: lifecycleStatus,
         ...decorateAdminTestAccess(req, item),
       };
@@ -672,9 +693,53 @@ const getTestById = asyncHandler(async (req, res) => {
   }
 
   res.status(200).json({
-    ...attachResolvedTestConfiguration(test),
+    ...withShareLink(attachResolvedTestConfiguration(test)),
     status: lifecycleStatus,
     ...decorateAdminTestAccess(req, test),
+  });
+});
+
+const getTestShareLink = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
+  const { testId } = req.params;
+  const collegeId = req.collegeId;
+
+  const test = await db.test.findFirst({
+    where: { id: testId, collegeId },
+    include: {
+      createdByAdmin: {
+        select: {
+          id: true,
+          role: true,
+        },
+      },
+      _count: {
+        select: {
+          questions: true,
+          submissions: true,
+        },
+      },
+    },
+  });
+
+  if (!test) {
+    throw new ApiError(404, "Test not found");
+  }
+
+  await assertAdminCanViewTest({ db, req, test });
+
+  res.status(200).json({
+    testId: test.id,
+    title: test.title,
+    status: deriveLifecycleStatus(test),
+    isPublished: Boolean(test.isPublished),
+    startsAt: test.startsAt,
+    endsAt: test.endsAt,
+    questionCount: Number(test?._count?.questions || 0),
+    submissionCount: Number(test?._count?.submissions || 0),
+    shareLink: buildStudentTestLink(test.id),
+    instructions: test.instructions || DEFAULT_TEST_INSTRUCTIONS,
   });
 });
 
@@ -714,6 +779,7 @@ const duplicateTest = asyncHandler(async (req, res) => {
       data: {
         title: `${source.title} (Copy)`,
         description: source.description,
+        instructions: source.instructions || DEFAULT_TEST_INSTRUCTIONS,
         subject: source.subject,
         durationMins: source.durationMins,
         totalMarks: source.totalMarks,
@@ -1010,6 +1076,7 @@ const updateTest = asyncHandler(async (req, res) => {
       data: {
         title: req.body.name ?? existing.title,
         description: req.body.description ?? existing.description,
+        instructions: req.body.instructions ?? existing.instructions ?? DEFAULT_TEST_INSTRUCTIONS,
         subject: req.body.subject ?? existing.subject,
         durationMins: req.body.durationMins ?? existing.durationMins,
         totalMarks: req.body.totalMarks ?? existing.totalMarks,
@@ -1559,6 +1626,7 @@ module.exports = {
   createTest,
   getTests,
   getTestById,
+  getTestShareLink,
   duplicateTest,
   cloneTest,
   updateTest,

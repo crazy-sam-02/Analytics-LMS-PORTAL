@@ -17,6 +17,8 @@ const SubmissionValidationSchema = new mongoose.Schema(
       default: "IN_PROGRESS",
     },
     startedAt: { type: Date, default: () => new Date() },
+    agreedToInstructions: { type: Boolean, default: false },
+    agreedAt: { type: Date, default: null },
     submittedAt: { type: Date, default: null },
     timeSpentSeconds: { type: Number, min: 0, default: 0 },
     violationCount: { type: Number, min: 0, default: 0 },

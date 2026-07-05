@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { CalendarClock, Clock3, Rocket } from "lucide-react";
-import { upcomingTestsQueryOptions, testSessionQueryOptions } from "@/services/studentQueries";
-import { studentApi } from "@/services/studentApi";
+import { upcomingTestsQueryOptions, testAccessQueryOptions } from "@/services/studentQueries";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -68,9 +67,6 @@ export default function UpcomingTestsPage() {
   const previousIdsRef = useRef(new Set());
 
   const { data } = useQuery(upcomingTestsQueryOptions());
-  const startAttemptMutation = useMutation({
-    mutationFn: ({ test_id }) => studentApi.startAttempt({ test_id }),
-  });
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -193,26 +189,14 @@ export default function UpcomingTestsPage() {
                 ) : (
                   <Button
                     className="h-10 rounded-lg bg-primary text-primary-foreground hover:bg-primary-dark"
-                    disabled={startAttemptMutation.isPending}
                     onMouseEnter={() => {
-                      queryClient.prefetchQuery(testSessionQueryOptions(test.id));
+                      queryClient.prefetchQuery(testAccessQueryOptions(test.id));
                     }}
                     onClick={() => {
-                      startAttemptMutation
-                        .mutateAsync({ test_id: test.id })
-                        .then((payload) => {
-                          const attemptId = payload?.attempt_id || payload?.attemptId || payload?.submission?.id;
-                          if (!attemptId) {
-                            throw new Error("Attempt id missing");
-                          }
-                          navigate(`/test/${attemptId}`);
-                        })
-                        .catch(() => {
-                          toast.error("Unable to start test. Please retry.");
-                        });
+                      navigate(`/tests/${test.id}/instructions`);
                     }}
                   >
-                    Attend Now
+                    View Instructions
                   </Button>
                 )}
               </div>

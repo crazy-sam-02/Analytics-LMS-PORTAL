@@ -1145,9 +1145,19 @@ export default function TestCreationDialog({ context = "admin", onCreated, hideT
                       <Textarea
                         className="max-w-2xl"
                         rows={4}
-                        placeholder="Add short instructions or topic coverage for this test"
+                        placeholder="Add a short overview or topic coverage for this test"
                         value={form.description}
                         onChange={(e) => dispatch(updateTestCreationField({ key: "description", value: e.target.value }))}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm text-text-secondary">Student Instructions</label>
+                      <Textarea
+                        className="max-w-2xl"
+                        rows={6}
+                        placeholder="One instruction per line. Students must agree before starting."
+                        value={form.instructions}
+                        onChange={(e) => dispatch(updateTestCreationField({ key: "instructions", value: e.target.value }))}
                       />
                     </div>
                     <div className="space-y-2">

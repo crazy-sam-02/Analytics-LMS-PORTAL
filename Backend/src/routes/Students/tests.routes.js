@@ -6,6 +6,8 @@ const { createRateLimiter, examWriteKey } = require("../../middleware/rate-limit
 const {
   listOngoingTests,
   listUpcomingTests,
+  getTestAccessDetails,
+  agreeToTestInstructions,
   startTest,
   getSession,
   saveAnswer,
@@ -15,6 +17,7 @@ const {
 } = require("../../controllers/Students/tests.controller");
 const {
   startTestSchema,
+  agreeInstructionsSchema,
   saveAnswerSchema,
   submitSchema,
   violationSchema,
@@ -95,6 +98,8 @@ const examSubmitLimiter = createRateLimiter({
 
 router.get("/ongoing", authenticate, examListLimiter, listOngoingTests);
 router.get("/upcoming", authenticate, examListLimiter, listUpcomingTests);
+router.get("/:testId/access", authenticate, examSessionLimiter, validate(testIdOnlySchema), getTestAccessDetails);
+router.post("/:testId/agree", authenticate, examStartLimiter, validate(agreeInstructionsSchema), agreeToTestInstructions);
 router.post("/:testId/start", authenticate, examStartLimiter, validate(startTestSchema), startTest);
 router.get("/:testId/session", authenticate, examSessionLimiter, validate(testIdOnlySchema), getSession);
 router.post("/:testId/answer", authenticate, examAnswerLimiter, validate(saveAnswerSchema), saveAnswer);

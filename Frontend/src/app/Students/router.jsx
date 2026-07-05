@@ -1,6 +1,6 @@
 import { Suspense, createElement, lazy, useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
-import { Navigate, Outlet, RouterProvider, createBrowserRouter } from "react-router-dom";
+import { Navigate, Outlet, RouterProvider, createBrowserRouter, useLocation } from "react-router-dom";
 import {
   accountInactiveDetected,
   applyRefreshPayload,
@@ -98,6 +98,7 @@ const SubmissionPage = lazyWithStudentReducers(() => import("@/pages/Students/Su
 const ResultsPage = lazyWithStudentReducers(() => import("@/pages/Students/ResultsPage"));
 const ResumeAttemptPage = lazyWithStudentReducers(() => import("@/pages/Students/ResumeAttemptPage"));
 const TestEnvironmentPage = lazyWithStudentReducers(() => import("@/pages/Students/TestEnvironmentPage"));
+const TestInstructionsPage = lazyWithStudentReducers(() => import("@/pages/Students/TestInstructionsPage"));
 const EventsPage = lazyWithStudentReducers(() => import("@/pages/Students/EventsPage"));
 const LearningResourcesPage = lazyWithStudentReducers(() => import("@/pages/Students/LearningResourcesPage"));
 const ProfilePage = lazyWithStudentReducers(() => import("@/pages/Students/ProfilePage"));
@@ -222,12 +223,15 @@ function AuthBootstrap() {
 
 function ProtectedRoute() {
   const user = useSelector((state) => state.auth.user);
-  return user ? <Outlet /> : <Navigate to="/login" replace />;
+  const location = useLocation();
+  return user ? <Outlet /> : <Navigate to="/login" replace state={{ from: `${location.pathname}${location.search}` }} />;
 }
 
 function PublicOnlyRoute() {
   const user = useSelector((state) => state.auth.user);
-  return user ? <Navigate to="/resume" replace /> : <Outlet />;
+  const location = useLocation();
+  const from = location.state?.from;
+  return user ? <Navigate to={from || "/resume"} replace /> : <Outlet />;
 }
 
 const router = createBrowserRouter([
@@ -270,6 +274,10 @@ const router = createBrowserRouter([
           {
             path: "/tests/:testId/take",
             element: <PageRoute Page={TestEnvironmentPage} fallback={<div className="grid min-h-screen place-items-center text-text-secondary">Loading secure test environment...</div>} />,
+          },
+          {
+            path: "/tests/:testId/instructions",
+            element: <PageRoute Page={TestInstructionsPage} />,
           },
           {
             path: "/test/:attemptId",

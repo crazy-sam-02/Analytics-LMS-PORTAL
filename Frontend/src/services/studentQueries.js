@@ -30,6 +30,14 @@ export const attemptResultQueryOptions = (attemptId) => ({
   retry: false,
 });
 
+export const testAccessQueryOptions = (testId) => ({
+  queryKey: ["student", "tests", "access", testId],
+  queryFn: () => studentApi.getTestAccessDetails(testId),
+  staleTime: 15 * 1000,
+  refetchOnWindowFocus: true,
+  retry: false,
+});
+
 export const leaderboardQueryOptions = (filters = {}) => ({
   queryKey: ["student", "leaderboard", filters],
   queryFn: () => studentApi.getLeaderboard(filters),

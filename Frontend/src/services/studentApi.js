@@ -291,7 +291,7 @@ export const studentApi = {
         const clientSessionId = getOrCreateTestClientId();
         const response = await httpClient.post(
           `/tests/${test_id}/start`,
-          { clientSessionId },
+          { clientSessionId, agreedToInstructions: true },
           { headers: testSessionHeaders() }
         );
         return withServerTime(response).data;
@@ -681,6 +681,24 @@ export const studentApi = {
         items: Array.isArray(data) ? data : [],
         serverTime,
       };
+    } catch (error) {
+      throw toApiError(error);
+    }
+  },
+
+  getTestAccessDetails: async (testId) => {
+    try {
+      const response = await httpClient.get(`/tests/${testId}/access`);
+      return withServerTime(response).data;
+    } catch (error) {
+      throw toApiError(error);
+    }
+  },
+
+  agreeToTestInstructions: async (testId) => {
+    try {
+      const response = await httpClient.post(`/tests/${testId}/agree`, { agreed: true });
+      return withServerTime(response).data;
     } catch (error) {
       throw toApiError(error);
     }

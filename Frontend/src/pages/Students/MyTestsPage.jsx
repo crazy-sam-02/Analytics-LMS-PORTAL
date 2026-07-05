@@ -1,12 +1,9 @@
 import { useEffect, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
 import { useDispatch, useSelector } from "react-redux";
 import { useNavigate } from "react-router-dom";
-import { toast } from "sonner";
 import { Sigma, Brain, Timer, CalendarClock, Sparkles } from "lucide-react";
 import { TestsSkeleton } from "@/components/common/page-skeletons";
 import { fetchMyTests } from "@/features/Students/testSlice";
-import { studentApi } from "@/services/studentApi";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -20,9 +17,6 @@ export default function MyTestsPage() {
   const navigate = useNavigate();
   const { ongoing, upcoming, testsLoading } = useSelector((state) => state.test);
   const [nowMs, setNowMs] = useState(0);
-  const startAttemptMutation = useMutation({
-    mutationFn: ({ test_id }) => studentApi.startAttempt({ test_id }),
-  });
 
   useEffect(() => {
     dispatch(fetchMyTests());
@@ -41,7 +35,7 @@ export default function MyTestsPage() {
     return <TestsSkeleton />;
   }
 
-  const openTest = async (test) => {
+  const openTest = (test) => {
     if (!test?.id) {
       return;
     }
@@ -51,18 +45,7 @@ export default function MyTestsPage() {
       return;
     }
 
-    try {
-      const payload = await startAttemptMutation.mutateAsync({ test_id: test.id });
-      const attemptId = payload?.attempt_id || payload?.attemptId || payload?.submission?.id;
-
-      if (!attemptId) {
-        throw new Error("Attempt id missing");
-      }
-
-      navigate(`/test/${attemptId}`);
-    } catch {
-      toast.error("Unable to open test. Please retry.");
-    }
+    navigate(`/tests/${test.id}/instructions`);
   };
 
   return (
@@ -113,7 +96,6 @@ export default function MyTestsPage() {
                   ) : (
                     <Button
                       className="mt-4 h-10 rounded-lg bg-primary px-4 text-sm font-semibold shadow-md shadow-primary/20 hover:bg-primary-dark"
-                      disabled={startAttemptMutation.isPending}
                       onClick={() => openTest(test)}
                     >
                       {test.canTryAgain ? "Try Again" : "Resume"}

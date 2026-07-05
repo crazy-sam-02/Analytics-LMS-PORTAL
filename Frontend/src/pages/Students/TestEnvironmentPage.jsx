@@ -12,7 +12,6 @@ import {
   setAnswer,
   setPendingSubmit,
   setCurrentQuestionIndex,
-  startAttempt,
   submitAttempt,
   toggleMarkedForReview,
 } from "@/features/Students/testSlice";
@@ -86,9 +85,9 @@ export default function TestEnvironmentPage() {
     }
 
     if (testId) {
-      dispatch(startAttempt({ test_id: testId }));
+      navigate(`/tests/${testId}/instructions`, { replace: true });
     }
-  }, [attemptId, dispatch, testId]);
+  }, [attemptId, dispatch, navigate, testId]);
 
   useEffect(() => {
     if (!attemptId && attempt_id) {

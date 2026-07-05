@@ -198,4 +198,50 @@ describe("student tests controller", () => {
     expect(db.testSession.findUnique).not.toHaveBeenCalled();
     expect(getCachedTestQuestions).not.toHaveBeenCalled();
   });
+
+  it("requires persisted instruction agreement before creating a new attempt", async () => {
+    const db = {
+      test: {
+        findUnique: jest.fn(async () => ({
+          id: "test-1",
+          collegeId: "college-1",
+          title: "Published test",
+          startsAt: new Date(Date.now() - 60_000),
+          endsAt: new Date(Date.now() + 60_000),
+          durationMins: 60,
+          attemptsAllowed: 1,
+          assignmentMethod: "everyone",
+          isPublished: true,
+          status: "LIVE",
+          instructions: "Read first",
+          questions: [],
+        })),
+      },
+      testBatch: {
+        findFirst: jest.fn(async () => null),
+      },
+      testSession: {
+        findUnique: jest.fn(async () => null),
+      },
+      testInstructionAgreement: {
+        findUnique: jest.fn(async () => null),
+      },
+      submission: {
+        findFirst: jest.fn(),
+        create: jest.fn(),
+      },
+    };
+    models.init.mockResolvedValue({ dbClient: db });
+
+    await expect(invoke(startTest, createStartRequest())).rejects.toMatchObject({
+      statusCode: 428,
+      code: "TEST_INSTRUCTIONS_AGREEMENT_REQUIRED",
+    });
+
+    expect(db.testInstructionAgreement.findUnique).toHaveBeenCalledWith({
+      where: { userId_testId: { userId: "student-1", testId: "test-1" } },
+    });
+    expect(db.submission.findFirst).not.toHaveBeenCalled();
+    expect(db.submission.create).not.toHaveBeenCalled();
+  });
 });

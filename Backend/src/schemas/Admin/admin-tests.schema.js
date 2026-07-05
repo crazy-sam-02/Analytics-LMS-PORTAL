@@ -59,6 +59,7 @@ const createAdminTestPayloadSchema = z.object({
   body: z.object({
     name: z.string().trim().min(3),
     description: z.string().trim().max(3000).optional().default(""),
+    instructions: z.string().trim().max(5000).optional().default(""),
     subject: z.string().trim().min(2),
     durationMins: z.number().int().min(5).max(480),
     totalMarks: z.number().int().min(1),

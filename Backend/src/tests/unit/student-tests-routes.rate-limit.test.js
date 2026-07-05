@@ -22,6 +22,8 @@ const mockEnv = {
 const mockControllers = {
   listOngoingTests: mockAsyncHandler,
   listUpcomingTests: mockAsyncHandler,
+  getTestAccessDetails: mockAsyncHandler,
+  agreeToTestInstructions: mockAsyncHandler,
   startTest: mockAsyncHandler,
   getSession: mockAsyncHandler,
   saveAnswer: mockAsyncHandler,
@@ -34,6 +36,7 @@ const mockControllers = {
 
 const mockSchemas = {
   startTestSchema: {},
+  agreeInstructionsSchema: {},
   saveAnswerSchema: {},
   submitSchema: {},
   violationSchema: {},

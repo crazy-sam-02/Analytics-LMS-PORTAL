@@ -535,6 +535,7 @@ const createGlobalTest = asyncHandler(async (req, res) => {
         title: payload.title,
         subject: payload.subject,
         description: payload.description || null,
+        instructions: payload.instructions || null,
         durationMins: payload.durationMins,
         totalMarks: payload.totalMarks,
         attemptsAllowed: payload.attemptsAllowed,

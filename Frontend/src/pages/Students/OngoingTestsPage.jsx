@@ -101,10 +101,6 @@ export default function OngoingTestsPage() {
     },
   });
 
-  const startMutation = useMutation({
-    mutationFn: ({ test_id }) => studentApi.startAttempt({ test_id }),
-  });
-
   const attempts = useMemo(() => {
     const items = Array.isArray(data?.items) ? data.items : [];
     return items.map((test) => {
@@ -226,7 +222,7 @@ export default function OngoingTestsPage() {
                 </div>
 
                 {!test.autoSubmitted && !test.isCompleted ? (
-                  <Button className="h-10 rounded-lg bg-primary text-primary-foreground hover:bg-primary-dark" onClick={() => setContinueTarget(test)} disabled={startMutation.isPending}>
+                  <Button className="h-10 rounded-lg bg-primary text-primary-foreground hover:bg-primary-dark" onClick={() => setContinueTarget(test)}>
                     <PlayCircle className="mr-2 size-4" />
                     {test.canTryAgain ? "Attend" : "Continue"}
                   </Button>
@@ -329,18 +325,7 @@ export default function OngoingTestsPage() {
                 const target = continueTarget;
                 setContinueTarget(null);
                 if (target?.id) {
-                  startMutation
-                    .mutateAsync({ test_id: target.id })
-                    .then((payload) => {
-                      const attemptId = payload?.attempt_id || payload?.attemptId || payload?.submission?.id;
-                      if (!attemptId) {
-                        throw new Error("Attempt id missing");
-                      }
-                      navigate(`/test/${attemptId}`);
-                    })
-                    .catch(() => {
-                      navigate(`/tests/${target.id}/take`);
-                    });
+                  navigate(`/tests/${target.id}/instructions`);
                 }
               }}
             >

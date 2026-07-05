@@ -686,6 +686,7 @@ export const adminApi = {
   getDashboard: () => adminApiRequest("/admin/dashboard/summary"),
   getTests: (params = "") => adminApiRequest(`/admin/tests${params}`),
   getTestById: (testId) => adminApiRequest(`/admin/tests/${testId}`),
+  getTestShareLink: (testId) => adminApiRequest(`/admin/tests/${testId}/share-link`),
   createTest: (body) => adminApiRequest("/admin/tests", { method: "POST", body: JSON.stringify(body) }),
   updateTest: (testId, body) => adminApiRequest(`/admin/tests/${testId}`, { method: "PATCH", body: JSON.stringify(body) }),
   transitionTestStatus: (testId, action) =>

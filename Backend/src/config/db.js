@@ -35,6 +35,7 @@ const MODEL_TO_COLLECTION = {
   studentRefreshToken: "studentRefreshToken",
   adminRefreshToken: "adminRefreshToken",
   testSession: "testSession",
+  testInstructionAgreement: "testInstructionAgreement",
   testBatch: "testBatch",
   studentPassoutCohort: "studentPassoutCohort",
   reportJob: "reportJob",
@@ -176,6 +177,10 @@ const RELATIONS = {
     user: { model: "student", type: "one", sourceField: "userId", targetField: "id" },
     test: { model: "test", type: "one", sourceField: "testId", targetField: "id" },
   },
+  testInstructionAgreement: {
+    user: { model: "student", type: "one", sourceField: "userId", targetField: "id" },
+    test: { model: "test", type: "one", sourceField: "testId", targetField: "id" },
+  },
   testBatch: {
     test: { model: "test", type: "one", sourceField: "testId", targetField: "id" },
     batch: { model: "batch", type: "one", sourceField: "batchId", targetField: "id" },
@@ -243,6 +248,7 @@ const DEFAULTS = {
     proctoringConfig: SYSTEM_DEFAULT_TEST_SETTINGS.proctoringConfig,
     isGlobal: false,
     assignedTo: [],
+    instructions: null,
   },
   question: { options: [], marks: 1 },
   questionBank: { options: [], marks: 1, difficulty: "MEDIUM" },
@@ -266,6 +272,8 @@ const DEFAULTS = {
     startedAt: () => new Date(),
     timeSpentSeconds: 0,
     violationCount: 0,
+    agreedToInstructions: false,
+    agreedAt: null,
   },
   answer: { markedForReview: false },
   event: { isGlobal: false },
@@ -274,6 +282,7 @@ const DEFAULTS = {
   superAdminRefreshToken: {},
   passwordResetToken: {},
   testSession: { startedAt: () => new Date() },
+  testInstructionAgreement: { agreedAt: () => new Date() },
   testBatch: {},
   studentPassoutCohort: { status: "PROCESSING", studentIds: [], departmentStats: [], batchStats: [] },
   violation: { metadata: null },
@@ -429,6 +438,7 @@ const buildRelationLookupFilter = (relation, doc) => {
 // --- Unique compound key definitions for models that use compound findUnique ---
 const COMPOUND_UNIQUE_KEYS = {
   testSession: { userId_testId: ["userId", "testId"] },
+  testInstructionAgreement: { userId_testId: ["userId", "testId"] },
   answer: { submissionId_questionId: ["submissionId", "questionId"] },
 };
 

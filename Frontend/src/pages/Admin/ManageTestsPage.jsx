@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
 import { adminApi } from "@/services/api";
+import { Copy } from "lucide-react";
 
 const STATUS_TONE = {
   DRAFT: "bg-muted text-text-secondary border-border",
@@ -99,6 +100,23 @@ const transitionConfirmationText = (testTitle, action) => {
     default:
       return `Apply transition ${action} for "${testTitle}"?`;
   }
+};
+
+const writeClipboardText = async (text) => {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  document.body.removeChild(textarea);
 };
 
 export default function ManageTestsPage() {
@@ -311,6 +329,20 @@ export default function ManageTestsPage() {
     }
   };
 
+  const copyShareLink = async (test) => {
+    try {
+      const payload = test?.shareLink ? test : await adminApi.getTestShareLink(test.id);
+      const link = payload?.shareLink;
+      if (!link) {
+        throw new Error("Share link is not available");
+      }
+      await writeClipboardText(link);
+      toast.success("Test link copied.");
+    } catch (error) {
+      toast.error(error?.message || "Unable to copy test link.");
+    }
+  };
+
   const openCreateDialog = () => {
     dispatch(setTestCreationContext("admin"));
     dispatch(openTestCreationDialog());
@@ -422,6 +454,15 @@ export default function ManageTestsPage() {
                               Reports
                             </Button>
                           ) : null}
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => copyShareLink(test)}
+                            disabled={!test.id}
+                          >
+                            <Copy className="mr-1 size-3.5" />
+                            Link
+                          </Button>
                           {canMonitor && normalizeStatus(test.status) === "LIVE" ? (
                             <Button
                               size="sm"

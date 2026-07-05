@@ -24,7 +24,16 @@ const violationTypeSchema = z.enum([
 const startTestSchema = z.object({
   body: z.object({
     clientSessionId: optionalClientSessionId,
+    agreedToInstructions: z.boolean().optional(),
   }).optional().default({}),
+  params: paramsWithTestId,
+  query: z.object({}).optional().default({}),
+});
+
+const agreeInstructionsSchema = z.object({
+  body: z.object({
+    agreed: z.literal(true),
+  }),
   params: paramsWithTestId,
   query: z.object({}).optional().default({}),
 });
@@ -187,6 +196,7 @@ const attemptIdOnlySchema = z.object({
 
 module.exports = {
   startTestSchema,
+  agreeInstructionsSchema,
   saveAnswerSchema,
   saveAnswerCompatSchema,
   attemptAnswersCompatSchema,

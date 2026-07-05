@@ -19,6 +19,7 @@ const {
 	createTest,
 	getTests,
 	getTestById,
+	getTestShareLink,
 	duplicateTest,
 	cloneTest,
 	updateTest,
@@ -103,6 +104,14 @@ router.get(
 	requireAnyPermission("edit_test", "manage_questions", "view_tests"),
 	requireSameDepartment("departmentId"),
 	getTests
+);
+router.get(
+	"/:testId/share-link",
+	authenticatePlatformAdmin,
+	requireAnyPermission("edit_test", "manage_questions", "view_tests"),
+	validate(testIdParamSchema),
+	departmentMatch(async (id) => db.test.findFirst({ where: { id } })),
+	getTestShareLink
 );
 router.get(
 	"/:testId",

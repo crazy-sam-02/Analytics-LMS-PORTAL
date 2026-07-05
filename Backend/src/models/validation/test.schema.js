@@ -14,6 +14,7 @@ const TestValidationSchema = new mongoose.Schema(
     title: { type: String, required: true, trim: true, minlength: 3 },
     subject: { type: String, default: null, trim: true },
     description: { type: String, default: null, trim: true },
+    instructions: { type: String, default: null, trim: true },
     durationMins: { type: Number, min: 1, default: SYSTEM_DEFAULT_TEST_SETTINGS.durationMins },
     totalMarks: { type: Number, min: 0, default: 0 },
     attemptsAllowed: { type: Number, min: 1, default: SYSTEM_DEFAULT_TEST_SETTINGS.attemptsAllowed },

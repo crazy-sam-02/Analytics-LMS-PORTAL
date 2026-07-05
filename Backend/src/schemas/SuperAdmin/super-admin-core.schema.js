@@ -328,6 +328,7 @@ const createGlobalTestSchema = z.object({
     title: z.string().trim().min(3),
     subject: z.string().trim().min(2),
     description: z.string().trim().optional(),
+    instructions: z.string().trim().max(5000).optional().default(""),
     durationMins: z.number().int().min(5).max(480),
     totalMarks: z.number().int().min(1),
     attemptsAllowed: z.number().int().min(1).max(10).default(1),

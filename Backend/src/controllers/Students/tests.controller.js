@@ -35,6 +35,12 @@ const {
 const HEARTBEAT_STALE_SECONDS = 20;
 const HEARTBEAT_FORCE_AUTOSUBMIT_SECONDS = 15 * 60;
 const STUDENT_BLOCKED_TEST_STATUSES = new Set(["DRAFT", "ARCHIVED", "COMPLETED"]);
+const DEFAULT_TEST_INSTRUCTIONS = [
+  "Read every question carefully before answering.",
+  "Do not refresh, close, or switch tabs unless instructed by an invigilator.",
+  "Keep a stable internet connection. Saved answers will sync automatically when possible.",
+  "Submit before the timer ends. The system may auto-submit when time expires.",
+].join("\n");
 const SENSITIVE_QUESTION_FIELDS = new Set([
   "answer",
   "answer_key",
@@ -182,6 +188,96 @@ const assertStudentCanStartPublishedTest = (test = {}) => {
   if (!test?.isPublished || STUDENT_BLOCKED_TEST_STATUSES.has(status)) {
     throw new ApiError(403, "Test is not available for students", null, "TEST_NOT_AVAILABLE");
   }
+};
+
+const assertStudentTestAccess = async ({ db, test, student }) => {
+  assertStudentCanStartPublishedTest(test);
+
+  const assignedViaMapping = await db.testBatch.findFirst({
+    where: {
+      testId: test.id,
+      batchId: { in: student.batchIds || [] },
+    },
+  });
+
+  if (!isStudentAssignedToTest({
+    test,
+    student,
+    hasBatchAssignment: Boolean(assignedViaMapping),
+  })) {
+    throw new ApiError(403, "Student is not assigned to this test", null, "TEST_NOT_ASSIGNED");
+  }
+
+  return { assignedViaMapping };
+};
+
+const assertTestWindowOpen = (test = {}) => {
+  const now = new Date();
+  const bypassWindow =
+    process.env.NODE_ENV !== "production" &&
+    String(process.env.K6_BYPASS_TEST_WINDOW || "").toLowerCase().match(/^(true|1|yes|on)$/);
+
+  if (!bypassWindow && (test.startsAt > now || test.endsAt < now)) {
+    throw new ApiError(403, "Test is not active", null, "TEST_NOT_ACTIVE");
+  }
+
+  return now;
+};
+
+const buildInstructionsVersion = (test = {}) =>
+  crypto
+    .createHash("sha256")
+    .update(String(test.instructions || DEFAULT_TEST_INSTRUCTIONS))
+    .digest("hex")
+    .slice(0, 16);
+
+const hasPersistedInstructionAgreement = async ({ db, userId, testId, test }) => {
+  const agreement = await db.testInstructionAgreement.findUnique({
+    where: { userId_testId: { userId, testId } },
+  });
+
+  return Boolean(agreement && agreement.instructionsVersion === buildInstructionsVersion(test));
+};
+
+const summarizeStudentTest = ({ test, latestSubmission = null, activeSession = null, questionCount = 0 }) => {
+  const attemptsAllowed = Number(test?.attemptsAllowed || 1);
+  const attemptsUsed = Number(latestSubmission?.attemptNumber || 0);
+  const startsAt = test?.startsAt ? new Date(test.startsAt).getTime() : Number.NaN;
+  const endsAt = test?.endsAt ? new Date(test.endsAt).getTime() : Number.NaN;
+  const now = Date.now();
+  const status = String(test?.status || "").toUpperCase();
+  const isWindowOpen = Number.isFinite(startsAt) && Number.isFinite(endsAt) && startsAt <= now && now <= endsAt;
+  const hasActiveAttempt = Boolean(activeSession && !activeSession.endedAt && latestSubmission?.status === "IN_PROGRESS");
+  const attemptsRemaining = Math.max(attemptsAllowed - attemptsUsed, 0);
+
+  return {
+    id: test.id,
+    title: test.title,
+    subject: test.subject,
+    description: test.description || "",
+    instructions: test.instructions || DEFAULT_TEST_INSTRUCTIONS,
+    durationMins: Number(test.durationMins || 0),
+    totalMarks: Number(test.totalMarks || 0),
+    attemptsAllowed,
+    attemptsUsed,
+    attemptsRemaining,
+    status,
+    isPublished: Boolean(test.isPublished),
+    startsAt: test.startsAt,
+    endsAt: test.endsAt,
+    questionCount,
+    hasActiveAttempt,
+    activeSubmissionId: hasActiveAttempt ? latestSubmission.id : null,
+    latestSubmissionStatus: latestSubmission?.status || null,
+    canStart: Boolean(test.isPublished && isWindowOpen && (hasActiveAttempt || attemptsRemaining > 0)),
+    blockedReason: !test.isPublished || STUDENT_BLOCKED_TEST_STATUSES.has(status)
+      ? "TEST_NOT_AVAILABLE"
+      : !isWindowOpen
+        ? now < startsAt ? "TEST_NOT_STARTED" : "TEST_ENDED"
+        : !hasActiveAttempt && attemptsRemaining <= 0
+          ? "MAX_ATTEMPTS_REACHED"
+          : null,
+  };
 };
 
 const heartbeatAgeSeconds = (lastHeartbeatAt) => {
@@ -371,6 +467,109 @@ const listUpcomingTests = asyncHandler(async (req, res) => {
   res.status(200).json(tests.map((test) => attachResolvedTestConfiguration(test)));
 });
 
+const getTestAccessDetails = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
+  const { testId } = req.params;
+  const userId = req.user.id;
+
+  const test = await db.test.findUnique({
+    where: { id: testId },
+    include: {
+      questions: {
+        select: { id: true },
+      },
+    },
+  });
+
+  if (!test) {
+    throw new ApiError(404, "Test not found", null, "TEST_NOT_FOUND");
+  }
+
+  await assertStudentTestAccess({ db, test, student: req.user });
+
+  const [latestSubmission, activeSession] = await Promise.all([
+    db.submission.findFirst({
+      where: { userId, testId },
+      orderBy: { attemptNumber: "desc" },
+    }),
+    db.testSession.findUnique({
+      where: { userId_testId: { userId, testId } },
+    }),
+  ]);
+
+  res.status(200).json({
+    serverTime: Date.now(),
+    test: summarizeStudentTest({
+      test,
+      latestSubmission,
+      activeSession,
+      questionCount: Array.isArray(test.questions) ? test.questions.length : 0,
+    }),
+  });
+});
+
+const agreeToTestInstructions = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
+  const { testId } = req.params;
+
+  const test = await db.test.findUnique({
+    where: { id: testId },
+    include: {
+      questions: {
+        select: { id: true },
+      },
+    },
+  });
+
+  if (!test) {
+    throw new ApiError(404, "Test not found", null, "TEST_NOT_FOUND");
+  }
+
+  await assertStudentTestAccess({ db, test, student: req.user });
+  assertTestWindowOpen(test);
+
+  const agreedAt = new Date();
+  await db.testInstructionAgreement.upsert({
+    where: { userId_testId: { userId: req.user.id, testId } },
+    update: {
+      collegeId: req.user.collegeId,
+      agreedAt,
+      instructionsVersion: buildInstructionsVersion(test),
+    },
+    create: {
+      userId: req.user.id,
+      testId,
+      collegeId: req.user.collegeId,
+      agreedAt,
+      instructionsVersion: buildInstructionsVersion(test),
+    },
+  });
+
+  await createAuditLog({
+    action: "STUDENT_TEST_INSTRUCTIONS_AGREED",
+    targetType: "TEST",
+    targetId: testId,
+    collegeId: req.user.collegeId,
+    testId,
+    afterState: {
+      studentId: req.user.id,
+      agreedAt,
+    },
+  });
+
+  res.status(200).json({
+    ok: true,
+    agreed: true,
+    serverTime: Date.now(),
+    test: summarizeStudentTest({
+      test,
+      questionCount: Array.isArray(test.questions) ? test.questions.length : 0,
+    }),
+  });
+});
+
 const startTest = asyncHandler(async (req, res) => {
   const m = await models.init();
   const db = m.dbClient;
@@ -392,21 +591,7 @@ const startTest = asyncHandler(async (req, res) => {
         throw new ApiError(404, "Test not found");
       }
 
-      assertStudentCanStartPublishedTest(test);
-
-      const assignedViaMapping = await db.testBatch.findFirst({
-        where: {
-          testId,
-          batchId: { in: req.user.batchIds || [] },
-        },
-      });
-      if (!isStudentAssignedToTest({
-        test,
-        student: req.user,
-        hasBatchAssignment: Boolean(assignedViaMapping),
-      })) {
-        throw new ApiError(403, "Student is not assigned to this test", null, "TEST_NOT_ASSIGNED");
-      }
+      await assertStudentTestAccess({ db, test, student: req.user });
 
       const existingSession = await db.testSession.findUnique({
         where: { userId_testId: { userId, testId } },
@@ -460,40 +645,13 @@ const startTest = asyncHandler(async (req, res) => {
     throw new ApiError(404, "Test not found");
   }
 
-  assertStudentCanStartPublishedTest(test);
+  await assertStudentTestAccess({ db, test, student: req.user });
 
   // Build sanitized question list for student view (no correct answers).
   // Cache it so 500+ concurrent startTest requests don't all hit MongoDB.
   const cachedQuestions = await getStudentQuestionPayload(testId, test.questions);
 
-  const now = new Date();
-  // During local automated load/k6 runs we sometimes bypass time-window checks.
-  // This is intentionally ignored in production so scheduled test windows cannot
-  // be opened by a misplaced environment variable.
-  const bypassWindow =
-    process.env.NODE_ENV !== "production" &&
-    String(process.env.K6_BYPASS_TEST_WINDOW || "").toLowerCase().match(/^(true|1|yes|on)$/);
-  if (!bypassWindow) {
-    if (test.startsAt > now || test.endsAt < now) {
-      throw new ApiError(403, "Test is not active");
-    }
-  }
-
-
-
-  const assignedViaMapping = await db.testBatch.findFirst({
-    where: {
-      testId,
-      batchId: { in: req.user.batchIds || [] },
-    },
-  });
-  if (!isStudentAssignedToTest({
-    test,
-    student: req.user,
-    hasBatchAssignment: Boolean(assignedViaMapping),
-  })) {
-    throw new ApiError(403, "Student is not assigned to this test", null, "TEST_NOT_ASSIGNED");
-  }
+  const now = assertTestWindowOpen(test);
 
   const existingSession = await db.testSession.findUnique({
     where: { userId_testId: { userId, testId } },
@@ -579,6 +737,16 @@ const startTest = asyncHandler(async (req, res) => {
     }
   }
 
+  const hasAgreement = await hasPersistedInstructionAgreement({ db, userId, testId, test });
+  if (!hasAgreement) {
+    throw new ApiError(
+      428,
+      "Read and agree to the test instructions before starting the exam.",
+      { testId },
+      "TEST_INSTRUCTIONS_AGREEMENT_REQUIRED"
+    );
+  }
+
   let latestSubmission = await db.submission.findFirst({
     where: { userId, testId },
     orderBy: { attemptNumber: "desc" },
@@ -614,6 +782,8 @@ const startTest = asyncHandler(async (req, res) => {
               attemptNumber: currentAttemptCount + 1,
               status: "IN_PROGRESS",
               startedAt: now,
+              agreedToInstructions: true,
+              agreedAt: now,
             },
           })
           .catch(async () => {
@@ -1584,6 +1754,8 @@ const getAttemptResult = asyncHandler(async (req, res) => {
 module.exports = {
   listOngoingTests,
   listUpcomingTests,
+  getTestAccessDetails,
+  agreeToTestInstructions,
   startTest,
   getSession,
   saveAnswer,
