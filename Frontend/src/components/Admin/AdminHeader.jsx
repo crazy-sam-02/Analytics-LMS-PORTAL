@@ -1,7 +1,7 @@
 import { ChevronDown, Menu, Search } from "lucide-react";
 import { useState } from "react";
-import { useSelector } from "react-redux";
 import { useLocation } from "react-router-dom";
+import { useAdminAuthState } from "@/hooks/useAdminAuthState";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import AdminCommandPalette from "@/components/Admin/AdminCommandPalette";
@@ -11,7 +11,7 @@ const isCollegeAdminPath = (pathname) =>
 
 export default function AdminHeader({ workspaceLabel = "Admin Workspace", basePath = null, onOpenMobileSidebar }) {
   const location = useLocation();
-  const admin = useSelector((state) => state.adminAuth.admin);
+  const admin = useAdminAuthState()?.admin;
   const [searchOpen, setSearchOpen] = useState(false);
   const college = admin?.college;
   const resolvedBasePath = basePath || (isCollegeAdminPath(location.pathname) ? "/college-admin" : "/admin");

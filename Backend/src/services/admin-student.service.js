@@ -1,6 +1,9 @@
 const bcrypt = require("bcrypt");
 const models = require("../models");
+const env = require("../config/env");
 const { redisClient, getRedisQueueConnection } = require("../config/redis");
+
+const workerEnabled = env.worker.enabled;
 const { ApiError } = require("../utils/http");
 const { createAuditLog } = require("./audit.service");
 const { getPagination } = require("../utils/pagination");
@@ -230,21 +233,25 @@ const enqueueStudentImportJob = async (payload, db) => {
 };
 
 if (Queue && redisClient && queueConnection) {
+  // Producer: created on every replica so any instance can enqueue jobs.
   studentImportQueue = new Queue("admin-student-import-jobs", {
     connection: queueConnection,
   });
 
-  new Worker(
-    "admin-student-import-jobs",
-    async (job) => {
-      const m = await models.init();
-      await processBulkImportJob(job.data, m.dbClient);
-    },
-    {
-      connection: queueConnection,
-      concurrency: 2,
-    }
-  );
+  // Consumer: only worker-enabled replicas process jobs.
+  if (workerEnabled) {
+    new Worker(
+      "admin-student-import-jobs",
+      async (job) => {
+        const m = await models.init();
+        await processBulkImportJob(job.data, m.dbClient);
+      },
+      {
+        connection: queueConnection,
+        concurrency: 2,
+      }
+    );
+  }
 }
 
 const listStudents = async (collegeId, opts = {}) => {

@@ -6,8 +6,16 @@ const { readReportPayload } = require("../../services/report-payload-store.servi
 const { createAuditLog } = require("../../services/audit.service");
 const { emitToRole } = require("../../realtime/socket");
 const { ApiError, asyncHandler } = require("../../utils/http");
-const { clampPercent, getSubmissionScorePercent } = require("../../utils/score");
+const { clampPercent, getSubmissionScorePercent, getTestTotalMarks } = require("../../utils/score");
+const { describeDistribution } = require("../../utils/stats");
 const { isQuestionCorrect } = require("../../services/test.service");
+const { computeItemAnalysis } = require("../../services/item-analysis.service");
+const { computeIntegrityAnalytics } = require("../../services/integrity-analysis.service");
+const { computeCohortTrends } = require("../../services/cohort-trends.service");
+const { computeAtRisk } = require("../../services/at-risk.service");
+const { toCsv, buildFileName } = require("../../services/csv-export.service");
+const { buildXlsxBuffer, buildXlsxFileName } = require("../../services/xlsx-export.service");
+const { collectSubmissions } = require("../../services/submission-batch.service");
 const { getScopedDepartmentId } = require("../../utils/admin-scope");
 const {
   buildAdminTestVisibilityWhere,
@@ -127,6 +135,7 @@ const buildEmptyAnalyticsPayload = (mode = "department") => ({
     { range: "61-80", count: 0 },
     { range: "81-100", count: 0 },
   ],
+  distributionStats: { count: 0, mean: 0, median: 0, q1: 0, q3: 0, iqr: 0, stdDev: 0, min: 0, max: 0 },
   tableRows: [],
   attemptHistory: [],
   selectedStudent: null,
@@ -201,30 +210,37 @@ const getReportJobStatus = asyncHandler(async (req, res) => {
   });
 });
 
-const getReportAnalytics = asyncHandler(async (req, res) => {
+const buildReportAnalyticsPayload = async (req, queryOverrides = {}) => {
+  const reportReq = {
+    ...req,
+    query: {
+      ...(req.query || {}),
+      ...queryOverrides,
+    },
+  };
   const m = await models.init();
   const db = m.dbClient;
   const collegeId = req.collegeId;
-  const mode = req.query.mode;
-  const testId = req.query.testId;
-  const departmentId = req.query.departmentId;
-  const batchId = req.query.batchId;
-  const studentId = req.query.studentId;
-  const year = normalizeStudentYear(req.query.year);
+  const mode = reportReq.query.mode;
+  const testId = reportReq.query.testId;
+  const departmentId = reportReq.query.departmentId;
+  const batchId = reportReq.query.batchId;
+  const studentId = reportReq.query.studentId;
+  const year = normalizeStudentYear(reportReq.query.year);
   const reportScopeFilters = {
-    studentScope: normalizeStudentScope(req.query.studentScope),
-    passoutYear: normalizePassoutYear(req.query.passoutYear),
-    passoutCohortId: normalizeOptionalId(req.query.passoutCohortId),
+    studentScope: normalizeStudentScope(reportReq.query.studentScope),
+    passoutYear: normalizePassoutYear(reportReq.query.passoutYear),
+    passoutCohortId: normalizeOptionalId(reportReq.query.passoutCohortId),
   };
   const studentLifecycleWhere = buildStudentLifecycleWhere(reportScopeFilters);
-  const dateFrom = req.query.dateFrom;
-  const dateTo = req.query.dateTo;
+  const dateFrom = reportReq.query.dateFrom;
+  const dateTo = reportReq.query.dateTo;
   const dateFromValue = toValidDate(dateFrom);
   const dateToValue = toValidDate(dateTo);
 
   const scope = await buildAdminReportScope({
     db,
-    req,
+    req: reportReq,
     filters: { testId, departmentId, batchId },
     testSelect: {
       id: true,
@@ -241,7 +257,7 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
   });
 
   if (!scope.ok || scope.testIds.length === 0) {
-    return res.status(200).json(buildEmptyAnalyticsPayload(mode));
+    return buildEmptyAnalyticsPayload(mode);
   }
 
   const tests = Array.isArray(scope.tests) ? scope.tests : [];
@@ -319,14 +335,6 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
           type: true,
           createdAt: true,
           metadata: true,
-        },
-      },
-      answers: {
-        select: {
-          questionId: true,
-          selectedOption: true,
-          answerText: true,
-          answerBoolean: true,
         },
       },
     },
@@ -516,75 +524,7 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
     }))
     .sort((a, b) => new Date(b.date) - new Date(a.date));
 
-  const anomalyAlerts = [];
-
-  scopedSubmissions.forEach((row) => {
-    const scorePercent = getScorePercent(row);
-    const mins = Number(row.timeSpentSeconds || 0) / 60;
-    const violationCount = Number(row.violationCount || row.violations?.length || 0);
-
-    if (scorePercent >= 80 && mins > 0 && mins <= 3) {
-      anomalyAlerts.push({
-        id: `fast-${row.id}`,
-        type: "UNUSUALLY_FAST_HIGH_SCORE",
-        severity: "HIGH",
-        studentId: resolveSubmissionStudentId(row),
-        studentName: row.user?.fullName || "Student",
-        testId: row.testId,
-        testName: row.test?.title || "Test",
-        message: "High score submitted in unusually short duration",
-        createdAt: row.submittedAt || row.updatedAt || row.createdAt,
-      });
-    }
-
-    if (scorePercent >= 80 && violationCount >= 3) {
-      anomalyAlerts.push({
-        id: `viol-high-${row.id}`,
-        type: "HIGH_VIOLATIONS_HIGH_SCORE",
-        severity: "MEDIUM",
-        studentId: resolveSubmissionStudentId(row),
-        studentName: row.user?.fullName || "Student",
-        testId: row.testId,
-        testName: row.test?.title || "Test",
-        message: "High score with high violation count",
-        createdAt: row.submittedAt || row.updatedAt || row.createdAt,
-      });
-    }
-  });
-
-  const signatureBuckets = new Map();
-  scopedSubmissions.forEach((row) => {
-    const signature = (row.answers || [])
-      .sort((a, b) => String(a.questionId).localeCompare(String(b.questionId)))
-      .map((answer) => `${answer.questionId}:${answer.selectedOption || answer.answerBoolean || answer.answerText || ""}`)
-      .join("|");
-
-    if (!signature) return;
-
-    const key = `${row.testId}::${signature}`;
-    const bucket = signatureBuckets.get(key) || [];
-    bucket.push(row);
-    signatureBuckets.set(key, bucket);
-  });
-
-  signatureBuckets.forEach((bucket, key) => {
-    if (bucket.length < 2) return;
-    const testName = bucket[0]?.test?.title || "Test";
-    const studentNames = bucket.map((item) => item.user?.fullName || "Student");
-
-    anomalyAlerts.push({
-      id: `pattern-${key}`,
-      type: "IDENTICAL_ANSWER_PATTERN",
-      severity: "HIGH",
-      testId: bucket[0]?.testId,
-      testName,
-      students: studentNames,
-      message: `Similar answer pattern detected across ${bucket.length} submissions`,
-      createdAt: bucket[0]?.submittedAt || bucket[0]?.updatedAt || bucket[0]?.createdAt,
-    });
-  });
-
-  res.status(200).json({
+  return {
     mode,
     filters: buildReportScopeMetadata(reportScopeFilters),
     metrics: {
@@ -592,12 +532,19 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
       passRate: toPercent(passRate),
       participationRate: toPercent(participationRate),
       violations: totalViolations,
+      // Volume counters mirroring the super-admin metrics shape so the same
+      // StatCard row renders from either portal's analytics payload.
+      totalStudents: studentRows.length,
+      attemptedStudents: participatingStudents,
+      totalTests: tests.length,
+      totalSubmissions: scopedSubmissions.length,
     },
     scoreTrend,
     topicPerformance,
     departmentComparative,
     batchComparative,
     distribution: Object.entries(distributionBase).map(([range, count]) => ({ range, count })),
+    distributionStats: describeDistribution(ranked.map((row) => row.avgScore)),
     tableRows: ranked,
     attemptHistory,
     selectedStudent,
@@ -607,8 +554,17 @@ const getReportAnalytics = asyncHandler(async (req, res) => {
       testId: hasSelectedTest ? testId : null,
       testName: selectedTest?.title || null,
     },
-    anomalyAlerts: anomalyAlerts.slice(0, 100),
-  });
+    // Retained for response-shape stability; the identical-answer-pattern /
+    // fast-high-score heuristics were unused by any client and forced loading
+    // every submission's answer array. Integrity signals now live in the
+    // dedicated /reports/integrity endpoint.
+    anomalyAlerts: [],
+  };
+};
+
+const getReportAnalytics = asyncHandler(async (req, res) => {
+  const payload = await buildReportAnalyticsPayload(req);
+  res.status(200).json(payload);
 });
 
 const resolveDateFilters = (query = {}) => {
@@ -641,44 +597,54 @@ const resolveDateFilters = (query = {}) => {
   return result;
 };
 
-const fetchAnalyticsPayload = async (req, filters = {}) => {
-  const mockReq = {
-    ...req,
-    query: {
-      ...req.query,
-      ...filters,
-    },
-  };
+// Short-lived in-process memo: /summary and /charts both need the full
+// analytics payload for the same scope, and report generation reuses it too.
+// Sharing the in-flight promise collapses those into ONE computation per node
+// per window. The Redis response cache remains the cross-node/HTTP layer; this
+// only removes duplicate heavy work behind it. 15s staleness matches the
+// admin-reports response-cache TTL semantics.
+const ANALYTICS_MEMO_TTL_MS = 15_000;
+const analyticsMemo = new Map();
 
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const finish = (value) => {
-      if (settled) return;
-      settled = true;
-      resolve(value);
-    };
-
-    const mockRes = {
-      status: () => ({
-        json: (data) => {
-          finish(data);
-          return data;
-        },
-      }),
-    };
-
-    getReportAnalytics(mockReq, mockRes, (error) => {
-      if (error) {
-        if (!settled) {
-          settled = true;
-          reject(error);
-        }
-        return;
-      }
-
-      finish(null);
-    });
+const buildAnalyticsMemoKey = (req, overrides = {}) => {
+  const query = { ...(req.query || {}), ...overrides };
+  const sortedQuery = Object.keys(query)
+    .sort()
+    .reduce((accumulator, key) => {
+      accumulator[key] = query[key];
+      return accumulator;
+    }, {});
+  return JSON.stringify({
+    collegeId: req.collegeId || null,
+    adminId: req.admin?.id || null,
+    departmentId: req.admin?.departmentId || null,
+    role: req.admin?.role || null,
+    query: sortedQuery,
   });
+};
+
+const fetchAnalyticsPayload = (req, filters = {}) => {
+  const key = buildAnalyticsMemoKey(req, filters);
+  const now = Date.now();
+  const cached = analyticsMemo.get(key);
+  if (cached && now - cached.at < ANALYTICS_MEMO_TTL_MS) {
+    return cached.promise;
+  }
+
+  const promise = buildReportAnalyticsPayload(req, filters).catch((error) => {
+    // Never memoise a failure.
+    analyticsMemo.delete(key);
+    throw error;
+  });
+  analyticsMemo.set(key, { at: now, promise });
+
+  if (analyticsMemo.size > 500) {
+    for (const [entryKey, entry] of analyticsMemo) {
+      if (now - entry.at > ANALYTICS_MEMO_TTL_MS) analyticsMemo.delete(entryKey);
+    }
+  }
+
+  return promise;
 };
 
 const getReportSummaryDashboard = asyncHandler(async (req, res) => {
@@ -858,6 +824,7 @@ const getReportTableDashboard = asyncHandler(async (req, res) => {
     return {
       id: submission.id,
       submissionId: submission.id,
+      testId: submission.testId,
       studentId: resolveSubmissionStudentId(submission),
       studentName: submission.user?.fullName || "-",
       studentRollNo: getStudentNumber(submission.user),
@@ -876,6 +843,11 @@ const getReportTableDashboard = asyncHandler(async (req, res) => {
       violations: (submission.violations || []).map((violation) => ({
         id: violation.id,
         type: violation.type,
+        anomalyId: violation.id,
+        anomalyType: violation.type,
+        testId: submission.testId,
+        testName: submission.test?.title || "Test",
+        submissionId: submission.id,
         createdAt: violation.createdAt,
       })),
       date: new Date(date).toISOString(),
@@ -915,6 +887,629 @@ const getReportTableDashboard = asyncHandler(async (req, res) => {
       totalPages,
     },
   });
+});
+
+// Derived lifecycle status for a test, mirroring the admin tests controller's
+// deriveLifecycleStatus(): a test reads as COMPLETED once its window closes even
+// if the stored status is still LIVE/PUBLISHED.
+const deriveTestListStatus = (test = {}) => {
+  const raw = String(test.status || "").trim().toUpperCase();
+  if (raw === "DRAFT" || raw === "ARCHIVED") {
+    return raw;
+  }
+  const now = Date.now();
+  const startsAt = test.startsAt ? new Date(test.startsAt).getTime() : null;
+  const endsAt = test.endsAt ? new Date(test.endsAt).getTime() : null;
+  if (startsAt && startsAt > now) return "SCHEDULED";
+  if (endsAt && endsAt < now) return "COMPLETED";
+  return "LIVE";
+};
+
+// Paginated, per-test aggregate list powering the Reports "Tests" tab.
+// Scoped submissions are collected in batches (collectSubmissions, up to its
+// memory-safety ceiling with honest truncation) and grouped in memory, so the
+// list is a single request per page rather than N per-test analytics calls.
+const buildReportTestsPayload = async (req) => {
+  const m = await models.init();
+  const db = m.dbClient;
+  const filters = resolveDateFilters(req.query || {});
+  const page = Math.max(Number(req.query.page || 1), 1);
+  const limit = Math.min(Math.max(Number(req.query.limit || 10), 1), 100);
+  const sortBy = String(req.query.sortBy || "startsAt");
+  const sortDir = String(req.query.sortDir || "desc").toLowerCase() === "asc" ? "asc" : "desc";
+  const search = String(req.query.search || "").trim().toLowerCase();
+  const statusFilter = String(req.query.status || "").trim().toUpperCase();
+
+  const scope = await buildAdminReportScope({
+    db,
+    req,
+    filters: {
+      departmentId: filters.departmentId,
+      batchId: filters.batchId,
+    },
+    testSelect: {
+      id: true,
+      title: true,
+      status: true,
+      startsAt: true,
+      endsAt: true,
+      totalMarks: true,
+      departmentId: true,
+      batchId: true,
+      department: { select: { name: true } },
+      batch: { select: { name: true } },
+      questions: { select: { marks: true } },
+    },
+  });
+
+  if (!scope.ok || scope.testIds.length === 0) {
+    return { data: [], pagination: { page: 1, limit, total: 0, totalPages: 1 } };
+  }
+
+  // In-scope student count is the participation denominator, mirroring the
+  // Overview participationRate (participatingStudents / studentsInScope).
+  const studentLifecycleWhere = buildStudentLifecycleWhere(filters);
+  const scopedStudentWhere = {
+    collegeId: req.collegeId,
+    ...studentLifecycleWhere,
+    ...(scope.departmentId ? { departmentId: scope.departmentId } : {}),
+    ...(filters.year ? { year: filters.year } : {}),
+    ...(scope.batchId
+      ? { OR: [{ batchId: scope.batchId }, { batchIds: { in: [scope.batchId] } }] }
+      : {}),
+  };
+  const scopedStudents = await db.student.findMany({ where: scopedStudentWhere, select: { id: true } });
+  const inScopeStudentCount = scopedStudents.length;
+
+  const { rows: submissions, truncated } = await collectSubmissions({
+    db,
+    where: {
+      collegeId: req.collegeId,
+      status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
+      testId: { in: scope.testIds },
+      ...(filters.dateFrom || filters.dateTo
+        ? {
+            submittedAt: {
+              ...(filters.dateFrom ? { gte: new Date(filters.dateFrom) } : {}),
+              ...(filters.dateTo ? { lte: new Date(filters.dateTo) } : {}),
+            },
+          }
+        : {}),
+    },
+    select: {
+      testId: true,
+      userId: true,
+      score: true,
+      accuracy: true,
+      _count: { select: { violations: true } },
+    },
+  });
+
+  const testTotalMarks = new Map(scope.tests.map((test) => [String(test.id), getTestTotalMarks(test)]));
+  const byTest = new Map();
+  for (const submission of submissions) {
+    const testKey = String(submission.testId);
+    const current = byTest.get(testKey) || { count: 0, scoreSum: 0, passCount: 0, violations: 0, students: new Set() };
+    const scorePercent = getScorePercent({
+      score: submission.score,
+      accuracy: submission.accuracy,
+      test: { totalMarks: testTotalMarks.get(testKey) },
+    });
+    current.count += 1;
+    current.scoreSum += scorePercent;
+    if (scorePercent >= 40) current.passCount += 1;
+    current.violations += Number(submission._count?.violations || 0);
+    if (submission.userId) current.students.add(String(submission.userId));
+    byTest.set(testKey, current);
+  }
+
+  let rows = scope.tests.map((test) => {
+    const agg = byTest.get(String(test.id)) || { count: 0, scoreSum: 0, passCount: 0, violations: 0, students: new Set() };
+    const submissionCount = agg.count;
+    return {
+      testId: test.id,
+      id: test.id,
+      title: test.title || "Untitled test",
+      status: deriveTestListStatus(test),
+      department: test.department?.name || "-",
+      batch: test.batch?.name || "-",
+      startsAt: test.startsAt || null,
+      endsAt: test.endsAt || null,
+      totalMarks: testTotalMarks.get(String(test.id)) || 0,
+      submissionCount,
+      attemptedStudents: agg.students.size,
+      avgScore: submissionCount ? toPercent(agg.scoreSum / submissionCount) : 0,
+      passRate: submissionCount ? toPercent((agg.passCount / submissionCount) * 100) : 0,
+      participation: inScopeStudentCount ? toPercent((agg.students.size / inScopeStudentCount) * 100) : 0,
+      violations: agg.violations,
+    };
+  });
+
+  if (search) {
+    rows = rows.filter((row) => `${row.title} ${row.department} ${row.batch}`.toLowerCase().includes(search));
+  }
+
+  // Status filter runs on the DERIVED lifecycle status, so "COMPLETED" also
+  // matches tests whose stored status is still LIVE but whose window closed.
+  if (statusFilter && statusFilter !== "ALL") {
+    rows = rows.filter((row) => row.status === statusFilter);
+  }
+
+  const getSortValue = (row) => {
+    if (sortBy === "title") return String(row.title || "");
+    if (sortBy === "startsAt") return new Date(row.startsAt || 0).getTime();
+    return Number(row[sortBy] || 0);
+  };
+  rows.sort((a, b) => {
+    const av = getSortValue(a);
+    const bv = getSortValue(b);
+    if (typeof av === "number" && typeof bv === "number") {
+      return sortDir === "asc" ? av - bv : bv - av;
+    }
+    return sortDir === "asc" ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
+  });
+
+  const total = rows.length;
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  const safePage = Math.min(page, totalPages);
+  const start = (safePage - 1) * limit;
+
+  return {
+    data: rows.slice(start, start + limit),
+    pagination: { page: safePage, limit, total, totalPages },
+    truncated,
+  };
+};
+
+const getReportTestsDashboard = asyncHandler(async (req, res) => {
+  res.status(200).json(await buildReportTestsPayload(req));
+});
+
+// Loads the scoped submissions for one test plus their answers, shared by the
+// item-analysis and integrity endpoints.
+const loadTestAttemptData = async ({ db, req, testId }) => {
+  const scope = await buildAdminReportScope({
+    db,
+    req,
+    filters: { testId },
+    testSelect: {
+      id: true,
+      title: true,
+      durationMins: true,
+      totalMarks: true,
+      questions: {
+        select: { id: true, order: true, prompt: true, type: true, options: true, correctOption: true, correctOptions: true, correctBoolean: true, correctText: true, marks: true },
+      },
+    },
+  });
+
+  if (!scope.ok || !scope.testIds.includes(String(testId))) {
+    return { ok: false };
+  }
+
+  const test = scope.tests.find((item) => String(item.id) === String(testId));
+  if (!test) return { ok: false };
+
+  const { rows: submissions, truncated } = await collectSubmissions({
+    db,
+    where: {
+      collegeId: req.collegeId,
+      testId,
+      status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
+    },
+    include: {
+      user: { select: { id: true, fullName: true, studentId: true, enrollNumber: true, enrollmentNumber: true } },
+    },
+  });
+
+  const totalMarks = getTestTotalMarks(test);
+  const attempts = submissions.map((submission) => ({
+    id: submission.id,
+    userId: resolveSubmissionStudentId(submission),
+    studentName: submission.user?.fullName || "Student",
+    startedAt: submission.startedAt,
+    scorePercent: getScorePercent({ score: submission.score, accuracy: submission.accuracy, test: { totalMarks } }),
+  }));
+
+  return { ok: true, test, submissions, attempts, truncated };
+};
+
+const getReportItemAnalysis = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
+  const testId = String(req.query.testId || "").trim();
+
+  if (!testId) {
+    throw new ApiError(400, "testId is required for item analysis", null, "TEST_ID_REQUIRED");
+  }
+
+  const data = await loadTestAttemptData({ db, req, testId });
+  if (!data.ok) {
+    return res.status(200).json({ items: [], summary: { totalQuestions: 0, analysedQuestions: 0, flaggedQuestions: 0 }, test: null });
+  }
+
+  const { test, submissions, attempts } = data;
+  const questions = Array.isArray(test.questions) ? test.questions : [];
+  const questionById = new Map(questions.map((question) => [String(question.id), question]));
+
+  const answerRows = submissions.length
+    ? await db.answer.findMany({
+        where: { submissionId: { in: submissions.map((submission) => submission.id) } },
+        select: {
+          submissionId: true,
+          questionId: true,
+          selectedOption: true,
+          selectedOptions: true,
+          selectedBoolean: true,
+          selectedText: true,
+          answerBoolean: true,
+          answerText: true,
+          isCorrect: true,
+          markedForReview: true,
+          timeSpentSeconds: true,
+        },
+      })
+    : [];
+
+  // Resolve correctness here (persisted isCorrect can be null on older rows) so
+  // the statistics service stays pure.
+  const answers = answerRows.map((answer) => {
+    const question = questionById.get(String(answer.questionId));
+    const resolved = typeof answer.isCorrect === "boolean"
+      ? answer.isCorrect
+      : question
+        ? Boolean(isQuestionCorrect(question, answer))
+        : false;
+    return { ...answer, isCorrect: resolved };
+  });
+
+  const { items, summary } = computeItemAnalysis({ questions, submissions: attempts, answers });
+
+  res.status(200).json({
+    test: { id: test.id, title: test.title, totalMarks: getTestTotalMarks(test) },
+    summary: { ...summary, attempts: attempts.length, truncated: Boolean(data.truncated) },
+    items,
+  });
+});
+
+const getReportIntegrity = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
+  const testId = String(req.query.testId || "").trim();
+
+  if (!testId) {
+    throw new ApiError(400, "testId is required for integrity analytics", null, "TEST_ID_REQUIRED");
+  }
+
+  const data = await loadTestAttemptData({ db, req, testId });
+  if (!data.ok) {
+    return res.status(200).json({
+      summary: { totalViolations: 0, attempts: 0, flaggedAttempts: 0, cleanAttempts: 0, flaggedRate: 0, repeatOffenders: 0 },
+      byType: [],
+      timeline: [],
+      repeatOffenders: [],
+      scoreByViolationBand: [],
+      test: null,
+    });
+  }
+
+  const { test, submissions, attempts } = data;
+  const violations = submissions.length
+    ? await db.violation.findMany({
+        where: { submissionId: { in: submissions.map((submission) => submission.id) } },
+        select: { id: true, submissionId: true, userId: true, type: true, timestamp: true, createdAt: true },
+      })
+    : [];
+
+  const analytics = computeIntegrityAnalytics({
+    violations,
+    submissions: attempts,
+    durationMins: Number(test.durationMins || 60),
+    bucketMinutes: 5,
+  });
+
+  res.status(200).json({
+    test: { id: test.id, title: test.title, durationMins: Number(test.durationMins || 0) },
+    ...analytics,
+    truncated: Boolean(data.truncated),
+  });
+});
+
+// Loads scoped submissions joined to their student, shared by the trends and
+// at-risk endpoints.
+const loadScopedAttempts = async ({ db, req, filters }) => {
+  const scope = await buildAdminReportScope({
+    db,
+    req,
+    filters: { departmentId: filters.departmentId, batchId: filters.batchId },
+    testSelect: { id: true, title: true, totalMarks: true, endsAt: true, questions: { select: { marks: true } } },
+  });
+
+  if (!scope.ok || scope.testIds.length === 0) return { ok: false };
+
+  const studentWhere = {
+    collegeId: req.collegeId,
+    ...buildStudentLifecycleWhere(filters),
+    ...(scope.departmentId ? { departmentId: scope.departmentId } : {}),
+    ...(filters.year ? { year: filters.year } : {}),
+    ...(scope.batchId ? { OR: [{ batchId: scope.batchId }, { batchIds: { in: [scope.batchId] } }] } : {}),
+  };
+
+  const students = await db.student.findMany({
+    where: studentWhere,
+    select: {
+      id: true,
+      fullName: true,
+      studentId: true,
+      enrollNumber: true,
+      enrollmentNumber: true,
+      departmentId: true,
+      department: { select: { id: true, name: true } },
+      batch: { select: { id: true, name: true } },
+    },
+  });
+  const studentIds = students.map((student) => String(student.id));
+
+  const { rows: submissions, truncated } = studentIds.length
+    ? await collectSubmissions({
+        db,
+        where: {
+          collegeId: req.collegeId,
+          status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
+          testId: { in: scope.testIds },
+          userId: { in: studentIds },
+          ...(filters.dateFrom || filters.dateTo
+            ? {
+                submittedAt: {
+                  ...(filters.dateFrom ? { gte: new Date(filters.dateFrom) } : {}),
+                  ...(filters.dateTo ? { lte: new Date(filters.dateTo) } : {}),
+                },
+              }
+            : {}),
+        },
+        select: {
+          id: true,
+          userId: true,
+          testId: true,
+          score: true,
+          accuracy: true,
+          submittedAt: true,
+          createdAt: true,
+          _count: { select: { violations: true } },
+        },
+      })
+    : { rows: [], truncated: false };
+
+  const testTotals = new Map(scope.tests.map((test) => [String(test.id), getTestTotalMarks(test)]));
+  const attempts = submissions.map((submission) => ({
+    ...submission,
+    scorePercent: getScorePercent({
+      score: submission.score,
+      accuracy: submission.accuracy,
+      test: { totalMarks: testTotals.get(String(submission.testId)) },
+    }),
+    date: submission.submittedAt || submission.createdAt,
+    violations: Number(submission._count?.violations || 0),
+  }));
+
+  return { ok: true, scope, students, attempts, truncated };
+};
+
+const getReportTrends = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
+  const filters = resolveDateFilters(req.query || {});
+  const groupBy = String(req.query.groupBy || "department").toLowerCase() === "batch" ? "batch" : "department";
+  const indexToBase = String(req.query.indexed || "") === "true";
+
+  const data = await loadScopedAttempts({ db, req, filters });
+  if (!data.ok) {
+    return res.status(200).json({ periods: [], series: [], summary: { entities: 0, periods: 0, improving: 0, declining: 0, stable: 0 } });
+  }
+
+  const { students, attempts } = data;
+  const studentById = new Map(students.map((student) => [String(student.id), student]));
+
+  const entityMap = new Map();
+  const points = [];
+  for (const attempt of attempts) {
+    const student = studentById.get(String(attempt.userId));
+    if (!student) continue;
+    const entity = groupBy === "batch" ? student.batch : student.department;
+    const entityId = entity?.id || `unassigned-${groupBy}`;
+    const entityName = entity?.name || "Unassigned";
+    if (!entityMap.has(String(entityId))) entityMap.set(String(entityId), { id: entityId, name: entityName });
+    points.push({ entityId, period: deriveMonthKey(attempt.date), scorePercent: attempt.scorePercent });
+  }
+
+  const result = computeCohortTrends({ entities: [...entityMap.values()], points, indexToBase });
+  res.status(200).json({ groupBy, ...result, truncated: Boolean(data.truncated) });
+});
+
+const getReportAtRisk = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
+  const filters = resolveDateFilters(req.query || {});
+
+  const data = await loadScopedAttempts({ db, req, filters });
+  if (!data.ok) {
+    return res.status(200).json({ students: [], summary: { assessed: 0, atRisk: 0, critical: 0, high: 0, moderate: 0 } });
+  }
+
+  const { scope, students, attempts } = data;
+  const assignedTests = scope.testIds.length;
+
+  const attemptsByStudent = new Map();
+  for (const attempt of attempts) {
+    const key = String(attempt.userId);
+    if (!attemptsByStudent.has(key)) attemptsByStudent.set(key, []);
+    attemptsByStudent.get(key).push(attempt);
+  }
+
+  const payload = students.map((student) => {
+    const studentAttempts = attemptsByStudent.get(String(student.id)) || [];
+    return {
+      id: student.id,
+      name: student.fullName || "Student",
+      rollNo: getStudentNumber(student),
+      department: student.department?.name || "-",
+      batch: student.batch?.name || "-",
+      assignedTests,
+      violations: studentAttempts.reduce((sum, attempt) => sum + attempt.violations, 0),
+      attempts: studentAttempts.map((attempt) => ({ scorePercent: attempt.scorePercent, date: attempt.date })),
+    };
+  });
+
+  res.status(200).json({ ...computeAtRisk({ students: payload }), truncated: Boolean(data.truncated) });
+});
+
+const CSV_DATASETS = {
+  "at-risk": {
+    prefix: "at-risk-students",
+    columns: [
+      { key: "name", label: "Student" },
+      { key: "rollNo", label: "Roll No" },
+      { key: "department", label: "Department" },
+      { key: "batch", label: "Batch" },
+      { key: "riskLevel", label: "Risk level" },
+      { key: "riskScore", label: "Risk score" },
+      { key: "averageScore", label: "Average %" },
+      { key: "attempts", label: "Attempts" },
+      { key: "assignedTests", label: "Assigned tests" },
+      { key: "participation", label: "Participation %" },
+      { key: "violations", label: "Violations" },
+      { key: "reasons", label: "Reasons", format: (_value, row) => (row.reasons || []).map((reason) => reason.label).join("; ") },
+    ],
+  },
+  tests: {
+    prefix: "test-performance",
+    columns: [
+      { key: "title", label: "Test" },
+      { key: "status", label: "Status" },
+      { key: "department", label: "Department" },
+      { key: "batch", label: "Batch" },
+      { key: "submissionCount", label: "Submissions" },
+      { key: "attemptedStudents", label: "Students attempted" },
+      { key: "avgScore", label: "Avg %" },
+      { key: "passRate", label: "Pass rate %" },
+      { key: "participation", label: "Participation %" },
+      { key: "violations", label: "Violations" },
+    ],
+  },
+  "item-analysis": {
+    prefix: "item-analysis",
+    columns: [
+      { key: "order", label: "Q" },
+      { key: "prompt", label: "Prompt" },
+      { key: "attempts", label: "Attempts" },
+      { key: "correct", label: "Correct" },
+      { key: "difficulty", label: "Difficulty", format: (value) => Number(value || 0).toFixed(4) },
+      { key: "difficultyLabel", label: "Difficulty band" },
+      { key: "discrimination", label: "Discrimination", format: (value) => Number(value || 0).toFixed(4) },
+      { key: "discriminationLabel", label: "Discrimination band" },
+      { key: "medianTimeSeconds", label: "Median time (s)" },
+      { key: "markedForReviewRate", label: "Marked for review %" },
+      { key: "topDistractor", label: "Top distractor" },
+      { key: "flagReasons", label: "Flags", format: (value) => (value || []).join("; ") },
+    ],
+  },
+};
+
+/**
+ * Assembles the export rows for a dataset. Reuses the same scoping and
+ * computation as the JSON endpoints so an export can never show data the
+ * requester cannot see in the UI. Shared by the CSV and XLSX handlers so the
+ * two formats can never diverge.
+ */
+const buildExportDataset = async (req) => {
+  const m = await models.init();
+  const db = m.dbClient;
+  const dataset = String(req.query.dataset || "").trim();
+  const config = CSV_DATASETS[dataset];
+
+  if (!config) {
+    throw new ApiError(422, `Unsupported export dataset: ${dataset || "(none)"}`, { supported: Object.keys(CSV_DATASETS) }, "UNSUPPORTED_DATASET");
+  }
+
+  const filters = resolveDateFilters(req.query || {});
+  let rows = [];
+
+  if (dataset === "at-risk") {
+    const data = await loadScopedAttempts({ db, req, filters });
+    if (data.ok) {
+      const { scope, students, attempts } = data;
+      const attemptsByStudent = new Map();
+      for (const attempt of attempts) {
+        const key = String(attempt.userId);
+        if (!attemptsByStudent.has(key)) attemptsByStudent.set(key, []);
+        attemptsByStudent.get(key).push(attempt);
+      }
+      const payload = students.map((student) => {
+        const studentAttempts = attemptsByStudent.get(String(student.id)) || [];
+        return {
+          id: student.id,
+          name: student.fullName || "Student",
+          rollNo: getStudentNumber(student),
+          department: student.department?.name || "-",
+          batch: student.batch?.name || "-",
+          assignedTests: scope.testIds.length,
+          violations: studentAttempts.reduce((sum, attempt) => sum + attempt.violations, 0),
+          attempts: studentAttempts.map((attempt) => ({ scorePercent: attempt.scorePercent, date: attempt.date })),
+        };
+      });
+      rows = computeAtRisk({ students: payload }).students;
+    }
+  } else if (dataset === "item-analysis") {
+    const testId = String(req.query.testId || "").trim();
+    if (!testId) {
+      throw new ApiError(400, "testId is required to export item analysis", null, "TEST_ID_REQUIRED");
+    }
+    const data = await loadTestAttemptData({ db, req, testId });
+    if (data.ok) {
+      const questions = Array.isArray(data.test.questions) ? data.test.questions : [];
+      const questionById = new Map(questions.map((question) => [String(question.id), question]));
+      const answerRows = data.submissions.length
+        ? await db.answer.findMany({
+            where: { submissionId: { in: data.submissions.map((submission) => submission.id) } },
+            select: {
+              submissionId: true, questionId: true, selectedOption: true, selectedOptions: true,
+              selectedBoolean: true, selectedText: true, answerBoolean: true, answerText: true,
+              isCorrect: true, markedForReview: true, timeSpentSeconds: true,
+            },
+          })
+        : [];
+      const answers = answerRows.map((answer) => {
+        const question = questionById.get(String(answer.questionId));
+        const resolved = typeof answer.isCorrect === "boolean"
+          ? answer.isCorrect
+          : question ? Boolean(isQuestionCorrect(question, answer)) : false;
+        return { ...answer, isCorrect: resolved };
+      });
+      rows = computeItemAnalysis({ questions, submissions: data.attempts, answers }).items;
+    }
+  } else if (dataset === "tests") {
+    // Same builder the Tests tab uses, so the export can never diverge from it.
+    const payload = await buildReportTestsPayload({ ...req, query: { ...req.query, page: 1, limit: 100 } });
+    rows = Array.isArray(payload?.data) ? payload.data : [];
+  }
+
+  return { config, rows };
+};
+
+const exportReportCsv = asyncHandler(async (req, res) => {
+  const { config, rows } = await buildExportDataset(req);
+  const csv = toCsv(config.columns, rows);
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="${buildFileName(config.prefix)}"`);
+  res.status(200).send(csv);
+});
+
+const exportReportXlsx = asyncHandler(async (req, res) => {
+  const { config, rows } = await buildExportDataset(req);
+  const buffer = await buildXlsxBuffer({ sheetName: config.prefix, columns: config.columns, rows });
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", `attachment; filename="${buildXlsxFileName(config.prefix)}"`);
+  res.status(200).send(Buffer.from(buffer));
 });
 
 const getReportStudentDetailDashboard = asyncHandler(async (req, res) => {
@@ -1486,6 +2081,13 @@ module.exports = {
   getReportSummaryDashboard,
   getReportChartsDashboard,
   getReportTableDashboard,
+  getReportTestsDashboard,
+  getReportItemAnalysis,
+  getReportIntegrity,
+  getReportTrends,
+  getReportAtRisk,
+  exportReportCsv,
+  exportReportXlsx,
   getReportStudentDetailDashboard,
   downloadReport,
   regenerateReportLink,

@@ -40,7 +40,6 @@ describe("SuperAdmin analytics aggregation", () => {
     };
 
     // Import controller after stubbing mongoose
-    // eslint-disable-next-line global-require
     getSuperAnalytics = require("../src/controllers/SuperAdmin/analytics.controller.js").getSuperAnalytics;
   });
 

@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useSelector } from "react-redux";
+import { useAdminAuthState } from "@/hooks/useAdminAuthState";
 import { Link } from "react-router-dom";
 import { CartesianGrid, Line, LineChart, XAxis, YAxis, BarChart, Bar } from "recharts";
 import StatCard from "@/components/common/StatCard";
@@ -41,7 +41,7 @@ function mapStatusVariant(status) {
 
 export default function AdminDashboardPage() {
   const [expandedSubmissionId, setExpandedSubmissionId] = useState("");
-  const admin = useSelector((state) => state.adminAuth.admin);
+  const admin = useAdminAuthState()?.admin;
   const adminCollegeId = admin?.collegeId;
 
   const {

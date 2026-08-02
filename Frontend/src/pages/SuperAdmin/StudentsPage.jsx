@@ -2,9 +2,18 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useDispatch, useSelector } from "react-redux";
-import { fetchSuperColleges, fetchSuperStudents } from "@/features/SuperAdmin/superAdminPanelSlice";
+import {
+  fetchSuperColleges,
+  fetchSuperStudents,
+} from "@/features/SuperAdmin/superAdminPanelSlice";
 import { superAdminApi } from "@/services/api";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+} from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -20,7 +29,10 @@ const IMPORT_SAMPLE = [
 ].join("\n");
 const YEAR_OPTIONS = ["1", "2", "3", "4"];
 
-const normalizeColumnKey = (value) => String(value || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+const normalizeColumnKey = (value) =>
+  String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
 
 const getRowValue = (row, aliases = []) => {
   const aliasSet = new Set(aliases.map(normalizeColumnKey));
@@ -34,7 +46,7 @@ const getRowValue = (row, aliases = []) => {
 
 const toCsvCell = (value) => {
   const cell = String(value ?? "").trim();
-  return /[",\r\n]/.test(cell) ? `"${cell.replace(/"/g, "\"\"")}"` : cell;
+  return /[",\r\n]/.test(cell) ? `"${cell.replace(/"/g, '""')}"` : cell;
 };
 
 const unwrapItems = (response) => {
@@ -50,9 +62,17 @@ const YEAR_PROMOTION_CONFIRMATION = "PROMOTE STUDENTS YEAR";
 export default function StudentsPage() {
   const dispatch = useDispatch();
   const students = useSelector((state) => state.superAdminPanel.students);
-  const studentPagination = useSelector((state) => state.superAdminPanel.studentPagination);
+  const studentPagination = useSelector(
+    (state) => state.superAdminPanel.studentPagination,
+  );
   const colleges = useSelector((state) => state.superAdminPanel.colleges);
-  const [filters, setFilters] = useState({ search: "", collegeId: "", departmentId: "", batchId: "", year: "" });
+  const [filters, setFilters] = useState({
+    search: "",
+    collegeId: "",
+    departmentId: "",
+    batchId: "",
+    year: "",
+  });
   const [page, setPage] = useState(1);
   const [pendingDelete, setPendingDelete] = useState(null);
   const [editingStudent, setEditingStudent] = useState(null);
@@ -62,7 +82,8 @@ export default function StudentsPage() {
   const [csvData, setCsvData] = useState(IMPORT_SAMPLE);
   const [pendingResetStudent, setPendingResetStudent] = useState(null);
   const [yearPromotionCollegeId, setYearPromotionCollegeId] = useState("");
-  const [yearPromotionConfirmation, setYearPromotionConfirmation] = useState("");
+  const [yearPromotionConfirmation, setYearPromotionConfirmation] =
+    useState("");
   const [yearPromotionVerified, setYearPromotionVerified] = useState(false);
   const [studentForm, setStudentForm] = useState({
     fullName: "",
@@ -136,17 +157,73 @@ export default function StudentsPage() {
   });
 
   const rowsToCsv = (rows) => {
-    const header = ["fullName", "email", "studentId", "enrollNumber", "department", "year", "batch"];
+    const header = [
+      "fullName",
+      "email",
+      "studentId",
+      "enrollNumber",
+      "department",
+      "year",
+      "batch",
+    ];
     const lines = rows.map((row) => {
-      const studentId = getRowValue(row, ["studentId", "student_id", "rollNo", "rollNumber", "roll"]);
+      const studentId = getRowValue(row, [
+        "studentId",
+        "student_id",
+        "rollNo",
+        "rollNumber",
+        "roll",
+      ]);
       const normalized = {
-        fullName: getRowValue(row, ["fullName", "full_name", "name", "studentName", "student_name"]),
-        email: getRowValue(row, ["email", "emailAddress", "email_address", "eMail", "mail"]),
+        fullName: getRowValue(row, [
+          "fullName",
+          "full_name",
+          "name",
+          "studentName",
+          "student_name",
+        ]),
+        email: getRowValue(row, [
+          "email",
+          "emailAddress",
+          "email_address",
+          "eMail",
+          "mail",
+        ]),
         studentId,
-        enrollNumber: getRowValue(row, ["enrollNumber", "enroll_number", "enrollmentNumber", "enrollment_no", "enrollmentNo"]) || studentId,
-        department: getRowValue(row, ["department", "departmentName", "department_name", "departmentId", "department_id", "branch", "branchName"]),
-        year: getRowValue(row, ["year", "studentYear", "student_year", "academicYear", "academic_year", "yearOfStudy", "year_of_study"]),
-        batch: getRowValue(row, ["batch", "batchName", "batch_name", "batchId", "batch_id", "section"]),
+        enrollNumber:
+          getRowValue(row, [
+            "enrollNumber",
+            "enroll_number",
+            "enrollmentNumber",
+            "enrollment_no",
+            "enrollmentNo",
+          ]) || studentId,
+        department: getRowValue(row, [
+          "department",
+          "departmentName",
+          "department_name",
+          "departmentId",
+          "department_id",
+          "branch",
+          "branchName",
+        ]),
+        year: getRowValue(row, [
+          "year",
+          "studentYear",
+          "student_year",
+          "academicYear",
+          "academic_year",
+          "yearOfStudy",
+          "year_of_study",
+        ]),
+        batch: getRowValue(row, [
+          "batch",
+          "batchName",
+          "batch_name",
+          "batchId",
+          "batch_id",
+          "section",
+        ]),
       };
       return [
         toCsvCell(normalized.fullName),
@@ -179,31 +256,56 @@ export default function StudentsPage() {
 
       setCsvData(parsedCsv);
       setImportFileName(file.name);
-      setBanner({ type: "success", title: "File loaded", message: "Spreadsheet parsed successfully. Review rows and start import." });
+      setBanner({
+        type: "success",
+        title: "File loaded",
+        message:
+          "Spreadsheet parsed successfully. Review rows and start import.",
+      });
     } catch (error) {
-      setBanner({ type: "error", title: "File parse failed", message: error?.message || "Unable to parse spreadsheet file." });
+      setBanner({
+        type: "error",
+        title: "File parse failed",
+        message: error?.message || "Unable to parse spreadsheet file.",
+      });
       toast.error(error?.message || "Unable to parse spreadsheet file");
     }
 
     event.target.value = "";
   };
 
-  const loadStudents = useCallback((targetPage = 1) => {
-    if (!filters.collegeId.trim()) {
-      setBanner({ type: "warning", title: "Select a college", message: "Choose a college before loading students." });
-      return;
-    }
-    const params = new URLSearchParams();
-    params.set("page", String(targetPage));
-    params.set("limit", String(studentPageLimit));
-    if (filters.search.trim()) params.set("search", filters.search.trim());
-    if (filters.collegeId.trim()) params.set("collegeId", filters.collegeId.trim());
-    if (filters.departmentId.trim()) params.set("departmentId", filters.departmentId.trim());
-    if (filters.batchId.trim()) params.set("batchId", filters.batchId.trim());
-    if (filters.year.trim()) params.set("year", filters.year.trim());
-    const query = params.toString() ? `?${params.toString()}` : "";
-    dispatch(fetchSuperStudents(query));
-  }, [dispatch, filters.batchId, filters.collegeId, filters.departmentId, filters.search, filters.year]);
+  const loadStudents = useCallback(
+    (targetPage = 1) => {
+      if (!filters.collegeId.trim()) {
+        setBanner({
+          type: "warning",
+          title: "Select a college",
+          message: "Choose a college before loading students.",
+        });
+        return;
+      }
+      const params = new URLSearchParams();
+      params.set("page", String(targetPage));
+      params.set("limit", String(studentPageLimit));
+      if (filters.search.trim()) params.set("search", filters.search.trim());
+      if (filters.collegeId.trim())
+        params.set("collegeId", filters.collegeId.trim());
+      if (filters.departmentId.trim())
+        params.set("departmentId", filters.departmentId.trim());
+      if (filters.batchId.trim()) params.set("batchId", filters.batchId.trim());
+      if (filters.year.trim()) params.set("year", filters.year.trim());
+      const query = params.toString() ? `?${params.toString()}` : "";
+      dispatch(fetchSuperStudents(query));
+    },
+    [
+      dispatch,
+      filters.batchId,
+      filters.collegeId,
+      filters.departmentId,
+      filters.search,
+      filters.year,
+    ],
+  );
 
   const runSearch = useCallback(() => {
     setPage(1);
@@ -214,13 +316,29 @@ export default function StudentsPage() {
     mutationFn: (payload) => superAdminApi.createStudent(payload),
     onSuccess: (payload) => {
       setCreatedCredentials(payload.credentials || null);
-      setStudentForm({ fullName: "", email: "", enrollNumber: "", year: "", collegeId: "", departmentId: "", batchId: "" });
-      setBanner({ type: "success", title: "Student created", message: "Student account created with generated credentials." });
+      setStudentForm({
+        fullName: "",
+        email: "",
+        enrollNumber: "",
+        year: "",
+        collegeId: "",
+        departmentId: "",
+        batchId: "",
+      });
+      setBanner({
+        type: "success",
+        title: "Student created",
+        message: "Student account created with generated credentials.",
+      });
       toast.success("Student account created");
       loadStudents(page);
     },
     onError: (error) => {
-      setBanner({ type: "error", title: "Create student failed", message: error?.message || "Unable to create student account." });
+      setBanner({
+        type: "error",
+        title: "Create student failed",
+        message: error?.message || "Unable to create student account.",
+      });
       toast.error(error?.message || "Unable to create student account");
     },
   });
@@ -229,25 +347,42 @@ export default function StudentsPage() {
     mutationFn: (payload) => superAdminApi.bulkImportStudents(payload),
     onSuccess: (payload) => {
       setActiveImportJobId(payload.jobId);
-      setBanner({ type: "success", title: "Import queued", message: "CSV processing started in background." });
+      setBanner({
+        type: "success",
+        title: "Import queued",
+        message: "CSV processing started in background.",
+      });
       toast.success("Import job queued");
     },
     onError: (error) => {
-      setBanner({ type: "error", title: "Import queue failed", message: error?.message || "Unable to queue import job." });
+      setBanner({
+        type: "error",
+        title: "Import queue failed",
+        message: error?.message || "Unable to queue import job.",
+      });
       toast.error(error?.message || "Unable to queue import job");
     },
   });
 
   const updateStudentMutation = useMutation({
-    mutationFn: (payload) => superAdminApi.updateStudent(editingStudent?.id, payload),
+    mutationFn: (payload) =>
+      superAdminApi.updateStudent(editingStudent?.id, payload),
     onSuccess: () => {
-      setBanner({ type: "success", title: "Student updated", message: "Student information has been updated successfully." });
+      setBanner({
+        type: "success",
+        title: "Student updated",
+        message: "Student information has been updated successfully.",
+      });
       toast.success("Student updated successfully");
       setEditingStudent(null);
       loadStudents(page);
     },
     onError: (error) => {
-      setBanner({ type: "error", title: "Update failed", message: error?.message || "Unable to update student." });
+      setBanner({
+        type: "error",
+        title: "Update failed",
+        message: error?.message || "Unable to update student.",
+      });
       toast.error(error?.message || "Unable to update student");
     },
   });
@@ -256,11 +391,19 @@ export default function StudentsPage() {
     mutationFn: (studentId) => superAdminApi.resetStudentPassword(studentId),
     onSuccess: () => {
       toast.success("Student password reset to the default rule.");
-      setBanner({ type: "success", title: "Password reset", message: "Student password has been reset successfully." });
+      setBanner({
+        type: "success",
+        title: "Password reset",
+        message: "Student password has been reset successfully.",
+      });
       setPendingResetStudent(null);
     },
     onError: (error) => {
-      setBanner({ type: "error", title: "Reset failed", message: error?.message || "Unable to reset student password." });
+      setBanner({
+        type: "error",
+        title: "Reset failed",
+        message: error?.message || "Unable to reset student password.",
+      });
       toast.error(error?.message || "Unable to reset student password");
     },
   });
@@ -281,7 +424,11 @@ export default function StudentsPage() {
       loadStudents(page);
     },
     onError: (error) => {
-      setBanner({ type: "error", title: "Year update failed", message: error?.message || "Unable to promote student years." });
+      setBanner({
+        type: "error",
+        title: "Year update failed",
+        message: error?.message || "Unable to promote student years.",
+      });
       toast.error(error?.message || "Unable to promote student years");
     },
   });
@@ -291,11 +438,19 @@ export default function StudentsPage() {
       await superAdminApi.deleteStudent(student.id, {
         ...(confirmationText ? { confirmationText } : {}),
       });
-      setBanner({ type: "success", title: "Student deleted", message: `${student.fullName} has been permanently deleted from the database.` });
+      setBanner({
+        type: "success",
+        title: "Student deleted",
+        message: `${student.fullName} has been permanently deleted from the database.`,
+      });
       toast.success("Student deleted successfully");
       loadStudents(page);
     } catch (error) {
-      setBanner({ type: "error", title: "Delete failed", message: error?.message || "Unable to delete student." });
+      setBanner({
+        type: "error",
+        title: "Delete failed",
+        message: error?.message || "Unable to delete student.",
+      });
       toast.error(error?.message || "Unable to delete student");
     }
   };
@@ -318,7 +473,12 @@ export default function StudentsPage() {
   };
 
   const handleEditSubmit = () => {
-    if (!editFormData.fullName.trim() || !editFormData.email.trim() || !editFormData.enrollNumber.trim() || !editFormData.year) {
+    if (
+      !editFormData.fullName.trim() ||
+      !editFormData.email.trim() ||
+      !editFormData.enrollNumber.trim() ||
+      !editFormData.year
+    ) {
       toast.error("Please fill in all required fields");
       return;
     }
@@ -337,18 +497,34 @@ export default function StudentsPage() {
     if (!importJobQuery.data) return;
 
     if (importJobQuery.data.status === "completed") {
-      setBanner({ type: "success", title: "Import completed", message: "Refresh student list to review newly created accounts." });
+      setBanner({
+        type: "success",
+        title: "Import completed",
+        message: "Refresh student list to review newly created accounts.",
+      });
       loadStudents(page);
       return;
     }
 
     if (importJobQuery.data.status === "failed") {
-      setBanner({ type: "error", title: "Import failed", message: importJobQuery.data.error || "Import job failed during processing." });
+      setBanner({
+        type: "error",
+        title: "Import failed",
+        message:
+          importJobQuery.data.error || "Import job failed during processing.",
+      });
       return;
     }
 
-    if (importJobQuery.data.status === "queued" || importJobQuery.data.status === "processing") {
-      setBanner({ type: "warning", title: "Import in progress", message: "Job is still running. Results will appear shortly." });
+    if (
+      importJobQuery.data.status === "queued" ||
+      importJobQuery.data.status === "processing"
+    ) {
+      setBanner({
+        type: "warning",
+        title: "Import in progress",
+        message: "Job is still running. Results will appear shortly.",
+      });
     }
   }, [importJobQuery.data, loadStudents, page]);
 
@@ -359,20 +535,42 @@ export default function StudentsPage() {
     }
   }, [filters.collegeId, loadStudents]);
 
-  const departments = useMemo(() => unwrapItems(departmentsQuery.data), [departmentsQuery.data]);
-  const batches = useMemo(() => unwrapItems(batchesQuery.data), [batchesQuery.data]);
-  const filterDepartments = useMemo(() => unwrapItems(filterDepartmentsQuery.data), [filterDepartmentsQuery.data]);
-  const filterBatches = useMemo(() => unwrapItems(filterBatchesQuery.data), [filterBatchesQuery.data]);
-  const visibleStudents = useMemo(() => (filters.collegeId ? students : []), [filters.collegeId, students]);
-  const studentTotalPages = Number(studentPagination?.totalPages ?? studentPagination?.pages ?? 1);
+  const departments = useMemo(
+    () => unwrapItems(departmentsQuery.data),
+    [departmentsQuery.data],
+  );
+  const batches = useMemo(
+    () => unwrapItems(batchesQuery.data),
+    [batchesQuery.data],
+  );
+  const filterDepartments = useMemo(
+    () => unwrapItems(filterDepartmentsQuery.data),
+    [filterDepartmentsQuery.data],
+  );
+  const filterBatches = useMemo(
+    () => unwrapItems(filterBatchesQuery.data),
+    [filterBatchesQuery.data],
+  );
+  const visibleStudents = useMemo(
+    () => (filters.collegeId ? students : []),
+    [filters.collegeId, students],
+  );
+  const studentTotalPages = Number(
+    studentPagination?.totalPages ?? studentPagination?.pages ?? 1,
+  );
   const studentCurrentPage = Number(studentPagination?.page ?? page ?? 1);
   const filteredFilterBatches = useMemo(() => {
     if (!filters.departmentId) return filterBatches;
-    return filterBatches.filter((batch) => String(batch.departmentId) === String(filters.departmentId));
+    return filterBatches.filter(
+      (batch) => String(batch.departmentId) === String(filters.departmentId),
+    );
   }, [filterBatches, filters.departmentId]);
   const filteredBatches = useMemo(() => {
     if (!studentForm.departmentId) return batches;
-    return batches.filter((batch) => String(batch.departmentId) === String(studentForm.departmentId));
+    return batches.filter(
+      (batch) =>
+        String(batch.departmentId) === String(studentForm.departmentId),
+    );
   }, [batches, studentForm.departmentId]);
 
   const editDepartmentsQuery = useQuery({
@@ -393,17 +591,33 @@ export default function StudentsPage() {
     enabled: Boolean(editFormData.collegeId),
   });
 
-  const editDepartments = useMemo(() => unwrapItems(editDepartmentsQuery.data), [editDepartmentsQuery.data]);
-  const editBatches = useMemo(() => unwrapItems(editBatchesQuery.data), [editBatchesQuery.data]);
+  const editDepartments = useMemo(
+    () => unwrapItems(editDepartmentsQuery.data),
+    [editDepartmentsQuery.data],
+  );
+  const editBatches = useMemo(
+    () => unwrapItems(editBatchesQuery.data),
+    [editBatchesQuery.data],
+  );
   const filteredEditBatches = useMemo(() => {
     if (!editFormData.departmentId) return editBatches;
-    return editBatches.filter((batch) => String(batch.departmentId) === String(editFormData.departmentId));
+    return editBatches.filter(
+      (batch) =>
+        String(batch.departmentId) === String(editFormData.departmentId),
+    );
   }, [editBatches, editFormData.departmentId]);
 
   return (
     <div className="space-y-6">
       {banner.type ? (
-        <Alert variant={banner.type === "error" ? "destructive" : "default"} className={banner.type === "warning" ? "border-warning/30 bg-warning/10 text-warning" : ""}>
+        <Alert
+          variant={banner.type === "error" ? "destructive" : "default"}
+          className={
+            banner.type === "warning"
+              ? "border-warning/30 bg-warning/10 text-warning"
+              : ""
+          }
+        >
           <AlertTitle>{banner.title}</AlertTitle>
           <AlertDescription>{banner.message}</AlertDescription>
         </Alert>
@@ -411,232 +625,151 @@ export default function StudentsPage() {
 
       <Card className="rounded-2xl border-border">
         <CardHeader>
-          <CardTitle>Create Student Account</CardTitle>
-          <CardDescription>Super Admin can create student accounts manually across colleges.</CardDescription>
+          <CardTitle>Global Students</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="grid gap-3 md:grid-cols-3">
-            <Input
-              placeholder="Full name"
-              value={studentForm.fullName}
-              onChange={(event) => setStudentForm((prev) => ({ ...prev, fullName: event.target.value }))}
-            />
-            <Input
-              type="email"
-              placeholder="Email"
-              value={studentForm.email}
-              onChange={(event) => setStudentForm((prev) => ({ ...prev, email: event.target.value }))}
-            />
-            <Input
-              placeholder="Enroll number"
-              value={studentForm.enrollNumber}
-              onChange={(event) => setStudentForm((prev) => ({ ...prev, enrollNumber: event.target.value }))}
-            />
-            <select
-              className="h-10 rounded-md border border-border px-3 text-sm"
-              value={studentForm.year}
-              onChange={(event) => setStudentForm((prev) => ({ ...prev, year: event.target.value }))}
-            >
-              <option value="">Select Year</option>
-              <option value="1">1 YEAR</option>
-              <option value="2">2 YEAR</option>
-              <option value="3">3 YEAR</option>
-              <option value="4">4 YEAR</option>
-            </select>
-            <select
-              className="h-10 rounded-md border border-border px-3 text-sm"
-              value={studentForm.collegeId}
-              onChange={(event) => setStudentForm((prev) => ({ ...prev, collegeId: event.target.value, departmentId: "", batchId: "" }))}
-            >
-              <option value="">Select college</option>
-              {colleges.filter((college) => college?.isActive !== false).map((college) => (
-                <option key={college.id} value={college.id}>{college.name}</option>
-              ))}
-            </select>
-            <select
-              className="h-10 rounded-md border border-border px-3 text-sm"
-              value={studentForm.departmentId}
-              onChange={(event) => setStudentForm((prev) => ({ ...prev, departmentId: event.target.value, batchId: "" }))}
-              disabled={!studentForm.collegeId || departmentsQuery.isLoading}
-            >
-              <option value="">{studentForm.collegeId ? (departmentsQuery.isLoading ? "Loading departments..." : "Select department") : "Select college first"}</option>
-              {studentForm.collegeId && departments.map((department) => (
-                <option key={department.id} value={department.id}>{department.name}</option>
-              ))}
-            </select>
-            <select
-              className="h-10 rounded-md border border-border px-3 text-sm"
-              value={studentForm.batchId}
-              onChange={(event) => setStudentForm((prev) => ({ ...prev, batchId: event.target.value }))}
-              disabled={!studentForm.collegeId || batchesQuery.isLoading}
-            >
-              <option value="">{studentForm.collegeId ? (batchesQuery.isLoading ? "Loading batches..." : "Select batch (optional)") : "Select college first"}</option>
-              {studentForm.collegeId && filteredBatches.map((batch) => (
-                <option key={batch.id} value={batch.id}>{batch.name}</option>
-              ))}
-            </select>
-          </div>
-          <p className="text-xs text-text-secondary">Student ID uses the entered enroll number exactly. Password rule: first 3 letters of full name (first letter capitalized) + @ + last 3 digits of enroll number.</p>
-          <Button
-            onClick={() => createStudentMutation.mutate({
-              fullName: studentForm.fullName,
-              email: studentForm.email,
-              enrollNumber: studentForm.enrollNumber,
-              ...(studentForm.year ? { year: Number(studentForm.year) } : {}),
-              collegeId: studentForm.collegeId,
-              departmentId: studentForm.departmentId,
-              ...(studentForm.batchId ? { batchId: studentForm.batchId } : {}),
-            })}
-            disabled={
-              createStudentMutation.isPending ||
-              !studentForm.fullName.trim() ||
-              !studentForm.email.trim() ||
-              !studentForm.enrollNumber.trim() ||
-              !studentForm.year ||
-              !studentForm.collegeId ||
-              !studentForm.departmentId
-            }
-          >
-            {createStudentMutation.isPending ? "Creating..." : "Create Student"}
-          </Button>
-
-          {createdCredentials ? (
-            <div className="rounded-lg border border-success/30 bg-success/10 p-3 text-sm text-success">
-              <p className="font-semibold">Student credentials</p>
-              <p>Email: {createdCredentials.identifier}</p>
-              <p>Student ID: {createdCredentials.studentId}</p>
-              <p>Password: {createdCredentials.password}</p>
-            </div>
-          ) : null}
-        </CardContent>
-      </Card>
-
-      
-
-      <Card className="rounded-2xl border-border">
-        <CardHeader>
-          <CardTitle>Bulk Import (Excel/CSV)</CardTitle>
-          <CardDescription>Upload .xlsx/.csv file or paste CSV for the selected college.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="grid gap-3 md:grid-cols-2">
-            <select
-              className="h-10 rounded-md border border-border px-3 text-sm"
-              value={filters.collegeId}
-              onChange={(event) => setFilters((prev) => ({ ...prev, collegeId: event.target.value }))}
-            >
-              <option value="">Select target college</option>
-              {colleges.filter((college) => college?.isActive !== false).map((college) => (
-                <option key={college.id} value={college.id}>{college.name}</option>
-              ))}
-            </select>
-            <Input type="file" accept=".xlsx,.csv" onChange={handleImportFile} />
-          </div>
-
-          {importFileName ? <p className="text-xs text-text-secondary">Loaded: {importFileName}</p> : null}
-          <p className="text-xs text-text-secondary">Required columns: fullName, email, enrollNumber, department, year. Student ID will use enrollNumber exactly. Optional: batch.</p>
-
-          <Textarea rows={8} value={csvData} onChange={(event) => setCsvData(event.target.value)} />
-
-          <div className="flex items-center gap-2">
-            <Button
-              onClick={() => importMutation.mutate({ csvData, collegeId: filters.collegeId })}
-              disabled={importMutation.isPending || !filters.collegeId || !csvData.trim()}
-            >
-              {importMutation.isPending ? "Queueing..." : "Start Import"}
-            </Button>
-            {activeImportJobId ? <p className="text-xs text-text-secondary">Job: {activeImportJobId}</p> : null}
-          </div>
-
-          {importJobQuery.data ? (
-            <div className="rounded-lg border border-border p-3 text-sm">
-              <p className="font-medium text-text-primary">Status: {String(importJobQuery.data.status || "unknown").toUpperCase()}</p>
-              {importJobQuery.data.result ? (
-                <>
-                  <p className="mt-1 text-text-secondary">
-                    Created: {importJobQuery.data.result.created || 0} • Failed: {importJobQuery.data.result.failed || 0} • Duplicates: {importJobQuery.data.result.duplicates || 0}
-                  </p>
-                  {Array.isArray(importJobQuery.data.result.errors) && importJobQuery.data.result.errors.length > 0 ? (
-                    <div className="mt-2 max-h-40 overflow-auto rounded-md border border-border bg-background p-2 text-xs text-text-secondary">
-                      {importJobQuery.data.result.errors.slice(0, 10).map((item, index) => (
-                        <p key={`${item.row || "row"}-${index}`}>Row {item.row || "?"}: {item.reason || "Invalid data"}</p>
-                      ))}
-                    </div>
-                  ) : null}
-                </>
-              ) : null}
-              {importJobQuery.data.error ? <p className="mt-1 text-danger">Error: {importJobQuery.data.error}</p> : null}
-            </div>
-          ) : null}
-        </CardContent>
-      </Card>
-
-      <Card className="rounded-2xl border-border">
-        <CardHeader><CardTitle>Global Students</CardTitle></CardHeader>
         <CardContent>
           <div className="mb-4 grid gap-2 sm:grid-cols-6">
-            <Input placeholder="Search" value={filters.search} onChange={(e) => setFilters((prev) => ({ ...prev, search: e.target.value }))} />
+            <Input
+              placeholder="Search"
+              value={filters.search}
+              onChange={(e) =>
+                setFilters((prev) => ({ ...prev, search: e.target.value }))
+              }
+            />
             <select
               className="h-10 rounded-md border border-border px-3 text-sm"
               value={filters.collegeId}
-              onChange={(e) => setFilters((prev) => ({ ...prev, collegeId: e.target.value, departmentId: "", batchId: "" }))}
+              onChange={(e) =>
+                setFilters((prev) => ({
+                  ...prev,
+                  collegeId: e.target.value,
+                  departmentId: "",
+                  batchId: "",
+                }))
+              }
             >
               <option value="">All colleges</option>
               {colleges.map((college) => (
-                <option key={college.id} value={college.id}>{college.name}</option>
+                <option key={college.id} value={college.id}>
+                  {college.name}
+                </option>
               ))}
             </select>
             <select
               className="h-10 rounded-md border border-border px-3 text-sm"
               value={filters.departmentId}
-              onChange={(e) => setFilters((prev) => ({ ...prev, departmentId: e.target.value, batchId: "" }))}
+              onChange={(e) =>
+                setFilters((prev) => ({
+                  ...prev,
+                  departmentId: e.target.value,
+                  batchId: "",
+                }))
+              }
               disabled={!filters.collegeId || filterDepartmentsQuery.isLoading}
             >
-              <option value="">{filters.collegeId ? (filterDepartmentsQuery.isLoading ? "Loading departments..." : "All departments") : "Select college first"}</option>
-              {filters.collegeId && filterDepartments.map((department) => (
-                <option key={department.id} value={department.id}>{department.name}</option>
-              ))}
+              <option value="">
+                {filters.collegeId
+                  ? filterDepartmentsQuery.isLoading
+                    ? "Loading departments..."
+                    : "All departments"
+                  : "Select college first"}
+              </option>
+              {filters.collegeId &&
+                filterDepartments.map((department) => (
+                  <option key={department.id} value={department.id}>
+                    {department.name}
+                  </option>
+                ))}
             </select>
             <select
               className="h-10 rounded-md border border-border px-3 text-sm"
               value={filters.batchId}
-              onChange={(e) => setFilters((prev) => ({ ...prev, batchId: e.target.value }))}
+              onChange={(e) =>
+                setFilters((prev) => ({ ...prev, batchId: e.target.value }))
+              }
               disabled={!filters.collegeId || filterBatchesQuery.isLoading}
             >
-              <option value="">{filters.collegeId ? (filterBatchesQuery.isLoading ? "Loading batches..." : "All batches") : "Select college first"}</option>
-              {filters.collegeId && filteredFilterBatches.map((batch) => (
-                <option key={batch.id} value={batch.id}>{batch.name}</option>
-              ))}
+              <option value="">
+                {filters.collegeId
+                  ? filterBatchesQuery.isLoading
+                    ? "Loading batches..."
+                    : "All batches"
+                  : "Select college first"}
+              </option>
+              {filters.collegeId &&
+                filteredFilterBatches.map((batch) => (
+                  <option key={batch.id} value={batch.id}>
+                    {batch.name}
+                  </option>
+                ))}
             </select>
             <select
               className="h-10 rounded-md border border-border px-3 text-sm"
               value={filters.year}
-              onChange={(e) => setFilters((prev) => ({ ...prev, year: e.target.value }))}
+              onChange={(e) =>
+                setFilters((prev) => ({ ...prev, year: e.target.value }))
+              }
             >
               <option value="">All years</option>
               {YEAR_OPTIONS.map((year) => (
-                <option key={year} value={year}>{year} YEAR</option>
+                <option key={year} value={year}>
+                  {year} YEAR
+                </option>
               ))}
             </select>
-            <Button variant="outline" onClick={runSearch} disabled={!filters.collegeId}>Search</Button>
+            <Button
+              variant="outline"
+              onClick={runSearch}
+              disabled={!filters.collegeId}
+            >
+              Search
+            </Button>
           </div>
           <div className="space-y-2">
-            {!filters.collegeId ? <p className="text-sm text-text-secondary">Select a college to view students.</p> : null}
-            {filters.collegeId && visibleStudents.length === 0 ? <p className="text-sm text-text-secondary">No students found.</p> : null}
+            {!filters.collegeId ? (
+              <p className="text-sm text-text-secondary">
+                Select a college to view students.
+              </p>
+            ) : null}
+            {filters.collegeId && visibleStudents.length === 0 ? (
+              <p className="text-sm text-text-secondary">No students found.</p>
+            ) : null}
             {visibleStudents.map((student) => (
-              <div key={student.id} className="flex flex-col gap-3 rounded-xl border border-border px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <div
+                key={student.id}
+                className="flex flex-col gap-3 rounded-xl border border-border px-3 py-3 sm:flex-row sm:items-center sm:justify-between"
+              >
                 <div className="min-w-0">
-                  <p className="truncate font-medium text-text-primary">{student.fullName}</p>
-                  <p className="mt-1 break-words text-xs leading-5 text-text-secondary">{student.email} • {student.studentId} • {student.college?.name} • Year {student.year || "-"}</p>
+                  <p className="truncate font-medium text-text-primary">
+                    {student.fullName}
+                  </p>
+                  <p className="mt-1 break-words text-xs leading-5 text-text-secondary">
+                    {student.email} • {student.studentId} •{" "}
+                    {student.college?.name} • Year {student.year || "-"}
+                  </p>
                 </div>
                 <div className="grid grid-cols-1 gap-2 sm:flex sm:shrink-0 sm:items-center sm:justify-end">
-                  <Button className="w-full sm:w-auto" size="sm" variant="destructive" onClick={() => openResetConfirm(student)} disabled={resetPasswordMutation.isPending}>
+                  <Button
+                    className="w-full sm:w-auto"
+                    size="sm"
+                    variant="destructive"
+                    onClick={() => openResetConfirm(student)}
+                    disabled={resetPasswordMutation.isPending}
+                  >
                     Reset Password
                   </Button>
-                  <Button size="sm" className="w-full rounded-md bg-blue-600 px-4 py-2 text-white hover:bg-blue-700 sm:w-auto" onClick={() => openEditForm(student)}>
+                  <Button
+                    size="sm"
+                    className="w-full rounded-md bg-blue-600 px-4 py-2 text-white hover:bg-blue-700 sm:w-auto"
+                    onClick={() => openEditForm(student)}
+                  >
                     Edit
                   </Button>
-                  <Button size="sm" className="w-full rounded-md bg-gray-600 px-4 py-2 text-white hover:bg-red-700 sm:w-auto" onClick={() => setPendingDelete(student)}>
+                  <Button
+                    size="sm"
+                    className="w-full rounded-md bg-gray-600 px-4 py-2 text-white hover:bg-red-700 sm:w-auto"
+                    onClick={() => setPendingDelete(student)}
+                  >
                     Delete
                   </Button>
                 </div>
@@ -644,7 +777,9 @@ export default function StudentsPage() {
             ))}
             {(studentTotalPages || 1) > 1 ? (
               <div className="flex flex-col gap-3 border-t border-border pt-3 text-xs text-text-secondary sm:flex-row sm:items-center sm:justify-between">
-                <p>Page {studentCurrentPage} of {studentTotalPages || 1}</p>
+                <p>
+                  Page {studentCurrentPage} of {studentTotalPages || 1}
+                </p>
                 <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center">
                   <Button
                     className="w-full sm:w-auto"
@@ -681,32 +816,327 @@ export default function StudentsPage() {
 
       <Card className="rounded-2xl border-border">
         <CardHeader>
+          <CardTitle>Create Student Account</CardTitle>
+          <CardDescription>
+            Super Admin can create student accounts manually across colleges.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid gap-3 md:grid-cols-3">
+            <Input
+              placeholder="Full name"
+              value={studentForm.fullName}
+              onChange={(event) =>
+                setStudentForm((prev) => ({
+                  ...prev,
+                  fullName: event.target.value,
+                }))
+              }
+            />
+            <Input
+              type="email"
+              placeholder="Email"
+              value={studentForm.email}
+              onChange={(event) =>
+                setStudentForm((prev) => ({
+                  ...prev,
+                  email: event.target.value,
+                }))
+              }
+            />
+            <Input
+              placeholder="Enroll number"
+              value={studentForm.enrollNumber}
+              onChange={(event) =>
+                setStudentForm((prev) => ({
+                  ...prev,
+                  enrollNumber: event.target.value,
+                }))
+              }
+            />
+            <select
+              className="h-10 rounded-md border border-border px-3 text-sm"
+              value={studentForm.year}
+              onChange={(event) =>
+                setStudentForm((prev) => ({
+                  ...prev,
+                  year: event.target.value,
+                }))
+              }
+            >
+              <option value="">Select Year</option>
+              <option value="1">1 YEAR</option>
+              <option value="2">2 YEAR</option>
+              <option value="3">3 YEAR</option>
+              <option value="4">4 YEAR</option>
+            </select>
+            <select
+              className="h-10 rounded-md border border-border px-3 text-sm"
+              value={studentForm.collegeId}
+              onChange={(event) =>
+                setStudentForm((prev) => ({
+                  ...prev,
+                  collegeId: event.target.value,
+                  departmentId: "",
+                  batchId: "",
+                }))
+              }
+            >
+              <option value="">Select college</option>
+              {colleges
+                .filter((college) => college?.isActive !== false)
+                .map((college) => (
+                  <option key={college.id} value={college.id}>
+                    {college.name}
+                  </option>
+                ))}
+            </select>
+            <select
+              className="h-10 rounded-md border border-border px-3 text-sm"
+              value={studentForm.departmentId}
+              onChange={(event) =>
+                setStudentForm((prev) => ({
+                  ...prev,
+                  departmentId: event.target.value,
+                  batchId: "",
+                }))
+              }
+              disabled={!studentForm.collegeId || departmentsQuery.isLoading}
+            >
+              <option value="">
+                {studentForm.collegeId
+                  ? departmentsQuery.isLoading
+                    ? "Loading departments..."
+                    : "Select department"
+                  : "Select college first"}
+              </option>
+              {studentForm.collegeId &&
+                departments.map((department) => (
+                  <option key={department.id} value={department.id}>
+                    {department.name}
+                  </option>
+                ))}
+            </select>
+            <select
+              className="h-10 rounded-md border border-border px-3 text-sm"
+              value={studentForm.batchId}
+              onChange={(event) =>
+                setStudentForm((prev) => ({
+                  ...prev,
+                  batchId: event.target.value,
+                }))
+              }
+              disabled={!studentForm.collegeId || batchesQuery.isLoading}
+            >
+              <option value="">
+                {studentForm.collegeId
+                  ? batchesQuery.isLoading
+                    ? "Loading batches..."
+                    : "Select batch (optional)"
+                  : "Select college first"}
+              </option>
+              {studentForm.collegeId &&
+                filteredBatches.map((batch) => (
+                  <option key={batch.id} value={batch.id}>
+                    {batch.name}
+                  </option>
+                ))}
+            </select>
+          </div>
+          <p className="text-xs text-text-secondary">
+            Student ID uses the entered enroll number exactly. Password rule:
+            first 3 letters of full name (first letter capitalized) + @ + last 3
+            digits of enroll number.
+          </p>
+          <Button
+            onClick={() =>
+              createStudentMutation.mutate({
+                fullName: studentForm.fullName,
+                email: studentForm.email,
+                enrollNumber: studentForm.enrollNumber,
+                ...(studentForm.year ? { year: Number(studentForm.year) } : {}),
+                collegeId: studentForm.collegeId,
+                departmentId: studentForm.departmentId,
+                ...(studentForm.batchId
+                  ? { batchId: studentForm.batchId }
+                  : {}),
+              })
+            }
+            disabled={
+              createStudentMutation.isPending ||
+              !studentForm.fullName.trim() ||
+              !studentForm.email.trim() ||
+              !studentForm.enrollNumber.trim() ||
+              !studentForm.year ||
+              !studentForm.collegeId ||
+              !studentForm.departmentId
+            }
+          >
+            {createStudentMutation.isPending ? "Creating..." : "Create Student"}
+          </Button>
+
+          {createdCredentials ? (
+            <div className="rounded-lg border border-success/30 bg-success/10 p-3 text-sm text-success">
+              <p className="font-semibold">Student credentials</p>
+              <p>Email: {createdCredentials.identifier}</p>
+              <p>Student ID: {createdCredentials.studentId}</p>
+              <p>Password: {createdCredentials.password}</p>
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      <Card className="rounded-2xl border-border">
+        <CardHeader>
+          <CardTitle>Bulk Import (Excel/CSV)</CardTitle>
+          <CardDescription>
+            Upload .xlsx/.csv file or paste CSV for the selected college.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid gap-3 md:grid-cols-2">
+            <select
+              className="h-10 rounded-md border border-border px-3 text-sm"
+              value={filters.collegeId}
+              onChange={(event) =>
+                setFilters((prev) => ({
+                  ...prev,
+                  collegeId: event.target.value,
+                }))
+              }
+            >
+              <option value="">Select target college</option>
+              {colleges
+                .filter((college) => college?.isActive !== false)
+                .map((college) => (
+                  <option key={college.id} value={college.id}>
+                    {college.name}
+                  </option>
+                ))}
+            </select>
+            <Input
+              type="file"
+              accept=".xlsx,.csv"
+              onChange={handleImportFile}
+            />
+          </div>
+
+          {importFileName ? (
+            <p className="text-xs text-text-secondary">
+              Loaded: {importFileName}
+            </p>
+          ) : null}
+          <p className="text-xs text-text-secondary">
+            Required columns: fullName, email, enrollNumber, department, year.
+            Student ID will use enrollNumber exactly. Optional: batch.
+          </p>
+
+          <Textarea
+            rows={8}
+            value={csvData}
+            onChange={(event) => setCsvData(event.target.value)}
+          />
+
+          <div className="flex items-center gap-2">
+            <Button
+              onClick={() =>
+                importMutation.mutate({ csvData, collegeId: filters.collegeId })
+              }
+              disabled={
+                importMutation.isPending ||
+                !filters.collegeId ||
+                !csvData.trim()
+              }
+            >
+              {importMutation.isPending ? "Queueing..." : "Start Import"}
+            </Button>
+            {activeImportJobId ? (
+              <p className="text-xs text-text-secondary">
+                Job: {activeImportJobId}
+              </p>
+            ) : null}
+          </div>
+
+          {importJobQuery.data ? (
+            <div className="rounded-lg border border-border p-3 text-sm">
+              <p className="font-medium text-text-primary">
+                Status:{" "}
+                {String(importJobQuery.data.status || "unknown").toUpperCase()}
+              </p>
+              {importJobQuery.data.result ? (
+                <>
+                  <p className="mt-1 text-text-secondary">
+                    Created: {importJobQuery.data.result.created || 0} • Failed:{" "}
+                    {importJobQuery.data.result.failed || 0} • Duplicates:{" "}
+                    {importJobQuery.data.result.duplicates || 0}
+                  </p>
+                  {Array.isArray(importJobQuery.data.result.errors) &&
+                  importJobQuery.data.result.errors.length > 0 ? (
+                    <div className="mt-2 max-h-40 overflow-auto rounded-md border border-border bg-background p-2 text-xs text-text-secondary">
+                      {importJobQuery.data.result.errors
+                        .slice(0, 10)
+                        .map((item, index) => (
+                          <p key={`${item.row || "row"}-${index}`}>
+                            Row {item.row || "?"}:{" "}
+                            {item.reason || "Invalid data"}
+                          </p>
+                        ))}
+                    </div>
+                  ) : null}
+                </>
+              ) : null}
+              {importJobQuery.data.error ? (
+                <p className="mt-1 text-danger">
+                  Error: {importJobQuery.data.error}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      <Card className="rounded-2xl border-border">
+        <CardHeader>
           <CardTitle>Promote Student Years</CardTitle>
-          <CardDescription>Select a college and confirm before applying the year update.</CardDescription>
+          <CardDescription>
+            Select a college and confirm before applying the year update.
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="grid gap-3 md:grid-cols-3">
             <select
               className="h-10 rounded-md border border-border px-3 text-sm"
               value={yearPromotionCollegeId}
-              onChange={(event) => setYearPromotionCollegeId(event.target.value)}
+              onChange={(event) =>
+                setYearPromotionCollegeId(event.target.value)
+              }
             >
               <option value="">Select college</option>
-              {colleges.filter((college) => college?.isActive !== false).map((college) => (
-                <option key={college.id} value={college.id}>{college.name}</option>
-              ))}
+              {colleges
+                .filter((college) => college?.isActive !== false)
+                .map((college) => (
+                  <option key={college.id} value={college.id}>
+                    {college.name}
+                  </option>
+                ))}
             </select>
             <Input
               placeholder="Type PROMOTE STUDENTS YEAR"
               value={yearPromotionConfirmation}
-              onChange={(event) => setYearPromotionConfirmation(event.target.value)}
+              onChange={(event) =>
+                setYearPromotionConfirmation(event.target.value)
+              }
             />
             <div className="flex items-center gap-2 rounded-md border border-border px-3 py-2">
               <Checkbox
                 checked={yearPromotionVerified}
-                onCheckedChange={(checked) => setYearPromotionVerified(Boolean(checked))}
+                onCheckedChange={(checked) =>
+                  setYearPromotionVerified(Boolean(checked))
+                }
               />
-              <span className="text-sm text-text-secondary">I understand prior 4th-year accounts will move to alumni status.</span>
+              <span className="text-sm text-text-secondary">
+                I understand prior 4th-year accounts will move to alumni status.
+              </span>
             </div>
           </div>
 
@@ -718,9 +1148,16 @@ export default function StudentsPage() {
               !yearPromotionVerified ||
               yearPromotionConfirmation.trim() !== YEAR_PROMOTION_CONFIRMATION
             }
-            onClick={() => promoteStudentsYearMutation.mutate({ collegeId: yearPromotionCollegeId, confirmationText: yearPromotionConfirmation })}
+            onClick={() =>
+              promoteStudentsYearMutation.mutate({
+                collegeId: yearPromotionCollegeId,
+                confirmationText: yearPromotionConfirmation,
+              })
+            }
           >
-            {promoteStudentsYearMutation.isPending ? "Updating..." : "Promote Years for Selected College"}
+            {promoteStudentsYearMutation.isPending
+              ? "Updating..."
+              : "Promote Years for Selected College"}
           </Button>
         </CardContent>
       </Card>
@@ -730,8 +1167,12 @@ export default function StudentsPage() {
           <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl bg-card border border-border shadow-lg">
             <div className="sticky top-0 flex items-center justify-between border-b border-border bg-card p-6 z-10">
               <div>
-                <h2 className="text-xl font-semibold text-text-primary">Edit Student - {editingStudent?.fullName}</h2>
-                <p className="text-sm text-text-secondary mt-1">Update student information</p>
+                <h2 className="text-xl font-semibold text-text-primary">
+                  Edit Student - {editingStudent?.fullName}
+                </h2>
+                <p className="text-sm text-text-secondary mt-1">
+                  Update student information
+                </p>
               </div>
               <button
                 onClick={() => setEditingStudent(null)}
@@ -746,23 +1187,43 @@ export default function StudentsPage() {
                 <Input
                   placeholder="Full name"
                   value={editFormData.fullName}
-                  onChange={(event) => setEditFormData((prev) => ({ ...prev, fullName: event.target.value }))}
+                  onChange={(event) =>
+                    setEditFormData((prev) => ({
+                      ...prev,
+                      fullName: event.target.value,
+                    }))
+                  }
                 />
                 <Input
                   type="email"
                   placeholder="Email"
                   value={editFormData.email}
-                  onChange={(event) => setEditFormData((prev) => ({ ...prev, email: event.target.value }))}
+                  onChange={(event) =>
+                    setEditFormData((prev) => ({
+                      ...prev,
+                      email: event.target.value,
+                    }))
+                  }
                 />
                 <Input
                   placeholder="Enroll number"
                   value={editFormData.enrollNumber}
-                  onChange={(event) => setEditFormData((prev) => ({ ...prev, enrollNumber: event.target.value }))}
+                  onChange={(event) =>
+                    setEditFormData((prev) => ({
+                      ...prev,
+                      enrollNumber: event.target.value,
+                    }))
+                  }
                 />
                 <select
                   className="h-10 rounded-md border border-border px-3 text-sm"
                   value={editFormData.year}
-                  onChange={(event) => setEditFormData((prev) => ({ ...prev, year: event.target.value }))}
+                  onChange={(event) =>
+                    setEditFormData((prev) => ({
+                      ...prev,
+                      year: event.target.value,
+                    }))
+                  }
                 >
                   <option value="">Select Year</option>
                   <option value="1">1 YEAR</option>
@@ -773,42 +1234,77 @@ export default function StudentsPage() {
                 <select
                   className="h-10 rounded-md border border-border px-3 text-sm"
                   value={editFormData.collegeId}
-                  onChange={(event) => setEditFormData((prev) => ({ ...prev, collegeId: event.target.value, departmentId: "", batchId: "" }))}
+                  onChange={(event) =>
+                    setEditFormData((prev) => ({
+                      ...prev,
+                      collegeId: event.target.value,
+                      departmentId: "",
+                      batchId: "",
+                    }))
+                  }
                 >
                   <option value="">Select college</option>
-                  {colleges.filter((college) => college?.isActive !== false).map((college) => (
-                    <option key={college.id} value={college.id}>{college.name}</option>
-                  ))}
+                  {colleges
+                    .filter((college) => college?.isActive !== false)
+                    .map((college) => (
+                      <option key={college.id} value={college.id}>
+                        {college.name}
+                      </option>
+                    ))}
                 </select>
                 <select
                   className="h-10 rounded-md border border-border px-3 text-sm"
                   value={editFormData.departmentId}
-                  onChange={(event) => setEditFormData((prev) => ({ ...prev, departmentId: event.target.value, batchId: "" }))}
+                  onChange={(event) =>
+                    setEditFormData((prev) => ({
+                      ...prev,
+                      departmentId: event.target.value,
+                      batchId: "",
+                    }))
+                  }
                 >
                   <option value="">Select department</option>
                   {editDepartments.map((department) => (
-                    <option key={department.id} value={department.id}>{department.name}</option>
+                    <option key={department.id} value={department.id}>
+                      {department.name}
+                    </option>
                   ))}
                 </select>
                 <select
                   className="h-10 rounded-md border border-border px-3 text-sm"
                   value={editFormData.batchId}
-                  onChange={(event) => setEditFormData((prev) => ({ ...prev, batchId: event.target.value }))}
+                  onChange={(event) =>
+                    setEditFormData((prev) => ({
+                      ...prev,
+                      batchId: event.target.value,
+                    }))
+                  }
                 >
                   <option value="">Select batch (optional)</option>
                   {filteredEditBatches.map((batch) => (
-                    <option key={batch.id} value={batch.id}>{batch.name}</option>
+                    <option key={batch.id} value={batch.id}>
+                      {batch.name}
+                    </option>
                   ))}
                 </select>
               </div>
             </div>
 
             <div className="sticky bottom-0 border-t border-border bg-background p-6 flex items-center justify-end gap-3">
-              <Button variant="outline" onClick={() => setEditingStudent(null)} disabled={updateStudentMutation.isPending}>
+              <Button
+                variant="outline"
+                onClick={() => setEditingStudent(null)}
+                disabled={updateStudentMutation.isPending}
+              >
                 Cancel
               </Button>
-              <Button onClick={handleEditSubmit} disabled={updateStudentMutation.isPending}>
-                {updateStudentMutation.isPending ? "Updating..." : "Save Changes"}
+              <Button
+                onClick={handleEditSubmit}
+                disabled={updateStudentMutation.isPending}
+              >
+                {updateStudentMutation.isPending
+                  ? "Updating..."
+                  : "Save Changes"}
               </Button>
             </div>
           </div>
@@ -830,8 +1326,6 @@ export default function StudentsPage() {
           }
         }}
       />
-
-
 
       <TypedConfirmDialog
         open={Boolean(pendingDelete)}

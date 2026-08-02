@@ -1393,7 +1393,7 @@ const getLiveMonitoring = asyncHandler(async (req, res) => {
   const sessions = scopedSubmissionIds.length > 0
     ? await db.testSession.findMany({
         where: { testId, submissionId: { in: scopedSubmissionIds } },
-        select: { userId: true, submissionId: true, expiresAt: true },
+        select: { userId: true, submissionId: true, expiresAt: true, lastHeartbeatAt: true, connectionStatus: true },
       })
     : [];
 
@@ -1409,26 +1409,27 @@ const getLiveMonitoring = asyncHandler(async (req, res) => {
   const studentTable = inProgress.map((submission) => {
     const answered = Number(submission?._count?.answers || 0);
     const state = examStateMap.get(submission.id);
-    const cachedProgress = Number(state?.progress);
-    const progress = Number.isFinite(cachedProgress) && cachedProgress > 0
-      ? Math.min(100, Math.round(cachedProgress))
-      : questionCount > 0 ? Math.min(100, Math.round((answered / questionCount) * 100)) : 0;
+    const progress = questionCount > 0 ? Math.min(100, Math.round((answered / questionCount) * 100)) : 0;
     const session = sessionMap.get(submission.id);
     const baselineExpiry = submission.startedAt
       ? new Date(new Date(submission.startedAt).getTime() + Number(test.durationMins || 0) * 60 * 1000)
       : new Date(nowMs);
     const expiresAt = session?.expiresAt || baselineExpiry;
     const timeLeftSec = Math.max(0, Math.floor((new Date(expiresAt).getTime() - nowMs) / 1000));
-    const lastHeartbeat = state?.lastHeartbeatAt
-      ? new Date(state.lastHeartbeatAt).getTime()
-      : submission.lastHeartbeat
-        ? new Date(submission.lastHeartbeat).getTime()
-        : submission.lastAutoSavedAt
-          ? new Date(submission.lastAutoSavedAt).getTime()
-          : new Date(submission.updatedAt).getTime();
-    const idleSeconds = Math.max(0, Math.floor((nowMs - lastHeartbeat) / 1000));
-    const connectionStatus = state?.connectionStatus || (idleSeconds <= 45 ? "ONLINE" : idleSeconds <= 120 ? "UNSTABLE" : "OFFLINE");
+    const heartbeatCandidates = [
+      state?.lastHeartbeatAt,
+      session?.lastHeartbeatAt,
+      submission.lastHeartbeat,
+      submission.lastAutoSavedAt,
+      submission.updatedAt,
+    ]
+      .map((value) => new Date(value || 0).getTime())
+      .filter((value) => Number.isFinite(value) && value > 0);
+    const lastHeartbeat = heartbeatCandidates.length ? Math.max(...heartbeatCandidates) : 0;
+    const idleSeconds = lastHeartbeat > 0 ? Math.max(0, Math.floor((nowMs - lastHeartbeat) / 1000)) : Number.POSITIVE_INFINITY;
+    const connectionStatus = idleSeconds <= 45 ? "ONLINE" : idleSeconds <= 120 ? "UNSTABLE" : "OFFLINE";
     const cachedViolations = Number(state?.violationCount);
+    const persistedViolations = Number(submission?._count?.violations || 0);
 
     return {
       submissionId: submission.id,
@@ -1438,8 +1439,10 @@ const getLiveMonitoring = asyncHandler(async (req, res) => {
       batch: submission.user?.batch?.name || "-",
       progress,
       timeLeftSec,
-      violations: Number.isFinite(cachedViolations) ? cachedViolations : Number(submission?._count?.violations || 0),
+      violations: Number.isFinite(cachedViolations) ? Math.max(cachedViolations, persistedViolations) : persistedViolations,
       connectionStatus,
+      lastHeartbeatAt: lastHeartbeat > 0 ? new Date(lastHeartbeat).toISOString() : null,
+      idleSeconds: Number.isFinite(idleSeconds) ? idleSeconds : null,
       status: submission.status,
       startedAt: submission.startedAt,
     };
@@ -1614,6 +1617,7 @@ const extendAttemptTime = asyncHandler(async (req, res) => {
     action: "TIME_EXTENDED",
     minutesAdded: mins,
     expiresAt: updated.expiresAt,
+    timeLeftSec: Math.max(0, Math.floor((new Date(updated.expiresAt).getTime() - Date.now()) / 1000)),
   };
 
   emitToTestRoom(testId, "student_status_update", payload);

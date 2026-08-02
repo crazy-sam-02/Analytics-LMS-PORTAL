@@ -63,17 +63,28 @@ const createStore = () =>
     },
   });
 
+// Drafts persist in localStorage (survives tab close / crash) wrapped as
+// { v, savedAt, answers }; legacy plain-array sessionStorage drafts are still
+// readable for migration.
+const readLocalDraft = (attemptId) => {
+  const raw = localStorage.getItem(`lms:attempt:draft:${attemptId}`);
+  if (!raw) return [];
+  const parsed = JSON.parse(raw);
+  return Array.isArray(parsed) ? parsed : parsed?.answers || [];
+};
+
 describe("useAttemptAutosave integration", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     sessionStorage.clear();
+    localStorage.clear();
     Object.defineProperty(window.navigator, "onLine", {
       configurable: true,
       value: true,
     });
   });
 
-  it("writes changed answers to local draft immediately for refresh recovery", async () => {
+  it("writes changed answers to a durable local draft immediately for crash recovery", async () => {
     studentApi.patchAttemptAnswers.mockResolvedValue({ saved: true });
     const store = createStore();
 
@@ -82,8 +93,7 @@ describe("useAttemptAutosave integration", () => {
     const { unmount } = renderHook(() => useAttemptAutosave(), { wrapper });
 
     await waitFor(() => {
-      const draft = JSON.parse(sessionStorage.getItem("lms:attempt:draft:attempt-1") || "[]");
-      expect(draft).toEqual([
+      expect(readLocalDraft("attempt-1")).toEqual([
         expect.objectContaining({
           question_id: "q1",
           selected_option: "A",
@@ -111,12 +121,12 @@ describe("useAttemptAutosave integration", () => {
 
     expect(studentApi.patchAttemptAnswers).not.toHaveBeenCalled();
     expect(store.getState().test.save_status).toBe("error");
-    expect(JSON.parse(sessionStorage.getItem("lms:attempt:draft:attempt-1") || "[]")).toHaveLength(1);
+    expect(readLocalDraft("attempt-1")).toHaveLength(1);
 
     unmount();
   });
 
-  it("restores local draft answers after refresh and sends them on the next save", async () => {
+  it("restores a legacy sessionStorage draft after refresh and sends it on the next save", async () => {
     sessionStorage.setItem(
       "lms:attempt:draft:attempt-1",
       JSON.stringify([

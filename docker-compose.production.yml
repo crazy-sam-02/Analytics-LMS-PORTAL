@@ -83,17 +83,26 @@ services:
     expose:
       - "3310"
 
-  api:
+  # api1 is the anchor for all API replicas AND the sole worker replica
+  # (WORKER_ENABLED=true): it consumes BullMQ jobs and runs queue recovery.
+  # api2/api3 are web-only replicas. All three serve HTTP + Socket.io.
+  # NGINX (Frontend/nginx.conf) load-balances /api across all three and pins
+  # /socket.io per client. cpus default is 1.5 so 3 replicas fit alongside
+  # mongo/redis/clamav on an 8-vCPU host.
+  api1:
+    &api-base
     build:
       context: ./Backend
       dockerfile: dockerfile
     restart: unless-stopped
     mem_limit: ${API_MEMORY_LIMIT:-2g}
-    cpus: ${API_CPU_LIMIT:-2.0}
+    cpus: ${API_CPU_LIMIT:-1.5}
     pids_limit: 512
     environment:
+      &api-env
       NODE_ENV: production
       PORT: 5000
+      WORKER_ENABLED: "true"
       ALLOW_LOCAL_PRODUCTION_SMOKE: ${ALLOW_LOCAL_PRODUCTION_SMOKE:-false}
       MONGODB_URI: ${MONGODB_URI:?MONGODB_URI is required}
       MONGODB_DB_NAME: ${MONGODB_DB_NAME:-lms_portal}
@@ -241,6 +250,20 @@ services:
       retries: 5
       start_period: 30s
 
+  # Web-only replica: enqueues jobs but does not consume them.
+  api2:
+    <<: *api-base
+    environment:
+      <<: *api-env
+      WORKER_ENABLED: "false"
+
+  # Web-only replica: enqueues jobs but does not consume them.
+  api3:
+    <<: *api-base
+    environment:
+      <<: *api-env
+      WORKER_ENABLED: "false"
+
   frontend:
     build:
       context: ./Frontend
@@ -252,7 +275,11 @@ services:
     cpus: ${FRONTEND_CPU_LIMIT:-0.5}
     pids_limit: 128
     depends_on:
-      api:
+      api1:
+        condition: service_healthy
+      api2:
+        condition: service_healthy
+      api3:
         condition: service_healthy
     ports:
       - "127.0.0.1:${FRONTEND_BIND_PORT:-8080}:80"

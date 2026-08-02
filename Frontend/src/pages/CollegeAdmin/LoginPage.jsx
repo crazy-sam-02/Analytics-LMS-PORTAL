@@ -13,7 +13,7 @@ import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { loginAdmin, logoutAdmin } from "@/features/Admin/adminAuthSlice";
+import { loginCollegeAdmin, logoutCollegeAdmin } from "@/features/CollegeAdmin/collegeAdminAuthSlice";
 import {
   isAdminRole,
   isCollegeAdminRole,
@@ -28,7 +28,7 @@ export default function CollegeAdminLoginPage() {
 
   const dispatch = useDispatch();
   const navigate = useNavigate();
-  const { admin, loading, error } = useSelector((state) => state.adminAuth);
+  const { admin, loading, error } = useSelector((state) => state.collegeAdminAuth);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -52,21 +52,21 @@ export default function CollegeAdminLoginPage() {
       return;
     }
 
-    const result = await dispatch(loginAdmin({ email: normalizedEmail, password, keepLoggedIn: rememberMe }));
+    const result = await dispatch(loginCollegeAdmin({ email: normalizedEmail, password, keepLoggedIn: rememberMe }));
 
-    if (loginAdmin.rejected.match(result)) {
+    if (loginCollegeAdmin.rejected.match(result)) {
       setLocalError(result.error?.message || "Unable to sign in. Please try again.");
       return;
     }
 
-    if (loginAdmin.fulfilled.match(result)) {
+    if (loginCollegeAdmin.fulfilled.match(result)) {
       const role = normalizeAdminRole(result.payload?.role);
       if (isAdminRole(role)) {
         window.location.replace("/admin/dashboard");
         return;
       }
       if (!isCollegeAdminRole(role)) {
-        await dispatch(logoutAdmin());
+        await dispatch(logoutCollegeAdmin());
         setLocalError("This account is not mapped to a supported admin portal.");
         return;
       }

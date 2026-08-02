@@ -1,5 +1,5 @@
 import { createAsyncThunk, createSlice } from "@reduxjs/toolkit";
-import { adminApi, adminTokenStorage } from "@/services/api";
+import { adminApi, getActiveAdminTokenStorage } from "@/services/api";
 import { normalizeAdminPrincipal } from "@/features/Admin/adminRole";
 
 const initialState = {
@@ -12,7 +12,7 @@ const initialState = {
 
 export const loginAdmin = createAsyncThunk("adminAuth/login", async (payload) => {
   const data = await adminApi.login(payload);
-  adminTokenStorage.setTokens({
+  getActiveAdminTokenStorage().setTokens({
     accessToken: data.accessToken,
   });
   return normalizeAdminPrincipal(data.admin);
@@ -27,7 +27,7 @@ export const logoutAdmin = createAsyncThunk("adminAuth/logout", async () => {
   try {
     await adminApi.logout();
   } finally {
-    adminTokenStorage.clear();
+    getActiveAdminTokenStorage().clear();
   }
   return null;
 });

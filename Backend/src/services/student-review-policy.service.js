@@ -53,25 +53,34 @@ const hasDeadlinePassed = (deadline) => {
 const isTestCompleted = (test = {}) => {
   const safeTest = asTestObject(test);
   const status = String(safeTest.status || safeTest.lifecycleStatus || safeTest.testStatus || "").trim().toUpperCase();
-  return ["COMPLETED", "COMPLETE"].includes(status) || Boolean(safeTest.completedAt || safeTest.completed_at);
+
+  // Explicitly completed/archived by an admin, or flagged with a completion marker.
+  if (["COMPLETED", "COMPLETE", "ARCHIVED"].includes(status)) {
+    return true;
+  }
+  if (safeTest.completedAt || safeTest.completed_at) {
+    return true;
+  }
+
+  // Derived completion: the scheduled window has closed. This mirrors the
+  // admin-side deriveLifecycleStatus(), which reports a test as COMPLETED once
+  // endsAt < now even while the stored status is still LIVE/PUBLISHED. Without
+  // this, a test that is effectively over is still treated as "live" by the
+  // results page and its answers stay hidden indefinitely.
+  return hasDeadlinePassed(getReviewDeadline(safeTest));
 };
 
 const canRevealCorrectAnswers = (test = {}) => {
+  // Once the test is over (explicitly completed/archived, or its window has
+  // closed), always reveal the result and correct answers.
   if (isTestCompleted(test)) {
     return true;
   }
 
-  const reviewMode = resolveReviewMode(test);
-
-  if (reviewMode === REVIEW_MODES.SHOW_ALL) {
-    return true;
-  }
-
-  if (reviewMode === REVIEW_MODES.SHOW_SCORE_ONLY) {
-    return false;
-  }
-
-  return hasDeadlinePassed(getReviewDeadline(test));
+  // While the test is still live, only reveal early when the instructor
+  // explicitly opted to show everything immediately. Every other mode stays
+  // hidden until the test is over (handled above).
+  return resolveReviewMode(test) === REVIEW_MODES.SHOW_ALL;
 };
 
 const maskCorrectAnswer = (correctAnswer, test = {}) =>

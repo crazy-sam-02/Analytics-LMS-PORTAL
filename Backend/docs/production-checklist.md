@@ -29,10 +29,10 @@ This project is deployment-capable only after the production checks below pass a
 11. Run `docker compose --env-file Backend/.env.production -f docker-compose.production.yml build`.
 12. Run `docker compose --env-file Backend/.env.production -f docker-compose.production.yml up -d`.
 13. Run migrations and indexes:
-   - `docker compose --env-file Backend/.env.production -f docker-compose.production.yml exec api npm run db:migrate:refresh-token-hashes`
-   - `docker compose --env-file Backend/.env.production -f docker-compose.production.yml exec api npm run db:migrate:violations`
-   - `docker compose --env-file Backend/.env.production -f docker-compose.production.yml exec api npm run db:create-indexes`
-14. Run `docker compose --env-file Backend/.env.production -f docker-compose.production.yml exec api npm run prod:check`.
+   - `docker compose --env-file Backend/.env.production -f docker-compose.production.yml exec api1 npm run db:migrate:refresh-token-hashes`
+   - `docker compose --env-file Backend/.env.production -f docker-compose.production.yml exec api1 npm run db:migrate:violations`
+   - `docker compose --env-file Backend/.env.production -f docker-compose.production.yml exec api1 npm run db:create-indexes`
+14. Run `docker compose --env-file Backend/.env.production -f docker-compose.production.yml exec api1 npm run prod:check`.
 15. Write the metrics token for Prometheus:
    - `mkdir -p deploy/monitoring/secrets`
    - `printf "%s" "$METRICS_TOKEN" > deploy/monitoring/secrets/metrics_token`

@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useState } from "react";
+import { adminApi } from "@/services/api";
 
 const columns = [
   { key: "studentName", label: "Student Name" },
@@ -22,6 +23,9 @@ const statusTone = (status) => {
 export default function StudentTable({ rows, table, pagination, loading, onSort, onPageChange, onSearchChange, onSelectStudent }) {
   const [searchDraft, setSearchDraft] = useState(table.search || "");
   const [expandedSubmissionId, setExpandedSubmissionId] = useState("");
+  const [flaggingId, setFlaggingId] = useState("");
+  const [flaggedIds, setFlaggedIds] = useState(() => new Set());
+  const [flagError, setFlagError] = useState("");
 
   const exportStudentPdf = (row) => {
     const popup = window.open("", "_blank", "noopener,noreferrer,width=900,height=700");
@@ -65,6 +69,36 @@ export default function StudentTable({ rows, table, pagination, loading, onSort,
     const timer = setTimeout(() => onSearchChange(searchDraft), 350);
     return () => clearTimeout(timer);
   }, [searchDraft, onSearchChange]);
+
+  const handleFlagForReview = async (row) => {
+    const submissionId = row.submissionId || row.id;
+    const firstViolation = Array.isArray(row.violations) ? row.violations[0] : null;
+    const testId = firstViolation?.testId || row.testId;
+    const anomalyId = firstViolation?.anomalyId || firstViolation?.id || `manual-${submissionId}`;
+    const anomalyType = firstViolation?.anomalyType || firstViolation?.type || "MANUAL_REVIEW";
+
+    if (!testId || !submissionId) {
+      setFlagError("Unable to flag this row because report metadata is incomplete.");
+      return;
+    }
+
+    setFlagError("");
+    setFlaggingId(submissionId);
+    try {
+      await adminApi.reviewReportAnomaly({
+        testId,
+        anomalyId,
+        anomalyType,
+        action: "ESCALATE",
+        reason: `Flagged from detailed report table for ${row.studentName || "student"}.`,
+      });
+      setFlaggedIds((prev) => new Set([...prev, submissionId]));
+    } catch (_error) {
+      setFlagError("Unable to flag this row for review. Please try again.");
+    } finally {
+      setFlaggingId("");
+    }
+  };
 
   return (
     <section className="rounded-2xl border border-border bg-card p-4">
@@ -120,6 +154,8 @@ export default function StudentTable({ rows, table, pagination, loading, onSort,
                   const scorePercent = Number(row.scorePercent ?? row.accuracy ?? row.score ?? 0);
                   const obtainedMarks = Number(row.obtainedMarks ?? 0);
                   const totalMarks = Number(row.totalMarks ?? 0);
+                  const isFlagging = flaggingId === submissionId;
+                  const isFlagged = flaggedIds.has(submissionId);
 
                   return (
                     <Fragment key={row.id}>
@@ -168,10 +204,11 @@ export default function StudentTable({ rows, table, pagination, loading, onSort,
                             </button>
                             <button
                               type="button"
-                              className="rounded-md border border-border px-2 py-1 text-xs hover:bg-muted"
-                              onClick={() => window.alert(`Flagged ${row.studentName} for review.`)}
+                              className="rounded-md border border-border px-2 py-1 text-xs hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
+                              disabled={isFlagging || isFlagged}
+                              onClick={() => handleFlagForReview(row)}
                             >
-                              Flag
+                              {isFlagging ? "Flagging..." : isFlagged ? "Flagged" : "Flag"}
                             </button>
                           </div>
                         </td>
@@ -201,6 +238,8 @@ export default function StudentTable({ rows, table, pagination, loading, onSort,
           </tbody>
         </table>
       </div>
+
+      {flagError ? <p className="mt-2 text-xs text-danger">{flagError}</p> : null}
 
       <div className="mt-3 flex items-center justify-between text-sm text-text-secondary">
         <p>

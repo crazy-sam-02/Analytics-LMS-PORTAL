@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { useLocation } from "react-router-dom";
 import { toast } from "sonner";
+import { useAdminAuthState } from "@/hooks/useAdminAuthState";
 import {
   addQuestionsFromBank,
   addQuestionRow,
@@ -139,7 +140,7 @@ export default function TestCreationDialog({ context = "admin", onCreated, hideT
   const batches = useSelector((state) => state.adminPanel?.batches?.data ?? EMPTY_ARRAY);
   const students = useSelector((state) => state.adminPanel?.students?.data ?? EMPTY_ARRAY);
   const studentUser = useSelector((state) => state.auth?.user || null);
-  const adminUser = useSelector((state) => state.adminAuth?.admin || null);
+  const adminUser = useAdminAuthState()?.admin || null;
   const superAdminUser = useSelector((state) => state.superAdminAuth?.superAdmin || null);
   const scopedUser = isSuperAdminContext ? superAdminUser : (adminUser || studentUser);
   const currentUserDeptId = resolveDepartmentId(scopedUser?.departmentId || scopedUser?.department);
@@ -435,8 +436,9 @@ export default function TestCreationDialog({ context = "admin", onCreated, hideT
       return;
     }
 
-    if (!qb.filters?.subjectId && qb.subjects[0]?.id) {
-      dispatch(qbSetFilters({ subjectId: qb.subjects[0].id }));
+    const firstSubjectId = qb.subjects[0]?.id;
+    if (!qb.filters?.subjectId && firstSubjectId) {
+      dispatch(qbSetFilters({ subjectId: firstSubjectId }));
     }
 
     dispatch(
@@ -446,7 +448,7 @@ export default function TestCreationDialog({ context = "admin", onCreated, hideT
         limit: qb.pagination.limit,
       })
     );
-  }, [dispatch, form.questionInputMode, open, qb.filters, qb.pagination.limit, qbPage, qbFetchQuestions, qbSetFilters, selectedQuestionBankSubjectId, step]);
+  }, [dispatch, form.questionInputMode, open, qb.filters, qb.pagination.limit, qb.subjects, qbPage, qbFetchQuestions, qbSetFilters, selectedQuestionBankSubjectId, step]);
 
   useEffect(() => {
     if (!open) return undefined;

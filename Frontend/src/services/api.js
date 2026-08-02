@@ -4,7 +4,7 @@ import { API_BASE_URL } from "@/services/runtimeConfig";
 const API_BASE = API_BASE_URL;
 const isFormDataBody = (value) => typeof FormData !== "undefined" && value instanceof FormData;
 const shouldAttachJsonContentType = (options = {}) => Boolean(options.body) && !isFormDataBody(options.body);
-const isCollegeAdminRuntimeRoute = () =>
+export const isCollegeAdminRuntimeRoute = () =>
   typeof window !== "undefined" &&
   (String(window.location?.pathname || "") === "/college-admin" ||
     String(window.location?.pathname || "").startsWith("/college-admin/"));
@@ -70,7 +70,15 @@ export const tokenStorage = {
   },
 };
 export const adminTokenStorage = createTokenStorage("lms_admin");
+export const collegeAdminTokenStorage = createTokenStorage("lms_college_admin");
 export const superAdminTokenStorage = createTokenStorage("lms_super_admin");
+
+// Admin and College-Admin reuse the same pages/API layer, differentiated only by
+// URL. Keep their access tokens in separate in-memory slots and pick the right
+// one by the active route, so signing into one portal never clobbers the other
+// (each portal also has its own path-scoped refresh cookie on the backend).
+export const getActiveAdminTokenStorage = () =>
+  isCollegeAdminRuntimeRoute() ? collegeAdminTokenStorage : adminTokenStorage;
 
 const buildApiErrorMessage = (payload) => {
   if (!payload || typeof payload !== "object") {
@@ -173,7 +181,7 @@ const refreshAdminAccessToken = async () => {
       .then(async (response) => {
         if (!response.ok) throw new Error("Refresh failed");
         const data = await response.json();
-        adminTokenStorage.setTokens({
+        getActiveAdminTokenStorage().setTokens({
           accessToken: data.accessToken,
         });
         return data.accessToken;
@@ -267,7 +275,7 @@ export const adminApiRequest = async (path, options = {}) => {
     headers["Content-Type"] = "application/json";
   }
 
-  const accessToken = adminTokenStorage.getAccess();
+  const accessToken = getActiveAdminTokenStorage().getAccess();
   if (accessToken) {
     headers.Authorization = `Bearer ${accessToken}`;
   }
@@ -293,7 +301,7 @@ export const adminApiRequest = async (path, options = {}) => {
       headers.Authorization = `Bearer ${newAccessToken}`;
       response = await makeRequest();
     } catch {
-      adminTokenStorage.clear();
+      getActiveAdminTokenStorage().clear();
       throw new Error("Session expired. Please login again.");
     }
   }
@@ -313,7 +321,7 @@ export const adminApiTextRequest = async (path, options = {}) => {
     ...(options.headers || {}),
   };
 
-  const accessToken = adminTokenStorage.getAccess();
+  const accessToken = getActiveAdminTokenStorage().getAccess();
   if (accessToken) {
     headers.Authorization = `Bearer ${accessToken}`;
   }
@@ -333,7 +341,7 @@ export const adminApiTextRequest = async (path, options = {}) => {
       headers.Authorization = `Bearer ${newAccessToken}`;
       response = await makeRequest();
     } catch {
-      adminTokenStorage.clear();
+      getActiveAdminTokenStorage().clear();
       throw new Error("Session expired. Please login again.");
     }
   }
@@ -359,7 +367,7 @@ export const adminApiBlobRequest = async (path, options = {}) => {
     ...(options.headers || {}),
   };
 
-  const accessToken = adminTokenStorage.getAccess();
+  const accessToken = getActiveAdminTokenStorage().getAccess();
   if (accessToken) {
     headers.Authorization = `Bearer ${accessToken}`;
   }
@@ -379,7 +387,7 @@ export const adminApiBlobRequest = async (path, options = {}) => {
       headers.Authorization = `Bearer ${newAccessToken}`;
       response = await makeRequest();
     } catch {
-      adminTokenStorage.clear();
+      getActiveAdminTokenStorage().clear();
       throw new Error("Session expired. Please login again.");
     }
   }
@@ -461,7 +469,7 @@ export const apiBlobOrJsonRequest = async (path, options = {}) => {
 export const adminApiBlobOrJsonRequest = async (path, options = {}) => {
   const scopedPath = resolveAdminScopedPath(path);
   const headers = { ...(options.headers || {}) };
-  const accessToken = adminTokenStorage.getAccess();
+  const accessToken = getActiveAdminTokenStorage().getAccess();
   if (accessToken) {
     headers.Authorization = `Bearer ${accessToken}`;
   }
@@ -480,7 +488,7 @@ export const adminApiBlobOrJsonRequest = async (path, options = {}) => {
       headers.Authorization = `Bearer ${newAccessToken}`;
       response = await makeRequest();
     } catch {
-      adminTokenStorage.clear();
+      getActiveAdminTokenStorage().clear();
       throw new Error("Session expired. Please login again.");
     }
   }
@@ -758,6 +766,13 @@ export const adminApi = {
   getReportSummary: (params = "") => adminApiRequest(`/admin/reports/summary${params}`),
   getReportCharts: (params = "") => adminApiRequest(`/admin/reports/charts${params}`),
   getReportTable: (params = "") => adminApiRequest(`/admin/reports/table${params}`),
+  getReportTests: (params = "") => adminApiRequest(`/admin/reports/tests${params}`),
+  getReportItemAnalysis: (params = "") => adminApiRequest(`/admin/reports/item-analysis${params}`),
+  getReportIntegrity: (params = "") => adminApiRequest(`/admin/reports/integrity${params}`),
+  getReportTrends: (params = "") => adminApiRequest(`/admin/reports/trends${params}`),
+  getReportAtRisk: (params = "") => adminApiRequest(`/admin/reports/at-risk${params}`),
+  exportReportCsv: (params = "") => adminApiBlobRequest(`/admin/reports/export.csv${params}`),
+  exportReportXlsx: (params = "") => adminApiBlobRequest(`/admin/reports/export.xlsx${params}`),
   getReportStudentDetail: (studentId, params = "") => adminApiRequest(`/admin/reports/student/${studentId}${params}`),
   getReportAnalytics: (params = "") => adminApiRequest(`/admin/reports/analytics${params}`),
   getPassoutCohorts: () => adminApiRequest("/admin/reports/passout-cohorts"),
@@ -869,6 +884,11 @@ export const superAdminApi = {
   getReports: (params = "") => superAdminApiRequest(`/super-admin/reports${params}`),
   getPassoutCohorts: (params = "") => superAdminApiRequest(`/super-admin/reports/passout-cohorts${params}`),
   getReportAnalytics: (params = "") => superAdminApiRequest(`/super-admin/reports/analytics${params}`),
+  getReportTests: (params = "") => superAdminApiRequest(`/super-admin/reports/tests${params}`),
+  getReportItemAnalysis: (params = "") => superAdminApiRequest(`/super-admin/reports/item-analysis${params}`),
+  getReportIntegrity: (params = "") => superAdminApiRequest(`/super-admin/reports/integrity${params}`),
+  getReportTrends: (params = "") => superAdminApiRequest(`/super-admin/reports/trends${params}`),
+  getReportAtRisk: (params = "") => superAdminApiRequest(`/super-admin/reports/at-risk${params}`),
   generateReport: (body) => superAdminApiRequest("/super-admin/reports/generate", { method: "POST", body: JSON.stringify(body) }),
   downloadReport: (reportJobId) => superAdminApiBlobRequest(`/super-admin/reports/${reportJobId}/download`),
   regenerateReportLink: (reportJobId) => superAdminApiRequest(`/super-admin/reports/jobs/${reportJobId}/regenerate-link`, { method: "POST", body: JSON.stringify({}) }),

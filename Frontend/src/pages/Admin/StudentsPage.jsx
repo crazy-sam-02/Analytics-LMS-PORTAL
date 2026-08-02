@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useSelector } from "react-redux";
+import { useAdminAuthState } from "@/hooks/useAdminAuthState";
 import { toast } from "sonner";
 import { adminApi } from "@/services/api";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -222,7 +222,7 @@ export default function StudentsPage() {
   const batches = useMemo(() => Array.isArray(batchesQuery.data) ? batchesQuery.data : batchesQuery.data?.data || [], [batchesQuery.data]);
   const departments = useMemo(() => Array.isArray(departmentsQuery.data) ? departmentsQuery.data : departmentsQuery.data?.data || [], [departmentsQuery.data]);
 
-  const admin = useSelector((state) => state.adminAuth.admin);
+  const admin = useAdminAuthState()?.admin;
   const scopedDepartmentId = useMemo(
     () => admin?.department?.id || admin?.departmentId || "",
     [admin?.department?.id, admin?.departmentId]

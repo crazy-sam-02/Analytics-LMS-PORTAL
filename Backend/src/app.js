@@ -236,11 +236,22 @@ const buildCollegeAdminCacheKey = (req) =>
     accessProfile: req.admin?.accessProfile || null,
   });
 
+const isLiveMonitoringRequest = (req) =>
+  /\/tests\/[^/]+\/monitoring(?:\/|$)/.test(String(req.path || ""));
+
+// File downloads must never be served from the response cache: they are
+// generated per request and are not JSON payloads.
+const isReportDownloadRequest = (req) =>
+  /\/reports\/export\.(csv|xlsx)$/.test(String(req.path || "")) || /\/reports\/[^/]+\/download$/.test(String(req.path || ""));
+
+const shouldSkipAdminResponseCache = (req) => isLiveMonitoringRequest(req) || isReportDownloadRequest(req);
+
 const createCollegeAdminCache = ({ scope, ttlSeconds, tagPrefix }) =>
   createResponseCache({
     scope,
     enabled: env.responseCache.enabled,
     ttlSeconds,
+    skip: shouldSkipAdminResponseCache,
     keyBuilder: buildCollegeAdminCacheKey,
     tagsBuilder: (req) => [
       `${tagPrefix}:all`,
@@ -551,7 +562,9 @@ app.use((req, res, next) => {
     req.path.startsWith("/api/tests/") ||
     req.path.startsWith("/api/attempts/") ||
     req.path.startsWith("/api/results/") ||
-    req.path.startsWith("/api/submission/")
+    req.path.startsWith("/api/submission/") ||
+    isLiveMonitoringRequest(req) ||
+    isReportDownloadRequest(req)
   ) {
     res.setHeader("Cache-Control", "no-store");
     return next();
@@ -632,21 +645,21 @@ app.use("/api/admin/admins", authenticateAdmin, adminAdminsRoutes);
 app.use("/api/admin/analytics", authenticateAdmin, adminAnalyticsRoutes);
 app.use("/api/admin/resources", authenticateAdmin, adminResourcesRoutes);
 
-app.use("/api/college-admin/dashboard", authenticateCollegeAdmin, adminDashboardCache, adminDashboardRoutes);
-app.use("/api/college-admin/tests", authenticateCollegeAdmin, adminCollectionCache, adminTestsRoutes);
-app.use("/api/college-admin/question-bank", authenticateCollegeAdmin, adminCollectionCache, adminQuestionBankRoutes);
-app.use("/api/college-admin/questions", authenticateCollegeAdmin, adminCollectionCache, adminQuestionBankRoutes);
-app.use("/api/college-admin/subjects", authenticateCollegeAdmin, adminCollectionCache, adminSubjectsRoutes);
-app.use("/api/college-admin/students", authenticateCollegeAdmin, adminCollectionCache, adminStudentsRoutes);
-app.use("/api/college-admin/departments", authenticateCollegeAdmin, adminCollectionCache, adminDepartmentsRoutes);
-app.use("/api/college-admin/batches", authenticateCollegeAdmin, adminCollectionCache, adminBatchesRoutes);
-app.use("/api/college-admin/events", authenticateCollegeAdmin, adminCollectionCache, adminEventsRoutes);
-app.use("/api/college-admin/reports", authenticateCollegeAdmin, adminReportsCache, adminReportsRoutes);
-app.use("/api/college-admin/jobs", authenticateCollegeAdmin, adminCollectionCache, adminJobsRoutes);
-app.use("/api/college-admin/search", authenticateCollegeAdmin, adminCollectionCache, adminSearchRoutes);
-app.use("/api/college-admin/settings", authenticateCollegeAdmin, adminSettingsCache, adminSettingsRoutes);
-app.use("/api/college-admin/admins", authenticateCollegeAdmin, adminCollectionCache, adminAdminsRoutes);
-app.use("/api/college-admin/analytics", authenticateCollegeAdmin, adminAnalyticsCache, adminAnalyticsRoutes);
+app.use("/api/college-admin/dashboard", authenticateCollegeAdmin, adminDashboardRoutes);
+app.use("/api/college-admin/tests", authenticateCollegeAdmin, adminTestsRoutes);
+app.use("/api/college-admin/question-bank", authenticateCollegeAdmin, adminQuestionBankRoutes);
+app.use("/api/college-admin/questions", authenticateCollegeAdmin, adminQuestionBankRoutes);
+app.use("/api/college-admin/subjects", authenticateCollegeAdmin, adminSubjectsRoutes);
+app.use("/api/college-admin/students", authenticateCollegeAdmin, adminStudentsRoutes);
+app.use("/api/college-admin/departments", authenticateCollegeAdmin, adminDepartmentsRoutes);
+app.use("/api/college-admin/batches", authenticateCollegeAdmin, adminBatchesRoutes);
+app.use("/api/college-admin/events", authenticateCollegeAdmin, adminEventsRoutes);
+app.use("/api/college-admin/reports", authenticateCollegeAdmin, adminReportsRoutes);
+app.use("/api/college-admin/jobs", authenticateCollegeAdmin, adminJobsRoutes);
+app.use("/api/college-admin/search", authenticateCollegeAdmin, adminSearchRoutes);
+app.use("/api/college-admin/settings", authenticateCollegeAdmin, adminSettingsRoutes);
+app.use("/api/college-admin/admins", authenticateCollegeAdmin, adminAdminsRoutes);
+app.use("/api/college-admin/analytics", authenticateCollegeAdmin, adminAnalyticsRoutes);
 app.use("/api/college-admin/resources", authenticateCollegeAdmin, collegeAdminResourcesRoutes);
 
 app.use("/api/super-admin/dashboard", superAdminDashboardRoutes);

@@ -4,33 +4,70 @@ import { useSearchParams } from "react-router-dom";
 import { superAdminApi } from "@/services/api";
 import {
   AbsentStudentsCard,
+  AnalyticsSkeleton,
   AreaTrendChart,
+  Avatar,
   ChartCard,
+  DeepDiveHeader,
   EmptyState,
   ExportButton,
   GroupedBarChart,
-  HorizontalBarChart,
-  KpiCard,
+  InsightCard,
   LineTrendChart,
+  Pagination,
+  ResultBadge,
   ScoreBadge,
+  DistributionSummary,
+  ScoreDonutChart,
+  StatCard,
   StatusBadge,
+  TabNav,
   Th,
   TopicPieChart,
   ViolationBadge,
 } from "@/components/Reports/components";
+import { AtRiskView, IntegrityView, ItemAnalysisView, TrendsView } from "@/components/Reports/advanced-views";
 import { clampPercent, formatDateLabel, formatPercent, toQueryString } from "@/components/Reports/utils";
 
 const REPORT_MODES = [
-  { key: "overview", label: "Overview" },
+  { key: "overview", label: "College" },
   { key: "departments", label: "Departments" },
+  { key: "batch", label: "Batch" },
   { key: "student", label: "Student" },
+  { key: "trends", label: "Trends" },
+  { key: "at-risk", label: "At Risk" },
 ];
+
+const DEEP_DIVE_VIEWS = [
+  { key: "performance", label: "Performance" },
+  { key: "items", label: "Question Analysis" },
+  { key: "integrity", label: "Integrity" },
+];
+
+const TEST_STATUS_VARIANT = {
+  LIVE: "info",
+  COMPLETED: "success",
+  SCHEDULED: "warning",
+  DRAFT: "default",
+  ARCHIVED: "default",
+};
 
 const MODE_DEFAULT_SORT = {
   overview: { key: "avgScore", dir: "desc" },
   departments: { key: "avgScore", dir: "desc" },
+  batch: { key: "avgScore", dir: "desc" },
   student: { key: "rank", dir: "asc" },
+  trends: { key: "avgScore", dir: "desc" },
+  "at-risk": { key: "avgScore", dir: "desc" },
 };
+
+const TEST_SORT_OPTIONS = [
+  { value: "startsAt", label: "Most recent" },
+  { value: "avgScore", label: "Avg score" },
+  { value: "participation", label: "Participation" },
+  { value: "passRate", label: "Pass rate" },
+  { value: "violations", label: "Violations" },
+];
 const YEAR_OPTIONS = ["1", "2", "3", "4"];
 const STUDENT_SCOPE_OPTIONS = [
   { value: "current", label: "Current" },
@@ -184,11 +221,24 @@ export default function ReportsPage() {
   const studentScope = STUDENT_SCOPE_OPTIONS.some((item) => item.value === rawStudentScope) ? rawStudentScope : "current";
   const passoutYear = searchParams.get("passout_year") || "";
   const passoutCohortId = searchParams.get("passout_cohort") || "";
+  const batchId = searchParams.get("batch_id") || "";
   const hasCollegeSelected = Boolean(collegeId);
+  const isTestDeepDive = Boolean(testId) && testId !== "all";
 
   const [studentSearch, setStudentSearch] = useState("");
   const [studentYear, setStudentYear] = useState("");
   const [studentVisibleLimit, setStudentVisibleLimit] = useState(100);
+  const [testsSearch, setTestsSearch] = useState("");
+  const [testsSort, setTestsSort] = useState("startsAt");
+  const [testsStatus, setTestsStatus] = useState("all");
+  const [testsPage, setTestsPage] = useState(1);
+  const [deepDiveView, setDeepDiveView] = useState("performance");
+  const [trendGroupBy, setTrendGroupBy] = useState("department");
+  const [trendIndexed, setTrendIndexed] = useState(false);
+  // Deep-dive ("view details") student table: search + result filter + pagination.
+  const [detailSearch, setDetailSearch] = useState("");
+  const [detailResult, setDetailResult] = useState("all");
+  const [detailPage, setDetailPage] = useState(1);
   const [sortState, setSortState] = useState(MODE_DEFAULT_SORT[mode]);
   const [error, setError] = useState(null);
   const [exportState, setExportState] = useState({
@@ -239,6 +289,15 @@ export default function ReportsPage() {
     staleTime: 120000,
   });
 
+  // The batches list endpoint filters by college only, so fetch college-wide and
+  // narrow to the selected department client-side below.
+  const batchesQuery = useQuery({
+    queryKey: ["super-report-batches-v1", collegeId],
+    queryFn: () => superAdminApi.getBatches(toQueryString({ page: 1, limit: 200, collegeId })),
+    enabled: hasCollegeSelected,
+    staleTime: 120000,
+  });
+
   const scopeQuery = useQuery({
     queryKey: ["super-report-analytics-scope-v4", collegeId, departmentId, testId, studentYear, studentScope, passoutYear, passoutCohortId],
     queryFn: () =>
@@ -253,8 +312,102 @@ export default function ReportsPage() {
           passoutCohortId: passoutCohortId || undefined,
         })
       ),
-    enabled: hasCollegeSelected,
+    // The Batch tab is driven purely by the batch-scoped tests list, so skip the
+    // heavy analytics fetch there unless a test deep-dive is open.
+    enabled: hasCollegeSelected && (isTestDeepDive || ["overview", "departments", "student"].includes(mode)),
     staleTime: 45000,
+  });
+
+  // Shared, scope-aware tests listing. The same query backs the tests table on
+  // every tab - the active college/department/batch filters carry the scope.
+  const testsListQuery = useQuery({
+    queryKey: ["super-report-tests-list-v2", collegeId, departmentId, batchId, testsPage, testsSort, testsStatus, testsSearch.trim(), studentYear, studentScope, passoutYear, passoutCohortId],
+    queryFn: () =>
+      superAdminApi.getReportTests(
+        toQueryString({
+          collegeId,
+          departmentId: departmentId || undefined,
+          batchId: batchId || undefined,
+          page: testsPage,
+          limit: 9,
+          sortBy: testsSort,
+          sortDir: "desc",
+          status: testsStatus !== "all" ? testsStatus : undefined,
+          search: testsSearch.trim() || undefined,
+          year: studentYear || undefined,
+          studentScope,
+          passoutYear: passoutYear || undefined,
+          passoutCohortId: passoutCohortId || undefined,
+        })
+      ),
+    enabled: hasCollegeSelected && !isTestDeepDive,
+    placeholderData: (prev) => prev,
+    staleTime: 30000,
+  });
+
+  // Advanced analytics — parity with the admin portal, scoped by the selected
+  // college. Item-analysis / integrity are test deep-dive views; trends /
+  // at-risk are their own tabs.
+  const itemAnalysisQuery = useQuery({
+    queryKey: ["super-report-item-analysis-v1", collegeId, testId, studentScope, passoutYear, passoutCohortId],
+    queryFn: () =>
+      superAdminApi.getReportItemAnalysis(
+        toQueryString({ collegeId, testId, studentScope, passoutYear: passoutYear || undefined, passoutCohortId: passoutCohortId || undefined })
+      ),
+    enabled: hasCollegeSelected && isTestDeepDive && deepDiveView === "items",
+    placeholderData: (prev) => prev,
+    staleTime: 60000,
+  });
+
+  const integrityQuery = useQuery({
+    queryKey: ["super-report-integrity-v1", collegeId, testId, studentScope, passoutYear, passoutCohortId],
+    queryFn: () =>
+      superAdminApi.getReportIntegrity(
+        toQueryString({ collegeId, testId, studentScope, passoutYear: passoutYear || undefined, passoutCohortId: passoutCohortId || undefined })
+      ),
+    enabled: hasCollegeSelected && isTestDeepDive && deepDiveView === "integrity",
+    placeholderData: (prev) => prev,
+    staleTime: 60000,
+  });
+
+  const trendsQuery = useQuery({
+    queryKey: ["super-report-trends-v1", collegeId, departmentId, batchId, trendGroupBy, trendIndexed, studentYear, studentScope, passoutYear, passoutCohortId],
+    queryFn: () =>
+      superAdminApi.getReportTrends(
+        toQueryString({
+          collegeId,
+          departmentId: departmentId || undefined,
+          batchId: batchId || undefined,
+          groupBy: trendGroupBy,
+          indexed: trendIndexed ? "true" : undefined,
+          year: studentYear || undefined,
+          studentScope,
+          passoutYear: passoutYear || undefined,
+          passoutCohortId: passoutCohortId || undefined,
+        })
+      ),
+    enabled: hasCollegeSelected && mode === "trends" && !isTestDeepDive,
+    placeholderData: (prev) => prev,
+    staleTime: 60000,
+  });
+
+  const atRiskQuery = useQuery({
+    queryKey: ["super-report-at-risk-v1", collegeId, departmentId, batchId, studentYear, studentScope, passoutYear, passoutCohortId],
+    queryFn: () =>
+      superAdminApi.getReportAtRisk(
+        toQueryString({
+          collegeId,
+          departmentId: departmentId || undefined,
+          batchId: batchId || undefined,
+          year: studentYear || undefined,
+          studentScope,
+          passoutYear: passoutYear || undefined,
+          passoutCohortId: passoutCohortId || undefined,
+        })
+      ),
+    enabled: hasCollegeSelected && mode === "at-risk" && !isTestDeepDive,
+    placeholderData: (prev) => prev,
+    staleTime: 60000,
   });
 
   const studentDetailQuery = useQuery({
@@ -307,68 +460,70 @@ export default function ReportsPage() {
   const departments = useMemo(() => (Array.isArray(departmentsQuery.data?.data) ? departmentsQuery.data.data : []), [departmentsQuery.data]);
   const tests = useMemo(() => (Array.isArray(testsQuery.data?.data) ? testsQuery.data.data : []), [testsQuery.data]);
   const passoutCohorts = Array.isArray(passoutCohortsQuery.data?.data) ? passoutCohortsQuery.data.data : [];
+  const allBatches = Array.isArray(batchesQuery.data?.data) ? batchesQuery.data.data : [];
+  const batches = allBatches.filter((batch) => {
+    if (!departmentId) return true;
+    if (String(batch.departmentId || "") === String(departmentId)) return true;
+    // Global batches span several departments.
+    return Array.isArray(batch.departmentIds) && batch.departmentIds.map(String).includes(String(departmentId));
+  });
+  const selectedBatch = allBatches.find((item) => String(item.id) === String(batchId)) || null;
   const passoutYearOptions = [...new Set(passoutCohorts.map((cohort) => String(cohort.passoutYear || "")).filter(Boolean))];
   const visiblePassoutCohorts = passoutCohorts.filter((cohort) => !passoutYear || String(cohort.passoutYear) === String(passoutYear));
   const scope = scopeQuery.data || {};
+  const testsList = Array.isArray(testsListQuery.data?.data) ? testsListQuery.data.data : [];
+  const testsPagination = testsListQuery.data?.pagination || { page: 1, totalPages: 1, total: 0 };
+  const selectedTestMeta = testsList.find((item) => String(item.testId) === String(testId)) || null;
   const studentDetail = studentDetailQuery.data || {};
   const reports = Array.isArray(reportsQuery.data) ? reportsQuery.data : [];
 
   const metrics = scope.metrics || {};
-  const departmentSourceRows = scope.departmentRows;
-  const studentSourceRows = scope.tableRows;
-  const departmentRows = useMemo(
-    () => (Array.isArray(departmentSourceRows) ? departmentSourceRows : []).map((row) => ({
-      departmentId: row.departmentId,
-      college: row.college || "-",
-      department: row.department || "-",
-      students: toNumber(row.students),
-      submissions: toNumber(row.submissions),
-      avgScore: clampPercent(row.avgScore),
-      passRate: clampPercent(row.passRate),
-      participation: clampPercent(row.participation),
-      violations: toNumber(row.violations),
-    })),
-    [departmentSourceRows]
-  );
+  const departmentRows = (Array.isArray(scope.departmentRows) ? scope.departmentRows : []).map((row) => ({
+    departmentId: row.departmentId,
+    college: row.college || "-",
+    department: row.department || "-",
+    students: toNumber(row.students),
+    submissions: toNumber(row.submissions),
+    avgScore: clampPercent(row.avgScore),
+    passRate: clampPercent(row.passRate),
+    participation: clampPercent(row.participation),
+    violations: toNumber(row.violations),
+  }));
 
-  const studentRows = useMemo(
-    () => (Array.isArray(studentSourceRows) ? studentSourceRows : []).map((row) => ({
-      rank: row.rank,
-      studentId: row.studentId,
-      name: row.name || "-",
-      rollNo: row.rollNo || "-",
-      collegeId: row.collegeId,
-      college: row.college || "-",
-      departmentId: row.departmentId,
-      department: row.department || "-",
-      batch: row.batch || "-",
-      year: row.year || null,
-      avgScore: clampPercent(row.avgScore),
-      testsTaken: toNumber(row.testsTaken),
-      participation: toNumber(row.participation),
-      violations: toNumber(row.violations),
-    })),
-    [studentSourceRows]
-  );
+  const studentRows = (Array.isArray(scope.tableRows) ? scope.tableRows : []).map((row) => ({
+    rank: row.rank,
+    studentId: row.studentId,
+    name: row.name || "-",
+    rollNo: row.rollNo || "-",
+    collegeId: row.collegeId,
+    college: row.college || "-",
+    departmentId: row.departmentId,
+    department: row.department || "-",
+    batch: row.batch || "-",
+    year: row.year || null,
+    avgScore: clampPercent(row.avgScore),
+    testsTaken: toNumber(row.testsTaken),
+    participation: toNumber(row.participation),
+    violations: toNumber(row.violations),
+  }));
 
-  const selectedTestName = useMemo(() => {
-    if (testId === "all") return "";
-    return tests.find((test) => String(test.id) === String(testId))?.title || "";
-  }, [testId, tests]);
+  const selectedTestName = testId === "all"
+    ? ""
+    : tests.find((test) => String(test.id) === String(testId))?.title || "";
 
-  const showNotAttendedCard = mode !== "student" && testId !== "all";
-  const notAttendedStudents = useMemo(() => {
-    if (!showNotAttendedCard) return [];
-    return studentRows
-      .filter((row) => row.testsTaken === 0)
-      .map((row) => ({
-        studentId: row.studentId,
-        name: row.name,
-        rollNo: row.rollNo,
-        department: row.department,
-        batch: row.batch,
-      }));
-  }, [showNotAttendedCard, studentRows]);
+  // A test deep-dive can now be opened from any tab, so this no longer keys off mode.
+  const showNotAttendedCard = testId !== "all";
+  const notAttendedStudents = showNotAttendedCard
+    ? studentRows
+        .filter((row) => row.testsTaken === 0)
+        .map((row) => ({
+          studentId: row.studentId,
+          name: row.name,
+          rollNo: row.rollNo,
+          department: row.department,
+          batch: row.batch,
+        }))
+    : [];
 
   const trendData = (scope.scoreTrend || []).map((item, index) => ({
     month: item.month || `Period ${index + 1}`,
@@ -401,6 +556,22 @@ export default function ReportsPage() {
 
   const sortedDepartmentRows = sortRows(departmentRows, sortState);
   const sortedStudentRows = sortRows(studentRows, sortState);
+
+  // Deep-dive ("view details") table: search + pass/fail filter + pagination
+  // on top of the sortable columns.
+  const DETAIL_PAGE_SIZE = 10;
+  const detailQueryText = detailSearch.trim().toLowerCase();
+  const detailFilteredRows = sortedStudentRows.filter((row) => {
+    if (detailQueryText && !`${row.name} ${row.rollNo} ${row.department} ${row.batch}`.toLowerCase().includes(detailQueryText)) {
+      return false;
+    }
+    if (detailResult === "pass") return clampPercent(row.avgScore) >= 40;
+    if (detailResult === "fail") return clampPercent(row.avgScore) < 40;
+    return true;
+  });
+  const detailTotalPages = Math.max(1, Math.ceil(detailFilteredRows.length / DETAIL_PAGE_SIZE));
+  const detailSafePage = Math.min(detailPage, detailTotalPages);
+  const detailPageRows = detailFilteredRows.slice((detailSafePage - 1) * DETAIL_PAGE_SIZE, detailSafePage * DETAIL_PAGE_SIZE);
   const sortedAttemptRows = sortRows(attemptRows, sortState);
   const visibleStudentRows = sortedStudentRows.slice(0, studentVisibleLimit);
 
@@ -419,6 +590,22 @@ export default function ReportsPage() {
     if (mode !== "student") setStudentSearch("");
     setStudentVisibleLimit(100);
   }, [mode]);
+
+  useEffect(() => {
+    setTestsPage(1);
+  }, [testsSearch, testsSort, testsStatus, collegeId, departmentId, batchId, studentYear, studentScope, passoutYear, passoutCohortId]);
+
+  // Reset the deep-dive table page when the test, its filters, or the sort change.
+  useEffect(() => {
+    setDetailPage(1);
+  }, [testId, detailSearch, detailResult, sortState]);
+
+  // A fresh deep dive starts with clean filters and the Performance view.
+  useEffect(() => {
+    setDetailSearch("");
+    setDetailResult("all");
+    setDeepDiveView("performance");
+  }, [testId]);
 
   useEffect(() => {
     return () => {
@@ -540,15 +727,32 @@ export default function ReportsPage() {
       mode: nextMode,
       department: nextMode === "overview" ? "" : departmentId,
       student_id: "",
+      test: "",
+      batch_id: nextMode === "batch" ? batchId : "",
     });
+    setTestsPage(1);
+  };
+
+  const handleBatchChange = (nextBatchId) => {
+    updateParams({ batch_id: nextBatchId || "", test: "" });
+    setTestsPage(1);
+  };
+
+  const handleTestOpen = (nextTestId) => {
+    updateParams({ test: nextTestId || "" });
+  };
+
+  const handleTestBack = () => {
+    updateParams({ test: "" });
   };
 
   const handleCollegeChange = (nextCollegeId) => {
-    updateParams({ college: nextCollegeId, department: "", test: "all", passout_year: "", passout_cohort: "", student_id: "" });
+    updateParams({ college: nextCollegeId, department: "", test: "all", passout_year: "", passout_cohort: "", student_id: "", batch_id: "" });
   };
 
   const handleDepartmentChange = (nextDepartmentId) => {
-    updateParams({ department: nextDepartmentId, student_id: "" });
+    // Batches are department-scoped, so a department change invalidates the batch.
+    updateParams({ department: nextDepartmentId, student_id: "", batch_id: "" });
   };
 
   const handleYearChange = (nextYear) => {
@@ -579,18 +783,333 @@ export default function ReportsPage() {
 
   const loading = collegesQuery.isLoading || (hasCollegeSelected && scopeQuery.isLoading);
 
+  const violationCount = toNumber(metrics.violations);
+  const avgScoreTier =
+    metrics.avgScore >= 75
+      ? { badge: "Distinction", badgeTone: "success" }
+      : metrics.avgScore >= 50
+        ? { badge: "Average", badgeTone: "info" }
+        : { badge: "Below Avg", badgeTone: "warning" };
+
+  const overviewStatCards = [
+    {
+      key: "students",
+      iconName: "students",
+      iconTone: "navy",
+      label: "Total Students",
+      value: toNumber(metrics.totalStudents).toLocaleString(),
+      sub: "In current scope",
+      badge: `${toNumber(metrics.attemptedStudents).toLocaleString()} active`,
+      badgeTone: "info",
+    },
+    { key: "avg", iconName: "score", iconTone: "primary", label: "Avg Score", value: formatPercent(metrics.avgScore), sub: "Submitted attempts", ...avgScoreTier },
+    { key: "pass", iconName: "target", iconTone: "success", label: "Pass Rate", value: formatPercent(metrics.passRate), sub: "Score 40% and above", badge: "Target 40%", badgeTone: "info" },
+    {
+      key: "viol",
+      iconName: "alert",
+      iconTone: violationCount > 10 ? "danger" : "warning",
+      label: "Pending Reviews",
+      value: violationCount,
+      sub: violationCount > 10 ? "High violation volume" : "Integrity flags",
+      badge: violationCount > 10 ? "High Priority" : "Monitored",
+      badgeTone: violationCount > 10 ? "danger" : "muted",
+      flag: violationCount > 10,
+    },
+  ];
+
+  const superTestKpis = [
+    { key: "avg", iconName: "score", iconTone: "primary", label: "Avg Score", value: formatPercent(metrics.avgScore), sub: "Submitted attempts", ...avgScoreTier },
+    { key: "pass", iconName: "target", iconTone: "success", label: "Pass Rate", value: formatPercent(metrics.passRate), sub: "Score 40%+", badge: "Target 40%", badgeTone: "info" },
+    { key: "part", iconName: "participation", iconTone: "navy", label: "Participation", value: formatPercent(metrics.participationRate), sub: "Students who attempted", badge: `${toNumber(metrics.totalTests)} tests`, badgeTone: "muted" },
+    {
+      key: "viol",
+      iconName: "alert",
+      iconTone: violationCount > 10 ? "danger" : "warning",
+      label: "Violations",
+      value: violationCount,
+      sub: violationCount > 10 ? "High violation volume" : "Proctoring flags",
+      badge: violationCount > 10 ? "High Priority" : "Monitored",
+      badgeTone: violationCount > 10 ? "danger" : "muted",
+      flag: violationCount > 10,
+    },
+  ];
+
+  const healthLabel = metrics.avgScore >= 75 ? "Excellent" : metrics.avgScore >= 50 ? "Healthy" : "Needs Attention";
+  const insightMessage = hasCollegeSelected
+    ? `Average score is ${formatPercent(metrics.avgScore)} across ${toNumber(metrics.totalSubmissions).toLocaleString()} submissions with a ${formatPercent(metrics.passRate)} pass rate. ${violationCount > 10 ? `${violationCount} integrity flags need review.` : "Integrity flags are within healthy limits."}`
+    : "Select a college to view institutional health.";
+
+  const testsScopeLabel = selectedBatch
+    ? `Batch: ${selectedBatch.name}`
+    : selectedDepartment
+      ? `Department: ${selectedDepartment.name}`
+      : selectedCollege?.name || "Selected college";
+
+  // Shared tests listing rendered on every tab, scoped by the active filters.
+  const renderTestsListCard = () => {
+    const pageSize = Number(testsPagination.limit) || 9;
+    const startIndex = (Number(testsPagination.page || 1) - 1) * pageSize;
+    return (
+      <section className="space-y-4">
+        <article className="rounded-2xl border border-border bg-card shadow-[0_1px_2px_rgba(16,24,40,0.04)]">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/70 p-4">
+            <div className="flex items-center gap-3">
+              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25z" />
+                </svg>
+              </span>
+              <div>
+                <h3 className="text-lg font-semibold text-text-primary">Test Reports</h3>
+                <p className="text-xs text-text-secondary">Per-test performance · {testsScopeLabel}</p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                value={testsSearch}
+                onChange={(event) => setTestsSearch(event.target.value)}
+                placeholder="Search tests…"
+                className="h-9 w-full max-w-xs rounded-lg border border-border bg-background px-3 text-sm"
+              />
+              <select
+                value={testsStatus}
+                onChange={(event) => setTestsStatus(event.target.value)}
+                aria-label="Filter by status"
+                className="h-9 rounded-lg border border-border bg-background px-3 text-sm text-text-primary"
+              >
+                <option value="all">All statuses</option>
+                <option value="LIVE">Live</option>
+                <option value="COMPLETED">Completed</option>
+                <option value="SCHEDULED">Scheduled</option>
+                <option value="DRAFT">Draft</option>
+                <option value="ARCHIVED">Archived</option>
+              </select>
+              <select
+                value={testsSort}
+                onChange={(event) => setTestsSort(event.target.value)}
+                aria-label="Sort tests"
+                className="h-9 rounded-lg border border-border bg-background px-3 text-sm text-text-primary"
+              >
+                {TEST_SORT_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {testsListQuery.isLoading ? (
+            <div className="p-6 text-sm text-text-secondary">Loading tests…</div>
+          ) : testsListQuery.isError ? (
+            <div className="m-4 rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-500">Unable to load tests.</div>
+          ) : testsList.length === 0 ? (
+            <EmptyState title="No tests found" description="Adjust your search or filters to see test performance." />
+          ) : (
+            <>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr>
+                      <Th>S.No</Th>
+                      <Th>Assessment Name</Th>
+                      <Th>Status</Th>
+                      <Th>Date</Th>
+                      <Th>Submissions</Th>
+                      <Th>Avg Score</Th>
+                      <Th>Pass Rate</Th>
+                      <Th>Violations</Th>
+                      <Th>Actions</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {testsList.map((test, index) => (
+                      <tr key={test.testId} className="border-t border-border/70 hover:bg-muted/40">
+                        <td className="px-4 py-3 tabular-nums text-text-secondary">{String(startIndex + index + 1).padStart(2, "0")}</td>
+                        <td className="px-4 py-3">
+                          <p className="font-medium text-text-primary">{test.title || "Untitled test"}</p>
+                          <p className="text-xs text-text-secondary">{test.department || "-"} · {test.batch || "-"}</p>
+                        </td>
+                        <td className="px-4 py-3"><StatusBadge label={test.status || "-"} variant={TEST_STATUS_VARIANT[test.status] || "default"} /></td>
+                        <td className="whitespace-nowrap px-4 py-3 text-text-secondary">{test.startsAt ? formatDateLabel(test.startsAt) : "-"}</td>
+                        <td className="px-4 py-3 tabular-nums">{toNumber(test.submissionCount)}</td>
+                        <td className="px-4 py-3"><ScoreBadge score={test.avgScore} /></td>
+                        <td className="px-4 py-3 tabular-nums">{formatPercent(test.passRate)}</td>
+                        <td className="px-4 py-3"><ViolationBadge count={test.violations} /></td>
+                        <td className="px-4 py-3">
+                          <button
+                            type="button"
+                            onClick={() => handleTestOpen(test.testId)}
+                            className="text-xs font-semibold text-primary transition-opacity hover:opacity-70"
+                          >
+                            View Details
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="border-t border-border/70 p-4">
+                <Pagination
+                  page={testsPagination.page}
+                  totalPages={testsPagination.totalPages}
+                  total={testsPagination.total}
+                  onPageChange={setTestsPage}
+                />
+              </div>
+            </>
+          )}
+        </article>
+      </section>
+    );
+  };
+
+  const renderSuperTestDeepDive = () => (
+    <section className="space-y-4">
+      <DeepDiveHeader
+        title={selectedTestMeta?.title || selectedTestName || "Test performance"}
+        subtitle={`${selectedCollege?.name || "College"} · deep-dive performance and integrity.`}
+        onBack={handleTestBack}
+      />
+
+      <TabNav
+        tabs={DEEP_DIVE_VIEWS.map((view) => ({ key: view.key, label: view.label }))}
+        active={deepDiveView}
+        onChange={setDeepDiveView}
+      />
+
+      {deepDiveView === "items" ? <ItemAnalysisView query={itemAnalysisQuery} /> : null}
+      {deepDiveView === "integrity" ? <IntegrityView query={integrityQuery} /> : null}
+
+      {deepDiveView !== "performance" ? null : scopeQuery.isLoading ? (
+        <div className="rounded-2xl border border-border bg-card p-6 text-sm text-text-secondary">Loading test analytics…</div>
+      ) : scopeQuery.isError ? (
+        <div className="rounded-2xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-500">Unable to load test analytics.</div>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+            {superTestKpis.map((item) => (
+              <StatCard key={item.key} {...item} />
+            ))}
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-[2fr_2fr]">
+            <ChartCard title="Score Distribution" height="h-[220px]">
+              <ScoreDonutChart data={scope.distribution || []} total={studentRows.length} />
+            </ChartCard>
+            <ChartCard title="Subject-wise Scores" height="h-[240px]">
+              <TopicPieChart data={subjectData} />
+            </ChartCard>
+          </div>
+
+          <ChartCard title="Score Spread" height="h-[220px]">
+            <DistributionSummary stats={scope.distributionStats} />
+          </ChartCard>
+
+          <article className="space-y-3 rounded-2xl border border-border bg-card p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h3 className="text-lg font-semibold text-text-primary">Student results</h3>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  value={detailSearch}
+                  onChange={(event) => setDetailSearch(event.target.value)}
+                  placeholder="Search student, roll no, department…"
+                  className="h-9 w-full max-w-xs rounded-lg border border-border bg-background px-3 text-sm"
+                />
+                <select
+                  value={detailResult}
+                  onChange={(event) => setDetailResult(event.target.value)}
+                  aria-label="Filter by result"
+                  className="h-9 rounded-lg border border-border bg-background px-3 text-sm text-text-primary"
+                >
+                  <option value="all">All results</option>
+                  <option value="pass">Pass (40%+)</option>
+                  <option value="fail">Fail (below 40%)</option>
+                </select>
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr>
+                    <Th sortKey="rank" sortState={sortState} onSort={handleSort}>Rank</Th>
+                    <Th sortKey="name" sortState={sortState} onSort={handleSort}>Student</Th>
+                    <Th sortKey="department" sortState={sortState} onSort={handleSort}>Department</Th>
+                    <Th sortKey="avgScore" sortState={sortState} onSort={handleSort}>Avg Score</Th>
+                    <Th>Result</Th>
+                    <Th sortKey="violations" sortState={sortState} onSort={handleSort}>Violations</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {detailPageRows.map((row) => (
+                    <tr key={`${row.studentId}-${row.rank}`} className="border-t border-border/70 hover:bg-muted/40">
+                      <td className="px-4 py-3 tabular-nums text-text-secondary">#{row.rank}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          <Avatar name={row.name} seed={row.studentId} />
+                          <div className="min-w-0">
+                            <p className="truncate font-medium text-text-primary">{row.name}</p>
+                            <p className="truncate text-xs text-text-secondary">{row.rollNo}</p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-text-secondary">{row.department}</td>
+                      <td className="px-4 py-3"><ScoreBadge score={row.avgScore} /></td>
+                      <td className="px-4 py-3"><ResultBadge score={row.avgScore} /></td>
+                      <td className="px-4 py-3"><ViolationBadge count={row.violations} /></td>
+                    </tr>
+                  ))}
+                  {detailFilteredRows.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="px-4 py-8">
+                        <EmptyState
+                          title={sortedStudentRows.length === 0 ? "No submissions yet" : "No students match"}
+                          description={
+                            sortedStudentRows.length === 0
+                              ? "Student results appear once this test has submissions."
+                              : "Adjust the search or result filter to see students."
+                          }
+                        />
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+            <Pagination
+              page={detailSafePage}
+              totalPages={detailTotalPages}
+              total={detailFilteredRows.length}
+              onPageChange={setDetailPage}
+            />
+          </article>
+
+          {notAttendedStudents.length > 0 ? (
+            <AbsentStudentsCard
+              title="Not Attended Students"
+              subtitle="Students who did not submit this test."
+              students={notAttendedStudents}
+              count={notAttendedStudents.length}
+            />
+          ) : null}
+        </>
+      )}
+    </section>
+  );
+
+
   return (
     <div className="mx-auto w-full max-w-7xl space-y-6 px-4 py-4 sm:px-6">
       {error ? (
         <section className="rounded-2xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-500">{error}</section>
       ) : null}
 
-      <section className="rounded-2xl border border-border bg-card p-5">
-        <div className="flex flex-wrap items-center justify-between gap-4">
+      <section className="rounded-2xl border border-border bg-card p-5 shadow-[0_1px_2px_rgba(16,24,40,0.04)]">
+        <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold text-text-primary sm:text-3xl">Super Admin Reports</h1>
-            <p className="text-sm text-text-secondary">
-              College, department, and student performance reports with simple readable metrics.
+            <p className="text-[11px] font-semibold uppercase tracking-widest text-primary">Reporting Dashboard</p>
+            <h1 className="mt-1 text-2xl font-bold text-text-primary sm:text-3xl">Super Admin Reports</h1>
+            <p className="mt-1 text-sm text-text-secondary">
+              College, department, and student performance analytics with integrity tracking.
             </p>
           </div>
           <ExportButton
@@ -601,24 +1120,16 @@ export default function ReportsPage() {
             disabledReason={!hasCollegeSelected ? "Select a college before exporting reports." : ""}
           />
         </div>
+        <div className="mt-4">
+          <TabNav
+            tabs={REPORT_MODES.map((item) => ({ key: item.key, label: item.label }))}
+            active={mode}
+            onChange={handleModeSwitch}
+          />
+        </div>
       </section>
 
-      <section className="space-y-4 rounded-2xl border border-border bg-card p-4">
-        <div className="flex flex-wrap gap-2">
-          {REPORT_MODES.map((item) => (
-            <button
-              key={item.key}
-              type="button"
-              onClick={() => handleModeSwitch(item.key)}
-              className={`rounded-full px-4 py-2 text-sm font-medium transition-colors ${
-                mode === item.key ? "bg-primary text-primary-foreground" : "border border-border bg-background text-text-primary hover:bg-muted"
-              }`}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
-
+      <section className="space-y-4 rounded-2xl border border-border bg-card p-4 shadow-[0_1px_2px_rgba(16,24,40,0.04)]">
         <div className="grid gap-3 md:grid-cols-5 xl:grid-cols-6">
           <label className="space-y-1 text-xs text-text-secondary">
             <span>College</span>
@@ -770,8 +1281,8 @@ export default function ReportsPage() {
         ) : null}
       </section>
 
-      {loading ? <section className="rounded-2xl border border-border bg-card p-4 text-sm text-text-secondary">Loading report data...</section> : null}
-      {hasCollegeSelected && scopeQuery.isError ? <section className="rounded-2xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-500">Unable to load report data.</section> : null}
+      {!isTestDeepDive && ["overview", "departments", "student"].includes(mode) && loading ? <AnalyticsSkeleton /> : null}
+      {!isTestDeepDive && ["overview", "departments", "student"].includes(mode) && hasCollegeSelected && scopeQuery.isError ? <section className="rounded-2xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-500">Unable to load report data.</section> : null}
 
       {!hasCollegeSelected && !collegesQuery.isLoading ? (
         <section className="rounded-2xl border border-border bg-card">
@@ -779,49 +1290,98 @@ export default function ReportsPage() {
         </section>
       ) : null}
 
-      {hasCollegeSelected && !loading && !scopeQuery.isError ? (
+      {hasCollegeSelected && isTestDeepDive ? renderSuperTestDeepDive() : null}
+
+      {hasCollegeSelected && !isTestDeepDive && mode === "batch" ? (
         <section className="space-y-4">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <KpiCard label="Students" value={toNumber(metrics.totalStudents).toLocaleString()} sub="Current scope" />
-            <KpiCard label="Avg Score" value={formatPercent(metrics.avgScore)} sub="Submitted attempts" />
-            <KpiCard label="Pass Rate" value={formatPercent(metrics.passRate)} sub="Score 40% and above" />
-            <KpiCard
-              label="Violations"
-              value={toNumber(metrics.violations)}
-              sub="Integrity flags"
-              flag={toNumber(metrics.violations) > 10}
-            />
+          <article className="rounded-2xl border border-border bg-card p-4 shadow-[0_1px_2px_rgba(16,24,40,0.04)]">
+            <label className="block max-w-sm space-y-1 text-xs text-text-secondary">
+              <span>Select Batch</span>
+              <select
+                value={batchId}
+                onChange={(event) => handleBatchChange(event.target.value)}
+                className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm text-text-primary"
+              >
+                <option value="">All batches in this college</option>
+                {batches.map((batch) => (
+                  <option key={batch.id} value={batch.id}>{batch.name}</option>
+                ))}
+              </select>
+            </label>
+          </article>
+          {renderTestsListCard()}
+        </section>
+      ) : null}
+
+      {hasCollegeSelected && !isTestDeepDive && mode === "trends" ? (
+        <TrendsView
+          query={trendsQuery}
+          groupBy={trendGroupBy}
+          onGroupByChange={setTrendGroupBy}
+          indexed={trendIndexed}
+          onIndexedChange={setTrendIndexed}
+          showGroupBy
+        />
+      ) : null}
+
+      {hasCollegeSelected && !isTestDeepDive && mode === "at-risk" ? (
+        <AtRiskView
+          query={atRiskQuery}
+          canViewStudent
+          onViewStudent={(id) => updateParams({ mode: "student", student_id: id })}
+        />
+      ) : null}
+
+      {hasCollegeSelected && !isTestDeepDive && ["overview", "departments", "student"].includes(mode) && !loading && !scopeQuery.isError ? (
+        <section className="space-y-4">
+          <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+            {overviewStatCards.map((item) => (
+              <StatCard key={item.key} {...item} />
+            ))}
           </div>
 
           {mode === "overview" ? (
             <>
-              <div className="grid gap-4 lg:grid-cols-[3fr_2fr]">
-                <ChartCard title="Score Trend" height="h-[220px]">
-                  <AreaTrendChart data={trendData} xKey="month" dataKey="score" name="Avg Score" color="var(--chart-1)" />
+              <div className="grid gap-4 lg:grid-cols-3">
+                <ChartCard title="Score Distribution" height="h-[240px]">
+                  <ScoreDonutChart data={scope.distribution || []} total={toNumber(metrics.attemptedStudents)} />
                 </ChartCard>
-                <ChartCard title="Topic-wise Performance" height="h-[220px]">
+                <ChartCard title="Topic-wise Performance" height="h-[240px]">
                   <TopicPieChart data={subjectData} />
                 </ChartCard>
+                <InsightCard
+                  title={`Institutional Health · ${healthLabel}`}
+                  message={insightMessage}
+                  action={{ label: "View Departments", onClick: () => handleModeSwitch("departments") }}
+                />
               </div>
 
+              <ChartCard title="Score Spread" height="h-[200px]">
+                <DistributionSummary stats={scope.distributionStats} />
+              </ChartCard>
+
               <div className="grid gap-4 lg:grid-cols-[3fr_2fr]">
-                <ChartCard title={collegeId ? "Department Overview" : "Department Overview Across Colleges"} height="h-[240px]">
-                  <div className="h-full p-4 bg-white rounded-md overflow-auto">
-                    <GroupedBarChart
-                      data={departmentChartRows}
-                      xKey="department"
-                      series={[
-                        { key: "avgScore", label: "Avg Score" },
-                        { key: "passRate", label: "Pass Rate" },
-                        { key: "participation", label: "Participation" },
-                      ]}
-                    />
-                  </div>
+                <ChartCard title="Score Trend" height="h-[240px]">
+                  <AreaTrendChart data={trendData} xKey="month" dataKey="score" name="Avg Score" color="var(--chart-1)" />
                 </ChartCard>
                 <RecentExports reports={reports} onDownload={downloadJob} />
               </div>
 
-              
+              <ChartCard title={collegeId ? "Department Performance Comparison" : "Department Overview Across Colleges"} height="h-auto">
+                <GroupedBarChart
+                  data={departmentChartRows}
+                  xKey="department"
+                  series={[
+                    { key: "avgScore", label: "Avg Score" },
+                    { key: "passRate", label: "Pass Rate" },
+                    { key: "participation", label: "Participation" },
+                  ]}
+                  onBarClick={(name) => {
+                    const dep = departments.find((item) => item.name === name);
+                    if (dep) updateParams({ mode: "departments", department: dep.id });
+                  }}
+                />
+              </ChartCard>
             </>
           ) : null}
 
@@ -831,9 +1391,15 @@ export default function ReportsPage() {
                 <EmptyState title="Select a college" description="Choose a college to view all departments or one particular department." />
               ) : (
                 <>
-                  <div className="grid gap-4 lg:grid-cols-[3fr_2fr]">
+                  <div className="grid gap-4 lg:grid-cols-3">
+                    <ChartCard title="Score Distribution" height="h-[240px]">
+                      <ScoreDonutChart data={scope.distribution || []} total={toNumber(metrics.attemptedStudents)} />
+                    </ChartCard>
+                    <ChartCard title="Topic-wise Performance" height="h-[240px]">
+                      <TopicPieChart data={subjectData} />
+                    </ChartCard>
                     <ChartCard title={selectedDepartment ? `${selectedDepartment.name} Performance` : "All Departments Performance"} height="h-[240px]">
-                      <div className="h-full p-4 bg-white rounded-md overflow-auto">
+                      <div className="h-full overflow-auto">
                         <GroupedBarChart
                           data={departmentChartRows}
                           xKey="department"
@@ -844,10 +1410,11 @@ export default function ReportsPage() {
                         />
                       </div>
                     </ChartCard>
-                    <ChartCard title="Topic-wise Performance" height="h-[240px]">
-                      <TopicPieChart data={subjectData} />
-                    </ChartCard>
                   </div>
+
+                  <ChartCard title="Score Spread" height="h-[200px]">
+                    <DistributionSummary stats={scope.distributionStats} />
+                  </ChartCard>
 
                   <article className="overflow-x-auto rounded-2xl border border-border bg-card">
                     <table className="min-w-full text-sm">
@@ -859,24 +1426,33 @@ export default function ReportsPage() {
                           <Th sortKey="avgScore" sortState={sortState} onSort={handleSort}>Avg Score</Th>
                           <Th sortKey="passRate" sortState={sortState} onSort={handleSort}>Pass Rate</Th>
                           <Th sortKey="participation" sortState={sortState} onSort={handleSort}>Participation</Th>
+                          <Th>Status</Th>
                           <Th sortKey="violations" sortState={sortState} onSort={handleSort}>Violations</Th>
                         </tr>
                       </thead>
                       <tbody>
-                        {sortedDepartmentRows.map((row) => (
-                          <tr key={row.departmentId || row.department} className="border-t border-border/70">
+                        {sortedDepartmentRows.map((row) => {
+                          const health = row.avgScore >= 75
+                            ? { label: "Healthy", variant: "success" }
+                            : row.avgScore >= 50
+                              ? { label: "Average", variant: "warning" }
+                              : { label: "Needs Review", variant: "danger" };
+                          return (
+                          <tr key={row.departmentId || row.department} className="border-t border-border/70 hover:bg-muted/40">
                             <td className="px-4 py-3 font-medium text-text-primary">{row.department}</td>
                             <td className="px-4 py-3">{row.students}</td>
                             <td className="px-4 py-3">{row.submissions}</td>
                             <td className="px-4 py-3"><ScoreBadge score={row.avgScore} /></td>
                             <td className="px-4 py-3">{formatPercent(row.passRate)}</td>
                             <td className="px-4 py-3">{formatPercent(row.participation)}</td>
+                            <td className="px-4 py-3"><StatusBadge label={health.label} variant={health.variant} /></td>
                             <td className="px-4 py-3"><ViolationBadge count={row.violations} /></td>
                           </tr>
-                        ))}
+                          );
+                        })}
                         {sortedDepartmentRows.length === 0 ? (
                           <tr>
-                            <td colSpan={7} className="px-4 py-8">
+                            <td colSpan={8} className="px-4 py-8">
                               <EmptyState title="No department reports yet" description="Department metrics appear after students submit tests." />
                             </td>
                           </tr>
@@ -924,6 +1500,7 @@ export default function ReportsPage() {
                           <Th sortKey="testName" sortState={sortState} onSort={handleSort}>Test</Th>
                           <Th sortKey="subject" sortState={sortState} onSort={handleSort}>Subject</Th>
                           <Th sortKey="scorePercent" sortState={sortState} onSort={handleSort}>Score</Th>
+                          <Th>Result</Th>
                           <Th sortKey="obtainedMarks" sortState={sortState} onSort={handleSort}>Marks</Th>
                           <Th sortKey="timeTaken" sortState={sortState} onSort={handleSort}>Time</Th>
                           <Th sortKey="violationsCount" sortState={sortState} onSort={handleSort}>Violations</Th>
@@ -931,11 +1508,12 @@ export default function ReportsPage() {
                       </thead>
                       <tbody>
                         {sortedAttemptRows.map((row) => (
-                          <tr key={row.id} className="border-t border-border/70">
+                          <tr key={row.id} className="border-t border-border/70 hover:bg-muted/40">
                             <td className="whitespace-nowrap px-4 py-3 text-text-secondary">{formatDateLabel(row.date)}</td>
                             <td className="px-4 py-3 font-medium text-text-primary">{row.testName}</td>
                             <td className="px-4 py-3 text-text-secondary">{row.subject}</td>
                             <td className="px-4 py-3"><ScoreBadge score={row.scorePercent} /></td>
+                            <td className="px-4 py-3"><ResultBadge status={row.status} score={row.scorePercent} /></td>
                             <td className="px-4 py-3">
                               {row.totalMarks > 0 ? `${row.obtainedMarks.toFixed(2)} / ${row.totalMarks.toFixed(2)}` : "-"}
                             </td>
@@ -945,7 +1523,7 @@ export default function ReportsPage() {
                         ))}
                         {sortedAttemptRows.length === 0 ? (
                           <tr>
-                            <td colSpan={7} className="px-4 py-8">
+                            <td colSpan={8} className="px-4 py-8">
                               <EmptyState title="No submitted tests" description="This student's completed tests will appear here." />
                             </td>
                           </tr>
@@ -954,43 +1532,72 @@ export default function ReportsPage() {
                     </table>
                   </article>
                   <article className="overflow-x-auto rounded-2xl border border-border bg-card">
-                <div className="flex flex-wrap items-center justify-between gap-2 p-4">
-                  <div>
-                    <h3 className="text-lg font-semibold text-text-primary">Students in Scope</h3>
-                    <p className="text-xs text-text-secondary">Select a student from search to open complete test performance.</p>
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/70 p-4">
+                  <div className="flex items-center gap-3">
+                    <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3v11.25A2.25 2.25 0 006 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0118 16.5h-2.25m-7.5 0h7.5m-7.5 0l-1 3m8.5-3l1 3m0 0l.5 1.5m-.5-1.5h-9.5m0 0l-.5 1.5" />
+                      </svg>
+                    </span>
+                    <div>
+                      <h3 className="text-lg font-semibold text-text-primary">Student Performance Log</h3>
+                      <p className="text-xs text-text-secondary">Select a student to open complete test performance.</p>
+                    </div>
                   </div>
+                  <span className="rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-text-secondary">
+                    {sortedStudentRows.length} {sortedStudentRows.length === 1 ? "entry" : "entries"}
+                  </span>
                 </div>
                 <table className="min-w-full text-sm">
                   <thead>
                     <tr>
-                      <Th sortKey="rank" sortState={sortState} onSort={handleSort}>Rank</Th>
-                      <Th sortKey="name" sortState={sortState} onSort={handleSort}>Student</Th>
+                      <Th sortKey="rank" sortState={sortState} onSort={handleSort}>S.No</Th>
+                      <Th sortKey="name" sortState={sortState} onSort={handleSort}>Student Name</Th>
                       <Th sortKey="department" sortState={sortState} onSort={handleSort}>Department</Th>
                       <Th sortKey="year" sortState={sortState} onSort={handleSort}>Year</Th>
                       <Th sortKey="avgScore" sortState={sortState} onSort={handleSort}>Avg Score</Th>
+                      <Th>Result</Th>
                       <Th sortKey="testsTaken" sortState={sortState} onSort={handleSort}>Tests</Th>
                       <Th sortKey="violations" sortState={sortState} onSort={handleSort}>Violations</Th>
+                      <Th>Actions</Th>
                     </tr>
                   </thead>
                   <tbody>
                     {visibleStudentRows.map((row) => (
-                      <tr key={row.studentId} className="border-t border-border/70">
-                        <td className="px-4 py-3">{row.rank ? `#${row.rank}` : "-"}</td>
+                      <tr key={row.studentId} className="border-t border-border/70 hover:bg-muted/40">
+                        <td className="px-4 py-3 tabular-nums text-text-secondary">{row.rank ? `#${row.rank}` : "-"}</td>
                         <td className="px-4 py-3">
                           <button
                             type="button"
                             onClick={() => updateParams({ college: row.collegeId || collegeId || "", department: row.departmentId || departmentId, student_id: row.studentId })}
-                            className="text-left font-medium text-text-primary hover:text-chart-1"
+                            className="flex items-center gap-3 text-left"
                           >
-                            {row.name}
-                            <span className="block text-xs font-normal text-text-secondary">{row.rollNo}</span>
+                            <Avatar name={row.name} seed={row.studentId} />
+                            <span className="min-w-0">
+                              <span className="block truncate font-medium text-text-primary hover:text-chart-1">{row.name}</span>
+                              <span className="block truncate text-xs font-normal text-text-secondary">{row.rollNo}</span>
+                            </span>
                           </button>
                         </td>
                         <td className="px-4 py-3 text-text-secondary">{row.department}</td>
                         <td className="px-4 py-3 text-text-secondary">{row.year ? `${row.year} YEAR` : "-"}</td>
                         <td className="px-4 py-3"><ScoreBadge score={row.avgScore} /></td>
+                        <td className="px-4 py-3">{row.testsTaken > 0 ? <ResultBadge score={row.avgScore} /> : <span className="text-text-secondary">-</span>}</td>
                         <td className="px-4 py-3">{row.testsTaken}</td>
                         <td className="px-4 py-3"><ViolationBadge count={row.violations} /></td>
+                        <td className="px-4 py-3">
+                          <button
+                            type="button"
+                            title="View student report"
+                            onClick={() => updateParams({ college: row.collegeId || collegeId || "", department: row.departmentId || departmentId, student_id: row.studentId })}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border text-text-secondary transition-colors hover:bg-muted hover:text-primary"
+                          >
+                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                            </svg>
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -1020,6 +1627,8 @@ export default function ReportsPage() {
               count={notAttendedStudents.length}
             />
           ) : null}
+
+          {renderTestsListCard()}
         </section>
       ) : null}
     </div>

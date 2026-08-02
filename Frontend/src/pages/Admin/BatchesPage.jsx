@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useSelector } from "react-redux";
+import { useAdminAuthState } from "@/hooks/useAdminAuthState";
 import { toast } from "sonner";
 import { adminApi } from "@/services/api";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -30,7 +30,7 @@ export default function BatchesPage() {
   const [bulkBatchId, setBulkBatchId] = useState("");
   const [banner, setBanner] = useState({ type: "", title: "", message: "" });
 
-  const admin = useSelector((state) => state.adminAuth.admin);
+  const admin = useAdminAuthState()?.admin;
   const adminDeptId = admin?.department?.id || admin?.departmentId || "";
   const canManageBatches = usePermission(ADMIN_PERMISSIONS.MANAGE_BATCHES);
   const canViewBatches = usePermission(ADMIN_PERMISSIONS.VIEW_BATCHES) || canManageBatches;

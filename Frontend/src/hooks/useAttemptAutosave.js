@@ -1,8 +1,78 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { clearSavedAnswerSnapshots, restoreDraftAnswers, saveAttemptAnswers, setSaveStatus } from "@/features/Students/testSlice";
+import { getAccessToken } from "@/services/httpClient";
+import { API_BASE_URL } from "@/services/runtimeConfig";
 
+// Drafts live in localStorage (NOT sessionStorage) so unsaved answers survive
+// a closed tab, a crashed browser, or a device restart — the student gets them
+// back on resume. Cleared on successful save; stale drafts self-prune.
 const localDraftKey = (attemptId) => `lms:attempt:draft:${attemptId}`;
+const DRAFT_PREFIX = "lms:attempt:draft:";
+const DRAFT_MAX_AGE_MS = 48 * 60 * 60 * 1000;
+
+const readDraft = (attemptId) => {
+  const parse = (raw) => {
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed; // legacy shape
+      if (parsed && Array.isArray(parsed.answers)) return parsed.answers;
+      return null;
+    } catch {
+      return null;
+    }
+  };
+
+  try {
+    return (
+      parse(localStorage.getItem(localDraftKey(attemptId))) ||
+      // Migration fallback: drafts written by the previous sessionStorage version.
+      parse(sessionStorage.getItem(localDraftKey(attemptId))) ||
+      []
+    );
+  } catch {
+    return [];
+  }
+};
+
+const writeDraft = (attemptId, answers) => {
+  try {
+    localStorage.setItem(localDraftKey(attemptId), JSON.stringify({ v: 1, savedAt: Date.now(), answers }));
+  } catch {
+    // Storage unavailable — autosave still runs; only crash-recovery degrades.
+  }
+};
+
+const removeDraft = (attemptId) => {
+  try {
+    localStorage.removeItem(localDraftKey(attemptId));
+    sessionStorage.removeItem(localDraftKey(attemptId));
+  } catch {
+    // Ignore storage failures.
+  }
+};
+
+const pruneStaleDrafts = () => {
+  try {
+    const now = Date.now();
+    for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+      const key = localStorage.key(index);
+      if (!key || !key.startsWith(DRAFT_PREFIX)) continue;
+      try {
+        const parsed = JSON.parse(localStorage.getItem(key));
+        const savedAt = Number(parsed?.savedAt || 0);
+        if (!savedAt || now - savedAt > DRAFT_MAX_AGE_MS) {
+          localStorage.removeItem(key);
+        }
+      } catch {
+        localStorage.removeItem(key);
+      }
+    }
+  } catch {
+    // Ignore storage failures.
+  }
+};
 
 const wait = (ms) => new Promise((resolve) => {
   window.setTimeout(resolve, ms);
@@ -33,14 +103,14 @@ export const useAttemptAutosave = () => {
       });
   }, [answers, changed_answer_ids]);
 
-  const writeDraftToSession = useCallback((payload) => {
-    if (!attempt_id) return;
+  const changedPayloadRef = useRef(changedPayload);
+  useEffect(() => {
+    changedPayloadRef.current = changedPayload;
+  }, [changedPayload]);
 
-    try {
-      sessionStorage.setItem(localDraftKey(attempt_id), JSON.stringify(payload));
-    } catch {
-      // Ignore storage write failures.
-    }
+  const writeDraftToStorage = useCallback((payload) => {
+    if (!attempt_id) return;
+    writeDraft(attempt_id, payload);
   }, [attempt_id]);
 
   const flush = useCallback(async () => {
@@ -52,7 +122,7 @@ export const useAttemptAutosave = () => {
       return;
     }
 
-    writeDraftToSession(changedPayload);
+    writeDraftToStorage(changedPayload);
 
     if (typeof navigator !== "undefined" && !navigator.onLine) {
       dispatch(setSaveStatus("error"));
@@ -79,6 +149,7 @@ export const useAttemptAutosave = () => {
 
           dispatch(clearSavedAnswerSnapshots(changedPayload));
           dispatch(setSaveStatus("saved"));
+          removeDraft(attempt_id);
           isFlushingRef.current = false;
           return;
         } catch (error) {
@@ -97,11 +168,15 @@ export const useAttemptAutosave = () => {
 
       throw lastError || new Error("Autosave failed");
     } catch {
-      writeDraftToSession(changedPayload);
+      writeDraftToStorage(changedPayload);
       dispatch(setSaveStatus("error"));
       isFlushingRef.current = false;
     }
-  }, [attempt_id, changedPayload, dispatch, test_id, writeDraftToSession]);
+  }, [attempt_id, changedPayload, dispatch, test_id, writeDraftToStorage]);
+
+  useEffect(() => {
+    pruneStaleDrafts();
+  }, []);
 
   useEffect(() => {
     if (!attempt_id || !test_id || restoredAttemptRef.current === attempt_id || question_order.length === 0) {
@@ -110,15 +185,7 @@ export const useAttemptAutosave = () => {
 
     restoredAttemptRef.current = attempt_id;
 
-    let parsed = [];
-
-    try {
-      const raw = sessionStorage.getItem(localDraftKey(attempt_id));
-      parsed = raw ? JSON.parse(raw) : [];
-    } catch {
-      parsed = [];
-    }
-
+    const parsed = readDraft(attempt_id);
     if (Array.isArray(parsed) && parsed.length > 0) {
       dispatch(restoreDraftAnswers(parsed));
     }
@@ -137,7 +204,7 @@ export const useAttemptAutosave = () => {
       return undefined;
     }
 
-    writeDraftToSession(changedPayload);
+    writeDraftToStorage(changedPayload);
 
     debounceTimerRef.current = window.setTimeout(() => {
       flush();
@@ -148,7 +215,7 @@ export const useAttemptAutosave = () => {
         window.clearTimeout(debounceTimerRef.current);
       }
     };
-  }, [attempt_id, changedPayload, changedPayload.length, flush, writeDraftToSession]);
+  }, [attempt_id, changedPayload, changedPayload.length, flush, writeDraftToStorage]);
 
   useEffect(() => {
     if (!attempt_id || !test_id) {
@@ -166,20 +233,67 @@ export const useAttemptAutosave = () => {
     };
   }, [attempt_id, changedPayload.length, flush, test_id]);
 
+  // Last-gasp flush: when the tab is being closed/hidden with unsaved answers,
+  // fire keepalive requests that outlive the page. sendBeacon cannot carry the
+  // Authorization header, so fetch({ keepalive }) is used instead. The draft in
+  // localStorage remains the fallback if even this cannot complete.
+  useEffect(() => {
+    if (!attempt_id || !test_id) {
+      return undefined;
+    }
+
+    const flushOnExit = () => {
+      const pending = changedPayloadRef.current;
+      const token = getAccessToken();
+      if (!Array.isArray(pending) || pending.length === 0 || !token) return;
+
+      writeDraft(attempt_id, pending);
+
+      for (const item of pending.slice(0, 10)) {
+        try {
+          fetch(`${API_BASE_URL}/tests/${test_id}/answer`, {
+            method: "POST",
+            keepalive: true,
+            credentials: "include",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              submissionId: attempt_id,
+              questionId: item.question_id,
+              selectedOption: item.selected_option ?? null,
+              selectedOptions: item.selected_options ?? null,
+              answerText: item.answer_text ?? null,
+              answerBoolean: typeof item.answer_boolean === "boolean" ? item.answer_boolean : null,
+              markedForReview: Boolean(item.marked_for_review),
+            }),
+          }).catch(() => {});
+        } catch {
+          // Keepalive unsupported or blocked — the localStorage draft covers it.
+        }
+      }
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") flushOnExit();
+    };
+
+    window.addEventListener("pagehide", flushOnExit);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("pagehide", flushOnExit);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [attempt_id, test_id]);
+
   useEffect(() => {
     if (!attempt_id || !test_id) {
       return undefined;
     }
 
     const onlineHandler = async () => {
-      let parsed = [];
-
-      try {
-        const raw = sessionStorage.getItem(localDraftKey(attempt_id));
-        parsed = raw ? JSON.parse(raw) : [];
-      } catch {
-        parsed = [];
-      }
+      const parsed = readDraft(attempt_id);
 
       if (Array.isArray(parsed) && parsed.length > 0) {
         await dispatch(
@@ -191,6 +305,7 @@ export const useAttemptAutosave = () => {
         ).unwrap()
           .then(() => {
             dispatch(clearSavedAnswerSnapshots(parsed));
+            removeDraft(attempt_id);
           })
           .catch(() => null);
       }

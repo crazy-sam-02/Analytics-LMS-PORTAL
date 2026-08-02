@@ -183,7 +183,7 @@ describe("Student results and reports pages", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("Tests Taken")).toBeInTheDocument();
+      expect(screen.getByText("Tests Attempted")).toBeInTheDocument();
     });
   });
 });

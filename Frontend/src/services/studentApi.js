@@ -521,50 +521,55 @@ export const studentApi = {
   },
  
   reportAttemptViolation: async ({ attemptId, testId, type, metadata }) => {
-    try {
-      if (!testId) {
-        const response = await httpClient.post(`/attempts/${attemptId}/violations`, {
-          type,
-          metadata,
-          clientSessionId: getOrCreateTestClientId(),
-        }, { headers: testSessionHeaders() });
-        return response.data;
-      }
+    const clientSessionId = getOrCreateTestClientId();
+    const postPrimary = () =>
+      testId
+        ? httpClient.post(`/tests/${testId}/violation`, { submissionId: attemptId, type, metadata, clientSessionId }, { headers: testSessionHeaders() })
+        : httpClient.post(`/attempts/${attemptId}/violations`, { type, metadata, clientSessionId }, { headers: testSessionHeaders() });
+    const postLegacy = () =>
+      httpClient.post(`/attempts/${attemptId}/violations`, { type, metadata, clientSessionId }, { headers: testSessionHeaders() });
 
-      const response = await httpClient.post(`/tests/${testId}/violation`, {
-        submissionId: attemptId,
-        type,
-        metadata,
-        clientSessionId: getOrCreateTestClientId(),
-      }, { headers: testSessionHeaders() });
-      return response.data;
-    } catch (error) {
-      const parsed = toApiError(error);
-      if (parsed.status !== 404) {
-        throw parsed;
-      }
+    // Only transient failures are worth retrying: a network drop, a 5xx, or a
+    // rate-limit. Terminal 4xx (already submitted, forbidden, validation) are not.
+    const isTransient = (status) => !status || status === 429 || Number(status) >= 500;
 
+    // Violations must not be silently dropped on a blip — unlike autosave and
+    // heartbeat, a lost violation vanishes from the DB, reports, and integrity
+    // analytics entirely. The server dedupes by (session, type, time window),
+    // so a retry of one that actually landed is collapsed, never double-counted.
+    const retryDelays = [800, 2000];
+    let lastError = null;
+
+    for (let attempt = 0; attempt <= retryDelays.length; attempt += 1) {
       try {
-        const response = await httpClient.post(`/attempts/${attemptId}/violations`, {
-          type,
-          metadata,
-          clientSessionId: getOrCreateTestClientId(),
-        }, { headers: testSessionHeaders() });
+        const response = await postPrimary();
         return response.data;
-      } catch (legacyError) {
-        throw toApiError(legacyError);
+      } catch (error) {
+        let parsed = toApiError(error);
+
+        if (parsed.status === 404) {
+          try {
+            const response = await postLegacy();
+            return response.data;
+          } catch (legacyError) {
+            parsed = toApiError(legacyError);
+          }
+        }
+
+        lastError = parsed;
+        if (!isTransient(parsed.status) || attempt === retryDelays.length) {
+          throw parsed;
+        }
+        await new Promise((resolve) => setTimeout(resolve, retryDelays[attempt]));
       }
     }
+
+    throw lastError || new Error("Violation report failed");
   },
 
   getAttemptResult: async (attemptId) => {
     try {
-      const response = await httpClient.get(`/results/${attemptId}`, {
-        headers: {
-          "Cache-Control": "no-cache",
-          Pragma: "no-cache",
-        },
-      });
+      const response = await httpClient.get(`/results/${attemptId}`);
       return withServerTime(response).data;
     } catch (error) {
       const parsed = toApiError(error);
@@ -573,12 +578,7 @@ export const studentApi = {
       }
 
       try {
-        const fallbackResponse = await httpClient.get(`/submission/${attemptId}`, {
-          headers: {
-            "Cache-Control": "no-cache",
-            Pragma: "no-cache",
-          },
-        });
+        const fallbackResponse = await httpClient.get(`/submission/${attemptId}`);
         return withServerTime(fallbackResponse).data;
       } catch (fallbackError) {
         throw toApiError(fallbackError);

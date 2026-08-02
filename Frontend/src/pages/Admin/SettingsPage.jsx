@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useSelector } from "react-redux";
+import { useAdminAuthState } from "@/hooks/useAdminAuthState";
 import { toast } from "sonner";
 import { adminApi } from "@/services/api";
 import {
@@ -17,7 +17,7 @@ import SkeletonBlock from "@/components/common/SkeletonBlock";
 import { SUPPORT_EMAIL, openSupportMail } from "@/lib/supportMail";
 
 export default function AdminSettingsPage() {
-  const authenticatedAdmin = useSelector((state) => state.adminAuth.admin);
+  const authenticatedAdmin = useAdminAuthState()?.admin;
   const [passwordForm, setPasswordForm] = useState({
     currentPassword: "",
     newPassword: "",

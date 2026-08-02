@@ -5,39 +5,16 @@
  * Run with: npm test -- src/tests/integration/validation.integration.test.js
  */
 
-const { describe, it, expect, beforeEach, afterEach, afterAll } = require("@jest/globals");
+const { describe, it, expect, beforeEach, afterAll } = require("@jest/globals");
 const mongoose = require("mongoose");
 const models = require("../../models");
 const {
-  validateDocument,
   validateDocuments,
 } = require("../../services/model-validation.service");
 const {
   createStudent,
-  updateStudent,
   bulkImportStudents,
 } = require("../../services/student.service");
-const {
-  createAdmin,
-  assignPermissions,
-} = require("../../services/admin.service");
-const {
-  createBatch,
-  updateBatch,
-} = require("../../services/batch.service");
-const {
-  createDepartment,
-  assignDepartmentHead,
-} = require("../../services/department.service");
-const {
-  createSubmission,
-  updateSubmissionStatus,
-  recordViolation,
-} = require("../../services/submission.service");
-const {
-  saveAnswer,
-  calculateAccuracy,
-} = require("../../services/answer.service");
 const {
   validateQuestionMarksSum,
   validateTestStatusTransition,
@@ -53,7 +30,6 @@ const { UserValidation, BatchValidation } = require("../../models/validation");
 // Test data helpers
 const testCollege = { id: "college-test-001" };
 const testAdmin = { id: "admin-test-001" };
-const testStudent = { id: "student-test-001" };
 
 describe("Validation Services Integration Tests", () => {
   beforeEach(async () => {
@@ -212,7 +188,7 @@ describe("Validation Services Integration Tests", () => {
         await validateQuestionMarksSum(questions, totalMarks);
         // Should pass
         expect(true).toBe(true);
-      } catch (error) {
+      } catch (_error) {
         expect(true).toBe(false);
       }
     });
@@ -242,7 +218,7 @@ describe("Validation Services Integration Tests", () => {
         } catch (error) {
           expect(error.message).toContain("transition");
         }
-      } catch (error) {
+      } catch (_error) {
         expect(true).toBe(false);
       }
     });
@@ -260,7 +236,7 @@ describe("Validation Services Integration Tests", () => {
         } catch (error) {
           expect(error.message).toContain("transition");
         }
-      } catch (error) {
+      } catch (_error) {
         expect(true).toBe(false);
       }
     });
@@ -286,7 +262,7 @@ describe("Validation Services Integration Tests", () => {
 
         expect(metrics.summary.total).toBeGreaterThan(0);
         expect(metrics.summary.passed).toBeGreaterThan(0);
-      } catch (error) {
+      } catch (_error) {
         // Expected in test env
       }
     });
@@ -381,7 +357,7 @@ describe("Validation Services Integration Tests", () => {
     it("should handle missing references gracefully", async () => {
       try {
         // Try to create student in non-existent college
-        const result = await createStudent(
+        await createStudent(
           {
             fullName: "Test",
             email: "test@test.edu",

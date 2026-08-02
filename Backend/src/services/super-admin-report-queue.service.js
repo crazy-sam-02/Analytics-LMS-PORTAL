@@ -1,6 +1,9 @@
 const models = require("../models");
+const env = require("../config/env");
 const { redisClient, getRedisQueueConnection } = require("../config/redis");
 const { emitToRole } = require("../realtime/socket");
+
+const workerEnabled = env.worker.enabled;
 const { saveReportPayload } = require("./report-payload-store.service");
 const { clampPercent, getSubmissionScorePercent } = require("../utils/score");
 const { buildStudentLifecycleWhere } = require("./report-scope.service");
@@ -233,28 +236,32 @@ const buildDepartmentAcademicPayload = async (db, filters = {}) => {
 };
 
 if (Queue && redisClient && queueConnection) {
+  // Producer: created on every replica so any instance can enqueue jobs.
   superReportQueue = new Queue("super-admin-report-jobs", {
     connection: queueConnection,
   });
 
-  superReportWorker = new Worker(
-    "super-admin-report-jobs",
-    async (job) => {
-      await processSuperReportSynchronously(job.data.reportJobId);
-    },
-    {
-      connection: queueConnection,
-      concurrency: 8,
-    }
-  );
+  // Consumer: only worker-enabled replicas process jobs.
+  if (workerEnabled) {
+    superReportWorker = new Worker(
+      "super-admin-report-jobs",
+      async (job) => {
+        await processSuperReportSynchronously(job.data.reportJobId);
+      },
+      {
+        connection: queueConnection,
+        concurrency: 8,
+      }
+    );
 
-  superReportWorker.on("failed", (job, error) => {
-    emitToRole("SUPER_ADMIN", "super-report:status", {
-      reportJobId: job?.data?.reportJobId,
-      status: "FAILED",
-      errorMessage: error?.message || "Super report processing failed",
+    superReportWorker.on("failed", (job, error) => {
+      emitToRole("SUPER_ADMIN", "super-report:status", {
+        reportJobId: job?.data?.reportJobId,
+        status: "FAILED",
+        errorMessage: error?.message || "Super report processing failed",
+      });
     });
-  });
+  }
 }
 
 const buildGlobalReportPayload = async (db, job) => {

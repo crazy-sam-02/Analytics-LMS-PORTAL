@@ -1,7 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 
-export const useAttemptTimer = ({ serverEndTime, onExpired }) => {
-  const [remainingMs, setRemainingMs] = useState(() => Math.max(0, Number(serverEndTime || 0) - Date.now()));
+/**
+ * Exam countdown that runs on SERVER time, not the student's device clock.
+ *
+ * `clockOffsetMs` is (serverTime - clientTime) captured when the attempt
+ * payload arrived. Without it, a device clock running fast would fire
+ * `onExpired` (and the auto-submit UI) before the server deadline, ending the
+ * exam early; a slow clock would display minutes the server will not honour.
+ */
+export const useAttemptTimer = ({ serverEndTime, clockOffsetMs = 0, onExpired }) => {
+  const offset = Number.isFinite(Number(clockOffsetMs)) ? Number(clockOffsetMs) : 0;
+  const [remainingMs, setRemainingMs] = useState(() => Math.max(0, Number(serverEndTime || 0) - (Date.now() + offset)));
   const intervalRef = useRef(null);
   const expiryTriggeredRef = useRef(false);
   const onExpiredRef = useRef(onExpired);
@@ -21,8 +30,10 @@ export const useAttemptTimer = ({ serverEndTime, onExpired }) => {
       return undefined;
     }
 
+    const serverNow = () => Date.now() + offset;
+
     const tick = () => {
-      const nextRemaining = Math.max(0, end - Date.now());
+      const nextRemaining = Math.max(0, end - serverNow());
       setRemainingMs((current) => (current === nextRemaining ? current : nextRemaining));
 
       if (nextRemaining <= 0) {
@@ -38,7 +49,7 @@ export const useAttemptTimer = ({ serverEndTime, onExpired }) => {
     };
 
     tick();
-    intervalRef.current = setInterval(tick, Math.min(1000, Math.max(25, end - Date.now())));
+    intervalRef.current = setInterval(tick, Math.min(1000, Math.max(25, end - serverNow())));
 
     return () => {
       if (intervalRef.current) {
@@ -46,7 +57,7 @@ export const useAttemptTimer = ({ serverEndTime, onExpired }) => {
         intervalRef.current = null;
       }
     };
-  }, [serverEndTime]);
+  }, [serverEndTime, offset]);
 
   return {
     remainingMs,

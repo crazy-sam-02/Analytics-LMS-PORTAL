@@ -215,6 +215,13 @@ const uploadScan = {
   timeoutMs: toPositiveInt(process.env.CLAMAV_TIMEOUT_MS, 15_000),
 };
 
+// Web/worker split: every replica still enqueues jobs (BullMQ producer), but
+// only replicas with WORKER_ENABLED=true consume them and run queue recovery.
+// Defaults to true so single-instance, PM2, dev, and test runs keep working.
+const worker = {
+  enabled: toBoolean(process.env.WORKER_ENABLED, true),
+};
+
 const normalizeUrlBase = (value) => String(value || "").trim().replace(/\/+$/, "");
 const getUrlOrigin = (value) => {
   try {
@@ -278,4 +285,5 @@ module.exports = {
   rateLimit,
   responseCache,
   database,
+  worker,
 };

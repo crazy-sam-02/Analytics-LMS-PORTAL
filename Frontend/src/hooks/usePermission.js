@@ -1,8 +1,8 @@
 import { useMemo } from "react";
-import { useSelector } from "react-redux";
+import { useAdminAuthState } from "@/hooks/useAdminAuthState";
 
 export default function usePermission(permission) {
-  const permissions = useSelector((state) => state.adminAuth?.permissions || []);
-  const permissionSet = useMemo(() => new Set(permissions), [permissions]);
+  const authState = useAdminAuthState();
+  const permissionSet = useMemo(() => new Set(authState?.permissions || []), [authState]);
   return permissionSet.has(permission);
 }

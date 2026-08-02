@@ -218,7 +218,11 @@ const getCompletionTimeSpentSeconds = async (db, submission, submittedAt = new D
   return Math.max(0, Math.floor((effectiveEndMs - startedAtMs) / 1000));
 };
 
-const completeSubmission = async ({ submissionId, autoSubmitted = false }) => {
+// `withSummary: true` returns `{ submission, summary }` so callers can reuse
+// the score computed here instead of re-running calculateSubmissionScore
+// (a full test+questions+answers reload) right after completing. Default shape
+// is unchanged for existing callers.
+const completeSubmission = async ({ submissionId, autoSubmitted = false, withSummary = false }) => {
   const m = await models.init();
   const db = m.dbClient;
   const scoreData = await calculateSubmissionScore(submissionId);
@@ -233,7 +237,7 @@ const completeSubmission = async ({ submissionId, autoSubmitted = false }) => {
   }
 
   if (existing.status !== SubmissionStatus.IN_PROGRESS) {
-    return existing;
+    return withSummary ? { submission: existing, summary: scoreData } : existing;
   }
 
   // Atomic completion guard to prevent duplicate submit races.
@@ -276,7 +280,7 @@ const completeSubmission = async ({ submissionId, autoSubmitted = false }) => {
     });
   }
 
-  return updatedSubmission;
+  return withSummary ? { submission: updatedSubmission, summary: scoreData } : updatedSubmission;
 };
 
 module.exports = {

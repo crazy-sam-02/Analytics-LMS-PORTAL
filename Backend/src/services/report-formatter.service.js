@@ -419,7 +419,32 @@ const buildDepartmentReportHTML = (reportJob, reportData) => {
   `;
 };
 
-const generateAdminReportHTML = (reportJob, reportData) => buildDepartmentReportHTML(reportJob, reportData);
+const generateAdminReportHTML = (reportJob, reportData) => {
+  const { type, generatedAt, expiresAt } = reportJob;
+  const rows = reportData?.rows || [];
+
+  if (type === "STUDENT_WISE") {
+    return formatStudentWiseReport(rows, generatedAt, expiresAt);
+  }
+
+  if (type === "TEST_WISE") {
+    return formatTestWiseReport(rows, generatedAt, expiresAt);
+  }
+
+  if (type === "DEPARTMENT_WISE") {
+    return buildDepartmentReportHTML(reportJob, reportData);
+  }
+
+  if (type === "BATCH_WISE") {
+    return formatBatchWiseReport(rows, generatedAt, expiresAt);
+  }
+
+  if (type === "COMPREHENSIVE") {
+    return formatComprehensiveReport(reportData, generatedAt, expiresAt);
+  }
+
+  return generateBasicHTML("Unknown Report Type", "No formatting available for this report type.");
+};
 
 const generateSuperAdminReportHTML = (reportJob, reportData) => {
   const { type, generatedAt, expiresAt } = reportJob;
@@ -867,8 +892,6 @@ const formatBatchWiseReport = (rows = [], generatedAt, expiresAt, isGlobal = fal
 const formatComprehensiveReport = (data = {}, generatedAt, expiresAt) => {
   const summary = data.summary || {};
   const tests = data.tests || [];
-  const departments = data.departments || [];
-  const batches = data.batches || [];
   const recentSubmissions = data.recentSubmissions || [];
 
   return `

@@ -24,7 +24,9 @@ scrape_configs:
       credentials_file: /etc/prometheus/secrets/metrics_token
     static_configs:
       - targets:
-          - api:5000
+          - api1:5000
+          - api2:5000
+          - api3:5000
 
   - job_name: node-exporter
     static_configs:

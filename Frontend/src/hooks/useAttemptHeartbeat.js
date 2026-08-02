@@ -8,8 +8,26 @@ export const useAttemptHeartbeat = ({ attemptId, testId, onNotFound, onAlreadySu
   const stoppedRef = useRef(false);
   const nextDelayRef = useRef(5000);
 
+  // Callbacks are usually inline arrows recreated on every render. Holding them
+  // in refs keeps the heartbeat effect OUT of their identity — otherwise the
+  // effect tears down and reschedules on every render (the countdown re-renders
+  // this page ~once per second, which is shorter than the 5s heartbeat delay),
+  // so the heartbeat would never actually fire and the server would treat an
+  // active student as disconnected and force auto-submit them.
+  const onNotFoundRef = useRef(onNotFound);
+  const onAlreadySubmittedRef = useRef(onAlreadySubmitted);
   useEffect(() => {
+    onNotFoundRef.current = onNotFound;
+    onAlreadySubmittedRef.current = onAlreadySubmitted;
+  }, [onNotFound, onAlreadySubmitted]);
+
+  useEffect(() => {
+    if (!attemptId) {
+      return undefined;
+    }
+
     stoppedRef.current = false;
+    nextDelayRef.current = 5000;
 
     const run = async () => {
       if (!attemptId || stoppedRef.current) {
@@ -25,19 +43,19 @@ export const useAttemptHeartbeat = ({ attemptId, testId, onNotFound, onAlreadySu
         ).unwrap();
 
         if (response?.autoSubmitted) {
-          onAlreadySubmitted?.();
+          onAlreadySubmittedRef.current?.();
           return;
         }
 
         nextDelayRef.current = 5000;
       } catch (error) {
         if (Number(error?.status) === 404) {
-          onNotFound?.();
+          onNotFoundRef.current?.();
           return;
         }
 
         if (Number(error?.status) === 409) {
-          onAlreadySubmitted?.();
+          onAlreadySubmittedRef.current?.();
           return;
         }
 
@@ -49,6 +67,9 @@ export const useAttemptHeartbeat = ({ attemptId, testId, onNotFound, onAlreadySu
         }
       }
 
+      if (stoppedRef.current) {
+        return;
+      }
       timeoutRef.current = window.setTimeout(run, nextDelayRef.current);
     };
 
@@ -60,5 +81,5 @@ export const useAttemptHeartbeat = ({ attemptId, testId, onNotFound, onAlreadySu
         window.clearTimeout(timeoutRef.current);
       }
     };
-  }, [attemptId, dispatch, onAlreadySubmitted, onNotFound, testId]);
+  }, [attemptId, dispatch, testId]);
 };

@@ -17,7 +17,7 @@ import {
   LogOut,
 } from "lucide-react";
 import { ADMIN_PERMISSIONS } from "@/features/Admin/adminPermissions";
-import { logoutAdmin } from "@/features/Admin/adminAuthSlice";
+import { useAdminAuthState, getPortalAuthThunks } from "@/hooks/useAdminAuthState";
 import { closeTestCreationDialog } from "@/features/Admin/testCreationSlice";
 import ConfirmActionDialog from "@/components/Admin/ConfirmActionDialog";
 
@@ -57,7 +57,7 @@ export default function AdminSidebar({
   const location = useLocation();
   const desktopCollapsed = useSelector((state) => state.adminUi?.sidebarCollapsed);
   const collapsed = mobile ? false : desktopCollapsed;
-  const permissions = useSelector((state) => state.adminAuth.permissions || []);
+  const permissions = useAdminAuthState()?.permissions || [];
   const testCreationOpen = useSelector((state) => Boolean(state.testCreation?.open));
   const [logoutOpen, setLogoutOpen] = useState(false);
   const navItems = createNavItems(basePath);
@@ -160,7 +160,7 @@ export default function AdminSidebar({
         description={logoutDescription}
         confirmLabel="Logout"
         confirmVariant="destructive"
-        onConfirm={() => dispatch(logoutAdmin())}
+        onConfirm={() => dispatch(getPortalAuthThunks().logout())}
       />
     </aside>
   );

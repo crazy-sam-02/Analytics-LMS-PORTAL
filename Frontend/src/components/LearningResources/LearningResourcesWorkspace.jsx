@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { toast } from "sonner";
+import { useAdminAuthState } from "@/hooks/useAdminAuthState";
 import {
   BarChart3,
   BookOpen,
@@ -119,7 +120,7 @@ export default function LearningResourcesWorkspace({
 }) {
   const dispatch = useDispatch();
   const roleState = useSelector((state) => state.learningResources?.[role]);
-  const admin = useSelector((state) => state.adminAuth?.admin);
+  const admin = useAdminAuthState()?.admin;
   const { subjects = [], resources = [], popular = [], analytics, pagination, loading, uploading, selectedResource } = roleState || {};
   const [filters, setFilters] = useState({
     q: "",

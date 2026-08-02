@@ -267,6 +267,13 @@ const normalizeAttemptPayload = (payload) => {
     test,
   });
 
+  // Clock-skew offset: the server sends its own "now" with the payload, so the
+  // countdown can run against SERVER time instead of trusting the student's
+  // device clock (a fast local clock would otherwise end the exam early, a
+  // slow one would show phantom minutes).
+  const serverNow = Number(payload?.serverTime || payload?.server_time || 0);
+  const clockOffsetMs = Number.isFinite(serverNow) && serverNow > 0 ? serverNow - Date.now() : 0;
+
   return {
     attempt_id: attemptId,
     test_id: testId,
@@ -276,6 +283,7 @@ const normalizeAttemptPayload = (payload) => {
     marked_for_review: markedForReview,
     current_question_index: 0,
     server_end_time: serverEndTime,
+    clock_offset_ms: clockOffsetMs,
     violations,
     proctoring_config: buildStudentProctoringConfig(payload, test),
   };
@@ -357,6 +365,7 @@ const initialState = {
   current_question_index: 0,
   marked_for_review: [],
   server_end_time: null,
+  clock_offset_ms: 0,
   violations: createDefaultViolationState(),
   proctoring_config: defaultProctoringConfig,
   save_status: "idle",
@@ -522,6 +531,7 @@ const testSlice = createSlice({
       state.current_question_index = 0;
       state.marked_for_review = [];
       state.server_end_time = null;
+      state.clock_offset_ms = 0;
       state.violations = createDefaultViolationState();
       state.proctoring_config = defaultProctoringConfig;
       state.save_status = "idle";

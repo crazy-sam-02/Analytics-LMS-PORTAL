@@ -2,11 +2,14 @@ const mongoose = require("mongoose");
 
 const models = require("../../models");
 const { enqueueSuperReportJob } = require("../../services/super-admin-report-queue.service");
+const { aggregateReportSubmissions, buildAggregateReportResponse } = require("../../services/report-analytics-aggregation.service");
+const { describeDistribution } = require("../../utils/stats");
 const { generateSuperAdminReportHTML } = require("../../services/report-formatter.service");
 const { renderHtmlToPdfBuffer } = require("../../services/report-pdf.service");
 const { readReportPayload } = require("../../services/report-payload-store.service");
 const { ApiError, asyncHandler } = require("../../utils/http");
-const { clampPercent, getSubmissionScorePercent } = require("../../utils/score");
+const { clampPercent, getSubmissionScorePercent, getTestTotalMarks } = require("../../utils/score");
+const { collectSubmissions } = require("../../services/submission-batch.service");
 const { isQuestionCorrect } = require("../../services/test.service");
 const {
   buildStudentLifecycleWhere,
@@ -17,7 +20,6 @@ const {
 } = require("../../services/report-scope.service");
 
 const PASS_THRESHOLD_PERCENT = 40;
-const MAX_ANALYTICS_SUBMISSIONS = 20000;
 
 const toPercent = (value) => clampPercent(value);
 const getScorePercent = getSubmissionScorePercent;
@@ -266,14 +268,34 @@ const getSuperReportAnalytics = asyncHandler(async (req, res) => {
     ...(Object.keys(submittedAtFilter).length ? { submittedAt: submittedAtFilter } : {}),
   };
 
-  const submissionCount = await db.submission.count({ where: submissionWhere });
-  if (submissionCount > MAX_ANALYTICS_SUBMISSIONS && !studentId) {
-    throw new ApiError(
-      413,
-      "Report scope is too large. Select a department, test, student, or date range before loading analytics.",
-      { submissionCount, maxSubmissions: MAX_ANALYTICS_SUBMISSIONS },
-      "REPORT_SCOPE_TOO_LARGE"
-    );
+  // Non-student scope: compute everything database-side via aggregation rather
+  // than loading up to 20k submissions into memory. The student deep-dive below
+  // stays on the detailed path (bounded to one student, needs per-question data).
+  if (!studentId) {
+    const facet = await aggregateReportSubmissions({
+      collegeId,
+      testIds: Array.from(scopedTestIds),
+      studentIds: Array.from(scopedStudentIds),
+      dateFrom,
+      dateTo,
+    });
+
+    const payload = buildAggregateReportResponse({
+      facet,
+      students,
+      tests,
+      departments,
+      filters: {
+        collegeId: collegeId || null,
+        departmentId: departmentId || null,
+        studentId: null,
+        testId: testId || null,
+        year: year || null,
+        ...buildReportScopeMetadata(reportScopeFilters),
+      },
+    });
+
+    return res.status(200).json(payload);
   }
 
   const submissions = await db.submission.findMany({
@@ -595,10 +617,185 @@ const getSuperReportAnalytics = asyncHandler(async (req, res) => {
     scoreTrend,
     subjectPerformance,
     distribution: Object.entries(distributionBase).map(([range, count]) => ({ range, count })),
+    distributionStats: describeDistribution(rankedStudents.map((row) => row.avgScore)),
     departmentRows,
     tableRows,
     selectedStudent,
     attemptHistory,
+  });
+});
+
+// Derived lifecycle status mirroring the admin tests controller.
+const deriveSuperTestListStatus = (test = {}) => {
+  const raw = String(test.status || "").trim().toUpperCase();
+  if (raw === "DRAFT" || raw === "ARCHIVED") return raw;
+  const now = Date.now();
+  const startsAt = test.startsAt ? new Date(test.startsAt).getTime() : null;
+  const endsAt = test.endsAt ? new Date(test.endsAt).getTime() : null;
+  if (startsAt && startsAt > now) return "SCHEDULED";
+  if (endsAt && endsAt < now) return "COMPLETED";
+  return "LIVE";
+};
+
+// College-scoped, paginated per-test aggregate list for the super-admin
+// Reports "Tests" tab. Mirrors the admin getReportTestsDashboard.
+const getSuperReportTestsDashboard = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
+  const collegeId = normalizeId(req.query.collegeId);
+  const departmentId = normalizeId(req.query.departmentId);
+  const batchId = normalizeId(req.query.batchId);
+  const page = Math.max(Number(req.query.page || 1), 1);
+  const limit = Math.min(Math.max(Number(req.query.limit || 10), 1), 100);
+  const sortBy = String(req.query.sortBy || "startsAt");
+  const sortDir = String(req.query.sortDir || "desc").toLowerCase() === "asc" ? "asc" : "desc";
+  const search = String(req.query.search || "").trim().toLowerCase();
+  const statusFilter = String(req.query.status || "").trim().toUpperCase();
+  const reportScopeFilters = {
+    studentScope: normalizeStudentScope(req.query.studentScope),
+    passoutYear: normalizePassoutYear(req.query.passoutYear),
+    passoutCohortId: normalizeOptionalId(req.query.passoutCohortId),
+  };
+  const dateFrom = toValidDate(req.query.dateFrom);
+  const dateTo = toValidDate(req.query.dateTo);
+
+  if (!collegeId) {
+    throw new ApiError(400, "Select a college before viewing test reports");
+  }
+
+  const tests = await db.test.findMany({
+    where: {
+      collegeId,
+      ...(departmentId ? { departmentId } : {}),
+      ...(batchId
+        ? {
+            OR: [
+              { batchId },
+              { batchAssignments: { some: { batchId } } },
+            ],
+          }
+        : {}),
+    },
+    select: {
+      id: true,
+      title: true,
+      status: true,
+      startsAt: true,
+      endsAt: true,
+      totalMarks: true,
+      department: { select: { name: true } },
+      batch: { select: { name: true } },
+      questions: { select: { marks: true } },
+    },
+  });
+
+  if (tests.length === 0) {
+    return res.status(200).json({ data: [], pagination: { page: 1, limit, total: 0, totalPages: 1 } });
+  }
+  const testIds = tests.map((test) => String(test.id));
+
+  const scopedStudents = await db.student.findMany({
+    where: {
+      collegeId,
+      ...buildStudentLifecycleWhere(reportScopeFilters),
+      ...(departmentId ? { departmentId } : {}),
+      ...(batchId ? { batchId } : {}),
+    },
+    select: { id: true },
+  });
+  const inScopeStudentCount = scopedStudents.length;
+
+  const { rows: submissions, truncated } = await collectSubmissions({
+    db,
+    where: {
+      collegeId,
+      status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
+      testId: { in: testIds },
+      ...(dateFrom || dateTo
+        ? { submittedAt: { ...(dateFrom ? { gte: dateFrom } : {}), ...(dateTo ? { lte: dateTo } : {}) } }
+        : {}),
+    },
+    select: {
+      testId: true,
+      userId: true,
+      score: true,
+      accuracy: true,
+      _count: { select: { violations: true } },
+    },
+  });
+
+  const testTotalMarks = new Map(tests.map((test) => [String(test.id), getTestTotalMarks(test)]));
+  const byTest = new Map();
+  for (const submission of submissions) {
+    const testKey = String(submission.testId);
+    const current = byTest.get(testKey) || { count: 0, scoreSum: 0, passCount: 0, violations: 0, students: new Set() };
+    const scorePercent = getScorePercent({
+      score: submission.score,
+      accuracy: submission.accuracy,
+      test: { totalMarks: testTotalMarks.get(testKey) },
+    });
+    current.count += 1;
+    current.scoreSum += scorePercent;
+    if (scorePercent >= PASS_THRESHOLD_PERCENT) current.passCount += 1;
+    current.violations += Number(submission._count?.violations || 0);
+    if (submission.userId) current.students.add(String(submission.userId));
+    byTest.set(testKey, current);
+  }
+
+  let rows = tests.map((test) => {
+    const agg = byTest.get(String(test.id)) || { count: 0, scoreSum: 0, passCount: 0, violations: 0, students: new Set() };
+    const submissionCount = agg.count;
+    return {
+      testId: test.id,
+      id: test.id,
+      title: test.title || "Untitled test",
+      status: deriveSuperTestListStatus(test),
+      department: test.department?.name || "-",
+      batch: test.batch?.name || "-",
+      startsAt: test.startsAt || null,
+      endsAt: test.endsAt || null,
+      totalMarks: testTotalMarks.get(String(test.id)) || 0,
+      submissionCount,
+      attemptedStudents: agg.students.size,
+      avgScore: submissionCount ? toPercent(agg.scoreSum / submissionCount) : 0,
+      passRate: submissionCount ? toPercent((agg.passCount / submissionCount) * 100) : 0,
+      participation: inScopeStudentCount ? toPercent((agg.students.size / inScopeStudentCount) * 100) : 0,
+      violations: agg.violations,
+    };
+  });
+
+  if (search) {
+    rows = rows.filter((row) => `${row.title} ${row.department} ${row.batch}`.toLowerCase().includes(search));
+  }
+
+  // Filter on the DERIVED lifecycle status (window-aware), not the stored one.
+  if (statusFilter && statusFilter !== "ALL") {
+    rows = rows.filter((row) => row.status === statusFilter);
+  }
+
+  const getSortValue = (row) => {
+    if (sortBy === "title") return String(row.title || "");
+    if (sortBy === "startsAt") return new Date(row.startsAt || 0).getTime();
+    return Number(row[sortBy] || 0);
+  };
+  rows.sort((a, b) => {
+    const av = getSortValue(a);
+    const bv = getSortValue(b);
+    if (typeof av === "number" && typeof bv === "number") {
+      return sortDir === "asc" ? av - bv : bv - av;
+    }
+    return sortDir === "asc" ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
+  });
+
+  const total = rows.length;
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  const safePage = Math.min(page, totalPages);
+  const start = (safePage - 1) * limit;
+
+  res.status(200).json({
+    data: rows.slice(start, start + limit),
+    pagination: { page: safePage, limit, total, totalPages },
+    truncated,
   });
 });
 
@@ -790,6 +987,7 @@ const regenerateSuperReportLink = asyncHandler(async (req, res) => {
 module.exports = {
   generateSuperReport,
   getSuperReportAnalytics,
+  getSuperReportTestsDashboard,
   getPassoutCohorts,
   getSuperReportJobs,
   downloadSuperReport,

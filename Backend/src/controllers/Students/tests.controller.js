@@ -21,6 +21,7 @@ const { createAuditLog } = require("../../services/audit.service");
 const { withRedisLock } = require("../../services/redis-lock.service");
 const { setExamState, clearExamState } = require("../../services/exam-state-cache.service");
 const { bufferHeartbeat } = require("../../services/heartbeat-buffer.service");
+const { shouldEmitPresence } = require("../../services/presence-throttle.service");
 const { emitToCollege, emitToUser, emitToTestRoom } = require("../../realtime/socket");
 const { ApiError, asyncHandler } = require("../../utils/http");
 const { getSubmissionScorePercent, getTestTotalMarks } = require("../../utils/score");
@@ -651,7 +652,11 @@ const startTest = asyncHandler(async (req, res) => {
   // Cache it so 500+ concurrent startTest requests don't all hit MongoDB.
   const cachedQuestions = await getStudentQuestionPayload(testId, test.questions);
 
-  const now = assertTestWindowOpen(test);
+  // Resuming an in-progress attempt is governed by the attempt's own expiry
+  // (see isSubmissionExpired / forceAutoSubmit below), not the test window.
+  // The window is only enforced when starting a *new* attempt, so a student
+  // whose personal duration extends past endsAt can still resume.
+  const now = new Date();
 
   const existingSession = await db.testSession.findUnique({
     where: { userId_testId: { userId, testId } },
@@ -737,6 +742,10 @@ const startTest = asyncHandler(async (req, res) => {
     }
   }
 
+  // Starting a fresh attempt requires the test window to be open. (Resuming an
+  // existing attempt returned earlier, so this only gates new attempts.)
+  assertTestWindowOpen(test);
+
   const hasAgreement = await hasPersistedInstructionAgreement({ db, userId, testId, test });
   if (!hasAgreement) {
     throw new ApiError(
@@ -763,9 +772,10 @@ const startTest = asyncHandler(async (req, res) => {
     });
   }
 
+  const attemptsAllowed = Number(test.attemptsAllowed) || 1;
   const currentAttemptCount = latestSubmission?.attemptNumber || 0;
 
-  if (currentAttemptCount >= test.attemptsAllowed && latestSubmission?.status !== "IN_PROGRESS") {
+  if (currentAttemptCount >= attemptsAllowed && latestSubmission?.status !== "IN_PROGRESS") {
     throw new ApiError(403, "Maximum attempts reached for this test");
   }
 
@@ -1125,6 +1135,20 @@ const heartbeatTest = asyncHandler(async (req, res) => {
       connectionStatus: "ONLINE",
     },
   });
+
+  // Push a throttled presence event to the monitoring room (at most one per
+  // student per interval) so admins see connection status in near real time
+  // instead of waiting for their keep-alive poll. Intentionally carries no
+  // progress/time fields: the monitor's merge treats it as presence only.
+  if (shouldEmitPresence(submission.id)) {
+    emitToTestRoom(testId, "student_status_update", {
+      testId,
+      submissionId: submission.id,
+      studentId: userId,
+      connectionStatus: "ONLINE",
+      lastHeartbeatAt: new Date().toISOString(),
+    });
+  }
 
   res.status(200).json({
     ok: true,
@@ -1523,8 +1547,8 @@ const submitTest = asyncHandler(async (req, res) => {
   });
 
       if (isSubmissionExpired(submission, session)) {
-        const completed = await completeSubmission({ submissionId, autoSubmitted: true });
-        const summaryExpired = await calculateSubmissionScore(submissionId);
+        const { submission: completed, summary: summaryExpired } =
+          (await completeSubmission({ submissionId, autoSubmitted: true, withSummary: true })) || {};
         await clearExamState({ userId: req.user.id, testId: submission.testId });
         return res.status(200).json({
           message: "Assessment submitted automatically because time expired",
@@ -1546,8 +1570,11 @@ const submitTest = asyncHandler(async (req, res) => {
         });
       }
 
-      const completed = await completeSubmission({ submissionId, autoSubmitted: false });
-      const summary = await calculateSubmissionScore(submissionId);
+      // withSummary reuses the score computed inside completeSubmission instead
+      // of reloading test+questions+answers a second time — this runs at the
+      // exam-end spike, when every submission hits it at once.
+      const { submission: completed, summary } =
+        (await completeSubmission({ submissionId, autoSubmitted: false, withSummary: true })) || {};
       await clearExamState({ userId: req.user.id, testId: completed.testId });
 
       await createAuditLog({

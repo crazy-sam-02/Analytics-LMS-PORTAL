@@ -46,6 +46,9 @@ const loadRouteWithLimiterSpy = (routeModulePath, extraMocks = {}) => {
     createRateLimiter,
   }));
   jest.doMock("../../middleware/validate", () => () => mockMiddleware);
+  jest.doMock("../../middleware/response-cache", () => ({
+    createResponseCache: jest.fn(() => mockMiddleware),
+  }));
   jest.doMock("../../middleware/auth", () => ({
     authenticate: mockMiddleware,
     authenticateAdmin: mockMiddleware,
@@ -88,6 +91,13 @@ describe("high-risk route rate limit wiring", () => {
         getReportSummaryDashboard: mockMiddleware,
         getReportChartsDashboard: mockMiddleware,
         getReportTableDashboard: mockMiddleware,
+        getReportTestsDashboard: mockMiddleware,
+        getReportItemAnalysis: mockMiddleware,
+        getReportIntegrity: mockMiddleware,
+        getReportTrends: mockMiddleware,
+        getReportAtRisk: mockMiddleware,
+        exportReportCsv: mockMiddleware,
+        exportReportXlsx: mockMiddleware,
         getReportStudentDetailDashboard: mockMiddleware,
         downloadReport: mockMiddleware,
         regenerateReportLink: mockMiddleware,
@@ -268,6 +278,7 @@ describe("high-risk route rate limit wiring", () => {
       "../../controllers/SuperAdmin/reports.controller": {
         generateSuperReport: mockMiddleware,
         getSuperReportAnalytics: mockMiddleware,
+        getSuperReportTestsDashboard: mockMiddleware,
         getPassoutCohorts: mockMiddleware,
         getSuperReportJobs: mockMiddleware,
         downloadSuperReport: mockMiddleware,

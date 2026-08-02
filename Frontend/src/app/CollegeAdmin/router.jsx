@@ -2,7 +2,7 @@ import { Suspense, createElement, lazy, useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { Navigate, Outlet, RouterProvider, createBrowserRouter } from "react-router-dom";
 import { injectReducer } from "@/app/store";
-import { fetchCurrentAdmin, logoutAdmin } from "@/features/Admin/adminAuthSlice";
+import { fetchCurrentCollegeAdmin, logoutCollegeAdmin } from "@/features/CollegeAdmin/collegeAdminAuthSlice";
 import { ADMIN_PERMISSIONS } from "@/features/Admin/adminPermissions";
 import { isAdminRole, isCollegeAdminRole } from "@/features/Admin/adminRole";
 import CollegeAdminLoginPage from "@/pages/CollegeAdmin/LoginPage";
@@ -83,7 +83,7 @@ function PageRoute({ Page, fallback = <div className="grid min-h-[40vh] place-it
 }
 
 function PermissionRoute({ permission, permissions, action }) {
-  const effectivePermissions = useSelector((state) => state.adminAuth.permissions || []);
+  const effectivePermissions = useSelector((state) => state.collegeAdminAuth.permissions || []);
   const required = permissions || (permission ? [permission] : []);
   const allowed = required.length === 0 || required.some((item) => effectivePermissions.includes(item));
   return allowed ? <Outlet /> : <PageRoute Page={() => <PermissionDenied action={action} />} />;
@@ -91,12 +91,12 @@ function PermissionRoute({ permission, permissions, action }) {
 
 function CollegeAdminBootstrap() {
   const dispatch = useDispatch();
-  const initialized = useSelector((state) => state.adminAuth.initialized);
-  const admin = useSelector((state) => state.adminAuth.admin);
+  const initialized = useSelector((state) => state.collegeAdminAuth.initialized);
+  const admin = useSelector((state) => state.collegeAdminAuth.admin);
   useNoIndexRoute();
 
   useEffect(() => {
-    dispatch(fetchCurrentAdmin());
+    dispatch(fetchCurrentCollegeAdmin());
   }, [dispatch]);
 
   if (!initialized) {
@@ -106,13 +106,13 @@ function CollegeAdminBootstrap() {
   return (
     <>
       <Outlet />
-      <IdleSessionTimeout enabled={Boolean(admin)} onLogout={() => dispatch(logoutAdmin())} />
+      <IdleSessionTimeout enabled={Boolean(admin)} onLogout={() => dispatch(logoutCollegeAdmin())} />
     </>
   );
 }
 
 function CollegeAdminProtectedRoute() {
-  const admin = useSelector((state) => state.adminAuth.admin);
+  const admin = useSelector((state) => state.collegeAdminAuth.admin);
   if (!admin) {
     return <Navigate to="/college-admin/login" replace />;
   }
@@ -126,7 +126,7 @@ function CollegeAdminProtectedRoute() {
 }
 
 function CollegeAdminPublicOnlyRoute() {
-  const admin = useSelector((state) => state.adminAuth.admin);
+  const admin = useSelector((state) => state.collegeAdminAuth.admin);
   if (isCollegeAdminRole(admin?.role)) {
     return <Navigate to="/college-admin/dashboard" replace />;
   }

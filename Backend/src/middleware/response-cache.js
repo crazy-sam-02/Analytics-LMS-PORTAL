@@ -198,9 +198,14 @@ const createResponseCache = ({
   keyBuilder,
   tagsBuilder,
   shouldCache,
+  skip,
   requireAuthenticated = true,
 }) => (req, res, next) => {
   if (!enabled || req.method !== "GET") {
+    return next();
+  }
+
+  if (typeof skip === "function" && skip(req)) {
     return next();
   }
 
@@ -380,7 +385,14 @@ const createResponseCacheInvalidationHook = () => (req, res, next) => {
         tags.push(`student-tests:user:${req.user.id}`, `student-dashboard:user:${req.user.id}`);
       }
       if (req.user?.collegeId) {
-        tags.push(`student-tests:college:${req.user.collegeId}`, `student-dashboard:college:${req.user.collegeId}`);
+        tags.push(
+          `student-tests:college:${req.user.collegeId}`,
+          `student-dashboard:college:${req.user.collegeId}`,
+          // A student action (e.g. submit) changes admin-facing counts too, so
+          // bust the admin dashboard/collection caches for that college.
+          `admin-dashboard:college:${req.user.collegeId}`,
+          `admin-collections:college:${req.user.collegeId}`
+        );
       }
 
       if (req.admin?.collegeId) {

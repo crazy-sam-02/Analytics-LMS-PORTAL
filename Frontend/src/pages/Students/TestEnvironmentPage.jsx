@@ -66,6 +66,7 @@ export default function TestEnvironmentPage() {
     marked_for_review,
     current_question_index,
     server_end_time,
+    clock_offset_ms,
     proctoring_config,
     violations,
     save_status,
@@ -225,6 +226,7 @@ export default function TestEnvironmentPage() {
 
   const { remainingSeconds } = useAttemptTimer({
     serverEndTime: server_end_time,
+    clockOffsetMs: clock_offset_ms,
     onExpired: () => {
       trySubmit("time_expired");
     },

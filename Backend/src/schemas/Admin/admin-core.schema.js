@@ -447,6 +447,57 @@ const reportDashboardQuerySchema = z.object({
   }).optional().default({}),
 });
 
+const reportTestsQuerySchema = z.object({
+  body: z.object({}).optional().default({}),
+  params: z.object({}).optional().default({}),
+  query: z.object({
+    departmentId: idSchema.optional(),
+    batchId: idSchema.optional(),
+    year: z.coerce.number().int().min(1).max(4).optional(),
+    studentScope: z.enum(["current", "passout", "all"]).optional(),
+    passoutYear: z.coerce.number().int().min(2000).max(2100).optional(),
+    passoutCohortId: z.string().trim().optional(),
+    search: z.string().trim().optional(),
+    status: z.enum(["all", "ALL", "LIVE", "COMPLETED", "SCHEDULED", "DRAFT", "ARCHIVED"]).optional(),
+    dateRange: z.enum(["7d", "30d", "90d", "custom"]).optional(),
+    dateFrom: z.string().trim().min(1).optional(),
+    dateTo: z.string().trim().min(1).optional(),
+    page: z.coerce.number().int().min(1).optional(),
+    limit: z.coerce.number().int().min(1).max(100).optional(),
+    sortBy: z.enum(["title", "avgScore", "participation", "passRate", "violations", "submissionCount", "startsAt"]).optional(),
+    sortDir: z.enum(["asc", "desc"]).optional(),
+  }).optional().default({}),
+});
+
+const reportTestScopedQuerySchema = z.object({
+  body: z.object({}).optional().default({}),
+  params: z.object({}).optional().default({}),
+  query: z.object({
+    testId: idSchema,
+    studentScope: z.enum(["current", "passout", "all"]).optional(),
+    passoutYear: z.coerce.number().int().min(2000).max(2100).optional(),
+    passoutCohortId: z.string().trim().optional(),
+  }),
+});
+
+const reportCohortQuerySchema = z.object({
+  body: z.object({}).optional().default({}),
+  params: z.object({}).optional().default({}),
+  query: z.object({
+    departmentId: idSchema.optional(),
+    batchId: idSchema.optional(),
+    year: z.coerce.number().int().min(1).max(4).optional(),
+    groupBy: z.enum(["department", "batch"]).optional(),
+    indexed: z.enum(["true", "false"]).optional(),
+    studentScope: z.enum(["current", "passout", "all"]).optional(),
+    passoutYear: z.coerce.number().int().min(2000).max(2100).optional(),
+    passoutCohortId: z.string().trim().optional(),
+    dateRange: z.enum(["7d", "30d", "90d", "custom"]).optional(),
+    dateFrom: z.string().trim().min(1).optional(),
+    dateTo: z.string().trim().min(1).optional(),
+  }).optional().default({}),
+});
+
 const reportStudentDetailDashboardSchema = z.object({
   body: z.object({}).optional().default({}),
   params: z.object({
@@ -489,6 +540,9 @@ module.exports = {
   reportAnalyticsQuerySchema,
   reportJobStatusParamSchema,
   reportDashboardQuerySchema,
+  reportTestsQuerySchema,
+  reportTestScopedQuerySchema,
+  reportCohortQuerySchema,
   reportStudentDetailDashboardSchema,
   assignStudentBatchSchema,
   studentIdParamSchema,

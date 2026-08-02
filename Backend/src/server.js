@@ -6,6 +6,7 @@ const env = require("./config/env");
 const { shutdownRedis } = require("./config/redis");
 const { initSocket, shutdownSocket } = require("./realtime/socket");
 const { startHeartbeatFlush, stopHeartbeatFlush } = require("./services/heartbeat-buffer.service");
+const { startTestLifecycleSweep, stopTestLifecycleSweep } = require("./services/test-lifecycle.service");
 const { recoverPendingReportJobs } = require("./services/admin-report-queue.service");
 const { recoverPendingSuperReportJobs } = require("./services/super-admin-report-queue.service");
 
@@ -31,6 +32,7 @@ const shutdown = async (signal) => {
 
   // Stop heartbeat buffer flush
   stopHeartbeatFlush();
+  stopTestLifecycleSweep();
 
   try {
     await mongoose.disconnect();
@@ -140,6 +142,11 @@ const startServer = async () => {
     }
   });
 
+  // Keep stored test statuses truthful: SCHEDULED -> LIVE at startsAt and
+  // -> COMPLETED at endsAt, with socket notifications, instead of relying on
+  // read-time derivation everywhere.
+  startTestLifecycleSweep({ getDb: async () => db });
+
   const recoverReportQueues = async () => {
     const [adminReports, superReports] = await Promise.all([
       recoverPendingReportJobs(),
@@ -164,9 +171,13 @@ const startServer = async () => {
       console.warn(`Port ${basePort} is busy. Using fallback port ${selectedPort}.`);
     }
     console.log(`LMS API running at http://localhost:${selectedPort}`);
-    recoverReportQueues().catch((error) => {
-      console.warn("Report queue recovery skipped:", error?.message || "unknown error");
-    });
+    // Queue recovery is a consumer-side task: only the worker replica requeues
+    // stale jobs, so multiple web replicas don't race on startup.
+    if (env.worker.enabled) {
+      recoverReportQueues().catch((error) => {
+        console.warn("Report queue recovery skipped:", error?.message || "unknown error");
+      });
+    }
   });
 };
 
