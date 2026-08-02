@@ -34,12 +34,12 @@ jobs:
           docker compose --env-file Backend/.env.production -f docker-compose.production.yml up -d
 
           echo "Running migrations and indexes..."
-          docker compose --env-file Backend/.env.production -f docker-compose.production.yml exec -T api npm run db:migrate:refresh-token-hashes
-          docker compose --env-file Backend/.env.production -f docker-compose.production.yml exec -T api npm run db:migrate:violations
-          docker compose --env-file Backend/.env.production -f docker-compose.production.yml exec -T api npm run db:create-indexes
+          docker compose --env-file Backend/.env.production -f docker-compose.production.yml exec -T api1 npm run db:migrate:refresh-token-hashes
+          docker compose --env-file Backend/.env.production -f docker-compose.production.yml exec -T api1 npm run db:migrate:violations
+          docker compose --env-file Backend/.env.production -f docker-compose.production.yml exec -T api1 npm run db:create-indexes
 
           echo "Production readiness check..."
-          docker compose --env-file Backend/.env.production -f docker-compose.production.yml exec -T api npm run prod:check
+          docker compose --env-file Backend/.env.production -f docker-compose.production.yml exec -T api1 npm run prod:check
 
           echo "Public API check..."
           curl -fsS https://lms.analyticsedify.com/api/ready
