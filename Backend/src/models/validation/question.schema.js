@@ -16,6 +16,19 @@ const QUESTION_TYPES = [
   "PARAGRAPH",
 ];
 
+const optionalHttpUrlValidator = {
+  validator(value) {
+    if (value == null || String(value).trim() === "") return true;
+    try {
+      const parsed = new URL(String(value).trim());
+      return parsed.protocol === "http:" || parsed.protocol === "https:";
+    } catch {
+      return false;
+    }
+  },
+  message: "explanationVideoUrl must be a valid http(s) URL",
+};
+
 const QuestionValidationSchema = new mongoose.Schema(
   {
     testId: { type: String, required: true, validate: referenceValidator },
@@ -34,6 +47,7 @@ const QuestionValidationSchema = new mongoose.Schema(
     marks: { type: Number, required: true, min: 0 },
     order: { type: Number, required: true, min: 0 },
     explanation: { type: String, default: null, trim: true },
+    explanationVideoUrl: { type: String, default: null, trim: true, maxlength: 2048, validate: optionalHttpUrlValidator },
     sourceQuestionId: { type: String, default: null, validate: optionalReferenceValidator },
     isActive: { type: Boolean, default: true },
   },
@@ -47,6 +61,10 @@ const QuestionValidationSchema = new mongoose.Schema(
 QuestionValidationSchema.pre("validate", function normalizeQuestionType(next) {
   if (this.type) {
     this.type = normalizeUpperEnumValue(this.type);
+  }
+
+  if (typeof this.explanationVideoUrl === "string" && this.explanationVideoUrl.trim() === "") {
+    this.explanationVideoUrl = null;
   }
 
   next();

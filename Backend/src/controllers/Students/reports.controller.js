@@ -343,6 +343,7 @@ const buildStudentReportPayload = async ({ db, userId, filters = {} }) => {
         total_marks: Number(question.marks || 0),
         is_correct: revealQuestionDetails ? Boolean(isCorrect) : null,
         topic: question.topic || target.test?.subject || "General",
+        explanation_video_url: question.explanationVideoUrl || null,
       };
     });
 

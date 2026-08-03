@@ -1624,6 +1624,19 @@ export default function TestCreationDialog({ context = "admin", onCreated, hideT
                                 </div>
                               </div>
 
+                              <div className="mt-4 space-y-2">
+                                <label className="text-sm text-text-secondary">Explanation video (optional)</label>
+                                <Input
+                                  type="url"
+                                  value={String(q.explanationVideoUrl || "")}
+                                  placeholder="https://youtube.com/watch?v=..."
+                                  onChange={(e) => dispatch(updateQuestionRow({ index: idx, patch: { explanationVideoUrl: e.target.value } }))}
+                                />
+                                <p className="text-xs text-text-secondary">
+                                  Students can open this video from their results page. Leave blank if there is no explanation.
+                                </p>
+                              </div>
+
                               {q.type === "mcq" && (
                                 <div className="space-y-3">
                                   <p className="text-sm text-text-secondary">Options</p>

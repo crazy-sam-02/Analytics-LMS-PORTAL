@@ -32,6 +32,7 @@ const defaultQuestion = {
   correctAnswer: "",
   marks: 1,
   difficulty: "MEDIUM",
+  explanationVideoUrl: "",
 };
 
 const bulkUploadTemplate = JSON.stringify(
@@ -44,6 +45,7 @@ const bulkUploadTemplate = JSON.stringify(
       marks: 1,
       difficulty: "MEDIUM",
       topic: "",
+      explanationVideoUrl: "",
     },
   ],
   null,
@@ -311,6 +313,12 @@ export default function QuestionBankPage() {
                           </div>
                         </div>
                         <Input placeholder="Correct answer" value={String(item.correctAnswer || "")} onChange={(e) => updateQuestion(index, { correctAnswer: e.target.value })} />
+                        <Input
+                          type="url"
+                          placeholder="Explanation video URL (optional)"
+                          value={String(item.explanationVideoUrl || "")}
+                          onChange={(e) => updateQuestion(index, { explanationVideoUrl: e.target.value })}
+                        />
                         {item.type === "mcq" ? (
                           <div className="space-y-2">
                             {(item.options || []).map((option, optIdx) => (

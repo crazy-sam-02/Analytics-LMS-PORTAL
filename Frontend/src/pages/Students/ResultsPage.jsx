@@ -5,6 +5,7 @@ import {
   AlertCircle,
   CheckCircle2,
   ListFilter,
+  PlayCircle,
   Search,
   ShieldAlert,
   Sparkles,
@@ -110,6 +111,18 @@ const hasAnswer = (value) => {
   return true;
 };
 
+const safeHttpUrl = (value) => {
+  if (value == null) return null;
+  const text = String(value).trim();
+  if (!text) return null;
+  try {
+    const parsed = new URL(text);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? text : null;
+  } catch {
+    return null;
+  }
+};
+
 const resolveBreakdown = (payload) => {
   const rows = payload?.question_breakdown || payload?.questionBreakdown || payload?.breakdown || payload?.questions || [];
 
@@ -136,6 +149,7 @@ const resolveBreakdown = (payload) => {
       scorePercent,
       isCorrect: Boolean(item?.is_correct ?? item?.isCorrect),
       isAnswered: hasAnswer(studentRaw),
+      explanationVideoUrl: safeHttpUrl(item?.explanation_video_url ?? item?.explanationVideoUrl),
     };
   });
 };
@@ -727,6 +741,7 @@ export default function ResultsPage() {
                         <TableHead className="min-w-45">Correct answer</TableHead>
                         <TableHead className="w-28">Marks</TableHead>
                         <TableHead className="w-28">Status</TableHead>
+                        <TableHead className="w-32">Explanation</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -761,6 +776,21 @@ export default function ResultsPage() {
                                 <status.Icon className="size-3" />
                                 {status.label}
                               </Badge>
+                            </TableCell>
+                            <TableCell>
+                              {item.explanationVideoUrl ? (
+                                <a
+                                  href={item.explanationVideoUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline"
+                                >
+                                  <PlayCircle className="size-4" />
+                                  Watch
+                                </a>
+                              ) : (
+                                <span className="text-xs italic text-text-secondary">No explanation</span>
+                              )}
                             </TableCell>
                           </TableRow>
                         );

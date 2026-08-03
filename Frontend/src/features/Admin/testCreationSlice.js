@@ -29,6 +29,7 @@ const emptyQuestion = {
   marks: 1,
   difficulty: "MEDIUM",
   topic: "",
+  explanationVideoUrl: "",
 };
 
 const createDefaultForm = () => ({
@@ -137,6 +138,7 @@ const mapQuestionToForm = (question) => {
       ? String(question.difficulty).toUpperCase()
       : "MEDIUM",
     topic: String(question?.topic || "").trim(),
+    explanationVideoUrl: String(question?.explanationVideoUrl || "").trim(),
   };
 };
 
@@ -239,6 +241,7 @@ const normalizeQuestion = (question) => ({
     ? String(question.difficulty).toUpperCase()
     : "MEDIUM",
   topic: String(question.topic || "").trim(),
+  explanationVideoUrl: String(question.explanationVideoUrl || "").trim(),
 });
 
 export const validateCurrentStep = (state) => {
@@ -522,6 +525,9 @@ export const submitTestCreation = createAsyncThunk(
               correctBoolean: mappedType === "TRUE_FALSE" ? Boolean(question.correctAnswer) : null,
               correctText: ["FILL_BLANK", "PARAGRAPH"].includes(mappedType) ? String(question.correctAnswer || "") : null,
               marks: question.marks,
+              difficulty: question.difficulty || "MEDIUM",
+              topic: String(question.topic || "").trim(),
+              explanationVideoUrl: String(question.explanationVideoUrl || "").trim() || null,
             };
           }),
         };
@@ -670,6 +676,7 @@ const testCreationSlice = createSlice({
           ? String(item.difficulty).toUpperCase()
           : "MEDIUM",
         topic: String(item.topic || ""),
+        explanationVideoUrl: String(item.explanationVideoUrl || "").trim(),
       }));
 
       const keyOf = (question) => `${String(question.type || "").toLowerCase()}:${String(question.question || "").trim().toLowerCase()}`;

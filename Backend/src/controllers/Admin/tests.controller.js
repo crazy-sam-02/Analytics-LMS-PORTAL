@@ -74,6 +74,12 @@ const mapQuestionType = (type) => {
   return map[type];
 };
 
+const normalizeOptionalUrl = (value) => {
+  if (value == null) return null;
+  const trimmed = String(value).trim();
+  return trimmed || null;
+};
+
 const isPublishNow = (publishState) => publishState === "PUBLISH";
 const isUpcoming = (publishState) => publishState === "UPCOMING";
 
@@ -482,6 +488,9 @@ const createTest = asyncHandler(async (req, res) => {
         correctBoolean: question.type === "true_false" ? Boolean(question.correctAnswer) : null,
         correctText: question.type === "fill_blank" || question.type === "paragraph" ? String(question.correctAnswer) : null,
         marks: question.marks,
+        difficulty: question.difficulty || "MEDIUM",
+        topic: question.topic || null,
+        explanationVideoUrl: normalizeOptionalUrl(question.explanationVideoUrl),
         order: index + 1,
       })),
     });
@@ -810,7 +819,12 @@ const duplicateTest = asyncHandler(async (req, res) => {
           correctOption: question.correctOption,
           correctBoolean: question.correctBoolean,
           correctText: question.correctText,
+          correctOptions: question.correctOptions,
           marks: question.marks,
+          difficulty: question.difficulty,
+          topic: question.topic,
+          explanation: question.explanation,
+          explanationVideoUrl: normalizeOptionalUrl(question.explanationVideoUrl),
           order: question.order,
         })),
       });
@@ -1125,6 +1139,9 @@ const updateTest = asyncHandler(async (req, res) => {
           correctBoolean: question.type === "true_false" ? Boolean(question.correctAnswer) : null,
           correctText: question.type === "fill_blank" || question.type === "paragraph" ? String(question.correctAnswer) : null,
           marks: question.marks,
+          difficulty: question.difficulty || "MEDIUM",
+          topic: question.topic || null,
+          explanationVideoUrl: normalizeOptionalUrl(question.explanationVideoUrl),
           order: index + 1,
         })),
       });

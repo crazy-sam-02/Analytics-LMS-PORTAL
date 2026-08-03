@@ -25,6 +25,21 @@ const objectIdSchema = z.string().trim().refine((value) => mongoose.Types.Object
   message: "Invalid id format",
 });
 
+const optionalExplanationVideoUrlSchema = z.preprocess(
+  (value) => {
+    if (value == null) return null;
+    const trimmed = String(value).trim();
+    return trimmed || null;
+  },
+  z.string().url().max(2048).refine((value) => {
+    try {
+      return ["http:", "https:"].includes(new URL(value).protocol);
+    } catch {
+      return false;
+    }
+  }, { message: "Explanation video URL must be a valid http(s) URL" }).nullable().optional()
+);
+
 const testQuestionSchema = z
   .object({
     type: z.enum(["mcq", "true_false", "fill_blank", "paragraph"]),
@@ -33,6 +48,8 @@ const testQuestionSchema = z
     correctAnswer: z.union([z.string(), z.boolean()]),
     marks: z.number().int().min(1).max(100),
     difficulty: z.enum(["EASY", "MEDIUM", "HARD"]).optional(),
+    topic: z.string().trim().max(200).optional().default(""),
+    explanationVideoUrl: optionalExplanationVideoUrlSchema,
   })
   .superRefine((question, ctx) => {
     if (question.type === "mcq") {

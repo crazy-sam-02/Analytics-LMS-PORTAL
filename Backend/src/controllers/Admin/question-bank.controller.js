@@ -12,6 +12,12 @@ const mapQuestionType = (type) => {
   return map[type];
 };
 
+const normalizeOptionalUrl = (value) => {
+  if (value == null) return null;
+  const trimmed = String(value).trim();
+  return trimmed || null;
+};
+
 const assertQuestionSubject = async (db, { subjectId, collegeId }) => {
   const subject = await db.subject.findFirst({
     where: {
@@ -77,6 +83,7 @@ const addQuestionBankItem = asyncHandler(async (req, res) => {
       correctBoolean: req.body.type === "true_false" ? Boolean(req.body.correctAnswer) : null,
       correctText: req.body.type === "fill_blank" || req.body.type === "paragraph" ? String(req.body.correctAnswer) : null,
       marks: req.body.marks,
+      explanationVideoUrl: normalizeOptionalUrl(req.body.explanationVideoUrl),
       tags: Array.isArray(req.body.tags) ? req.body.tags : [],
       usageCount: 0,
       isActive: true,
@@ -178,6 +185,7 @@ const exportQuestionBankJson = asyncHandler(async (req, res) => {
     difficulty: item.difficulty,
     subject: item.subject,
     subjectId: item.subjectId,
+    explanationVideoUrl: item.explanationVideoUrl || null,
     tags: item.tags || [],
     isActive: item.isActive,
   }));
@@ -220,6 +228,7 @@ const importQuestionBankJson = asyncHandler(async (req, res) => {
       correctBoolean: item.type === "true_false" ? Boolean(item.correctAnswer) : null,
       correctText: item.type === "fill_blank" || item.type === "paragraph" ? String(item.correctAnswer) : null,
       marks: item.marks || 1,
+      explanationVideoUrl: normalizeOptionalUrl(item.explanationVideoUrl),
       tags: Array.isArray(item.tags) ? item.tags : [],
       usageCount: 0,
       isActive: item.isActive !== false,
@@ -278,6 +287,10 @@ const updateQuestionBankItem = asyncHandler(async (req, res) => {
           ? String(req.body.correctAnswer ?? existing.correctText ?? "")
           : null,
       marks: req.body.marks || existing.marks,
+      explanationVideoUrl:
+        req.body.explanationVideoUrl !== undefined
+          ? normalizeOptionalUrl(req.body.explanationVideoUrl)
+          : existing.explanationVideoUrl ?? null,
       tags: Array.isArray(req.body.tags) ? req.body.tags : existing.tags || [],
       isActive: typeof req.body.isActive === "boolean" ? req.body.isActive : existing.isActive,
     },

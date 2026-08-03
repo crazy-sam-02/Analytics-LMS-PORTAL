@@ -297,6 +297,21 @@ const resetStudentPasswordSchema = z.object({
   query: z.object({}).optional().default({}),
 });
 
+const optionalExplanationVideoUrlSchema = z.preprocess(
+  (value) => {
+    if (value == null) return null;
+    const trimmed = String(value).trim();
+    return trimmed || null;
+  },
+  z.string().url().max(2048).refine((value) => {
+    try {
+      return ["http:", "https:"].includes(new URL(value).protocol);
+    } catch {
+      return false;
+    }
+  }, { message: "Explanation video URL must be a valid http(s) URL" }).nullable().optional()
+);
+
 const superAdminTestQuestionSchema = z.object({
   prompt: z.string().trim().min(1),
   type: z.enum(["MCQ", "TRUE_FALSE", "FILL_BLANK", "PARAGRAPH"]),
@@ -305,6 +320,9 @@ const superAdminTestQuestionSchema = z.object({
   correctBoolean: z.boolean().optional().nullable(),
   correctText: z.string().optional().nullable(),
   marks: z.number().int().min(1).default(1),
+  difficulty: z.enum(["EASY", "MEDIUM", "HARD"]).optional(),
+  topic: z.string().trim().max(200).optional().default(""),
+  explanationVideoUrl: optionalExplanationVideoUrlSchema,
 });
 
 const standardProctoringDefaults = DEFAULT_TEST_CONFIGURATION.proctoringConfig;

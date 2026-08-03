@@ -10,6 +10,21 @@ const optionalIdSchema = z.preprocess(
   idSchema.optional()
 );
 
+const optionalExplanationVideoUrlSchema = z.preprocess(
+  (value) => {
+    if (value == null) return null;
+    const trimmed = String(value).trim();
+    return trimmed || null;
+  },
+  z.string().url().max(2048).refine((value) => {
+    try {
+      return ["http:", "https:"].includes(new URL(value).protocol);
+    } catch {
+      return false;
+    }
+  }, { message: "Explanation video URL must be a valid http(s) URL" }).nullable().optional()
+);
+
 const dateStringSchema = z.string().trim().min(1).refine((value) => {
   const parsed = new Date(value);
   return Number.isFinite(parsed.getTime());
@@ -295,6 +310,7 @@ const questionBankSchema = z.object({
     options: z.array(z.string().trim()).default([]),
     correctAnswer: z.union([z.string(), z.boolean()]),
     marks: z.number().int().min(1),
+    explanationVideoUrl: optionalExplanationVideoUrlSchema,
   }).refine((data) => data.subject || data.subjectId, {
     message: "Either subject or subjectId is required",
   }),
@@ -336,6 +352,7 @@ const updateQuestionBankSchema = z.object({
     options: z.array(z.string().trim()).optional(),
     correctAnswer: z.union([z.string(), z.boolean()]).optional(),
     marks: z.number().int().min(1).optional(),
+    explanationVideoUrl: optionalExplanationVideoUrlSchema,
     tags: z.array(z.string().trim()).optional(),
     isActive: z.boolean().optional(),
   }),

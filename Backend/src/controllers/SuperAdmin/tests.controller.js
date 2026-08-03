@@ -47,6 +47,12 @@ const ALLOWED_TRANSITIONS = {
 };
 const DEFAULT_STUDENT_YEARS = [1, 2, 3, 4];
 
+const normalizeOptionalUrl = (value) => {
+  if (value == null) return null;
+  const trimmed = String(value).trim();
+  return trimmed || null;
+};
+
 const normalizeStudentYears = (years) => {
   const source = Array.isArray(years) ? years : DEFAULT_STUDENT_YEARS;
   const normalized = [...new Set(source
@@ -581,6 +587,9 @@ const createGlobalTest = asyncHandler(async (req, res) => {
       correctBoolean: question.correctBoolean ?? null,
       correctText: question.correctText || null,
       marks: question.marks || 1,
+      difficulty: question.difficulty || "MEDIUM",
+      topic: question.topic || null,
+      explanationVideoUrl: normalizeOptionalUrl(question.explanationVideoUrl),
       order: index + 1,
     }));
 
@@ -976,6 +985,9 @@ const updateGlobalTest = asyncHandler(async (req, res) => {
           correctBoolean: question.correctBoolean ?? null,
           correctText: question.correctText || null,
           marks: question.marks || 1,
+          difficulty: question.difficulty || "MEDIUM",
+          topic: question.topic || null,
+          explanationVideoUrl: normalizeOptionalUrl(question.explanationVideoUrl),
           order: index + 1,
         })),
       });

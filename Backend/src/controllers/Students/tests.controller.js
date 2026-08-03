@@ -1740,7 +1740,8 @@ const getAttemptResult = asyncHandler(async (req, res) => {
       marks: revealQuestionDetails ? (isCorrect ? Number(question.marks || 0) : 0) : null,
       total_marks: Number(question.marks || 0),
       is_correct: revealQuestionDetails ? Boolean(isCorrect) : null,
-      topic: "-",
+      topic: question.topic || submission.test?.subject || "General",
+      explanation_video_url: question.explanationVideoUrl || null,
     };
   });
 
