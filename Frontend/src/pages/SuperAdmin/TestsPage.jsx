@@ -389,6 +389,36 @@ export default function TestsPage() {
     }
   };
 
+  const copyShareLink = async (testId) => {
+    if (!testId) return;
+
+    try {
+      const payload = await superAdminApi.getTestShareLink(testId);
+      const link = payload?.shareLink;
+      if (!link) {
+        throw new Error("Share link is not available");
+      }
+
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(link);
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = link;
+        textarea.setAttribute("readonly", "");
+        textarea.style.position = "absolute";
+        textarea.style.left = "-9999px";
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textarea);
+      }
+
+      toast.success("Test link copied.");
+    } catch (error) {
+      toast.error(error?.message || "Unable to copy test link.");
+    }
+  };
+
   const openCreateDialog = () => {
     dispatch(setTestCreationContext("super_admin"));
     dispatch(openTestCreationDialog());
@@ -693,7 +723,9 @@ export default function TestsPage() {
               {pagedTests.map((test) => {
                 const submissionCount = Number(test?._count?.submissions || 0);
                 const status = normalizeStatus(test.status);
-                const canOpenFullEditor = status === "DRAFT";
+                // DRAFT allows full editing (incl. questions); SCHEDULED/LIVE allow
+                // settings-only edits. COMPLETED/ARCHIVED are immutable.
+                const canEditTest = status === "DRAFT" || status === "SCHEDULED" || status === "LIVE";
                 const canDeleteTest = status === "DRAFT" && submissionCount === 0;
 
                 return (
@@ -716,9 +748,20 @@ export default function TestsPage() {
                         size="sm"
                         variant="outline"
                         onClick={() => onOpenEdit(test.id)}
-                        disabled={editingTestId === test.id || !canOpenFullEditor}
+                        disabled={editingTestId === test.id || !canEditTest}
                       >
-                        {editingTestId === test.id ? "Opening..." : "Edit Test"}
+                        {editingTestId === test.id
+                          ? "Opening..."
+                          : status === "DRAFT"
+                            ? "Edit Test"
+                            : "Edit Settings"}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => copyShareLink(test.id)}
+                      >
+                        Copy Link
                       </Button>
                       {status === "LIVE" ? (
                         <Button

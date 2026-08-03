@@ -26,6 +26,7 @@ const {
 	forceSubmitAttempt,
 	extendAttemptTime,
 	deactivateTest,
+	getGlobalTestShareLink,
 } = require("../../controllers/SuperAdmin/tests.controller");
 
 const router = express.Router();
@@ -61,6 +62,7 @@ router.get("/", authenticateSuperAdmin, validate(paginationQuerySchema), getTest
 router.get("/:testId/monitoring", authenticateSuperAdmin, validate(testIdParamSchema), getLiveMonitoring);
 router.post("/:testId/monitoring/force-submit", authenticateSuperAdmin, superAdminTestUpdateLimiter, validate(forceSubmitAttemptSchema), forceSubmitAttempt);
 router.post("/:testId/monitoring/extend-time", authenticateSuperAdmin, superAdminTestUpdateLimiter, validate(extendAttemptTimeSchema), extendAttemptTime);
+router.get("/:testId/share-link", authenticateSuperAdmin, validate(testIdParamSchema), getGlobalTestShareLink);
 router.get("/:testId", authenticateSuperAdmin, validate(testIdParamSchema), getGlobalTestById);
 router.post("/global", authenticateSuperAdmin, superAdminTestCreateLimiter, validate(createGlobalTestSchema), createGlobalTest);
 router.post("/:testId/clone", authenticateSuperAdmin, superAdminTestCloneLimiter, validate(cloneTestSchema), cloneTestToCollege);

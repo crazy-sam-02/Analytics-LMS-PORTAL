@@ -1,4 +1,5 @@
 const models = require("../../models");
+const env = require("../../config/env");
 const { createAuditLog } = require("../../services/audit.service");
 const { completeSubmission } = require("../../services/test.service");
 const { emitToCollege, emitToTestRoom } = require("../../realtime/socket");
@@ -701,14 +702,6 @@ const updateGlobalTest = asyncHandler(async (req, res) => {
   }
 
   const currentStatus = deriveLifecycleStatus(existing);
-  if (Array.isArray(payload.questions) && currentStatus !== TEST_STATUS.DRAFT) {
-    throw new ApiError(
-      409,
-      "Question mutations are allowed only while test is in draft state",
-      { currentStatus },
-      "QUESTION_EDIT_LOCKED"
-    );
-  }
 
   if (currentStatus === TEST_STATUS.COMPLETED || currentStatus === TEST_STATUS.ARCHIVED) {
     throw new ApiError(409, `Test is ${currentStatus.toLowerCase()} and immutable`, { currentStatus }, "TEST_IMMUTABLE");
@@ -739,6 +732,92 @@ const updateGlobalTest = asyncHandler(async (req, res) => {
   });
 
   const rootSourceId = existing.sourceTestId || existing.id;
+
+  // Once a test leaves DRAFT its questions and assignment scope are locked, so
+  // in-progress attempts and already-recorded grades are never mutated. Super
+  // admins can still edit test *settings* (schedule, proctoring, attempts,
+  // marking, shuffle, etc.), which propagate across the whole global-test family
+  // without touching questions or batch/department assignments.
+  if (currentStatus !== TEST_STATUS.DRAFT) {
+    const familyTests = await db.test.findMany({
+      where: { OR: [{ id: rootSourceId }, { sourceTestId: rootSourceId }] },
+      select: { id: true, collegeId: true },
+    });
+
+    const settingsData = {
+      title: payload.title,
+      subject: payload.subject,
+      description: payload.description || null,
+      durationMins: payload.durationMins,
+      totalMarks: payload.totalMarks,
+      attemptsAllowed: payload.attemptsAllowed,
+      evaluationRule: payload.evaluationRule,
+      negativeMarkingEnabled: Boolean(payload.negativeMarkingEnabled),
+      negativeMarks: Number(payload.negativeMarks || 0),
+      shuffleQuestions: Boolean(payload.shuffleQuestions),
+      shuffleAnswers: Boolean(payload.shuffleAnswers),
+      startsAt,
+      endsAt,
+      status: publicationFields.status,
+      isPublished: publicationFields.isPublished,
+      ...resolvedTestConfiguration.persistenceFields,
+    };
+
+    await db.$transaction(
+      familyTests.map((item) =>
+        db.test.update({ where: { id: item.id }, data: settingsData })
+      )
+    );
+
+    await createAuditLog({
+      action: "SUPER_ADMIN_UPDATE_TEST_SETTINGS",
+      targetType: "TEST",
+      targetId: existing.id,
+      collegeId: existing.collegeId,
+      superAdminId: req.superAdmin.id,
+      beforeState: existing,
+      afterState: {
+        title: payload.title,
+        subject: payload.subject,
+        status: publicationFields.status,
+        settingsOnly: true,
+        currentStatus,
+        updatedTestIds: familyTests.map((item) => item.id),
+        testType: resolvedTestConfiguration.testType,
+        proctoringPreset: resolvedTestConfiguration.proctoringPreset,
+      },
+      testId: existing.id,
+    });
+
+    const hydrated = await db.test.findUnique({
+      where: { id: existing.id },
+      include: {
+        college: true,
+        department: true,
+        questions: { orderBy: { order: "asc" } },
+        batchAssignments: {
+          select: {
+            batchId: true,
+            batch: {
+              select: { id: true, name: true, year: true, departmentId: true, collegeId: true },
+            },
+          },
+        },
+        _count: { select: { questions: true, submissions: true } },
+      },
+    });
+
+    return res.status(200).json({
+      ...attachResolvedTestConfiguration(hydrated),
+      propagation: {
+        updatedCollegeIds: familyTests.map((item) => item.collegeId),
+        createdCollegeIds: [],
+        skippedColleges: [],
+        settingsOnly: true,
+      },
+    });
+  }
+
   let targetCollegeIds = Array.isArray(payload.collegeIds)
     ? payload.collegeIds.filter(Boolean)
     : [];
@@ -1444,6 +1523,40 @@ const deactivateTest = asyncHandler(async (req, res) => {
   res.status(200).json({ message: "Test deleted", id: existing.id });
 });
 
+const buildStudentTestLink = (testId) => {
+  const baseUrl = String(env.frontendOrigin || "").replace(/\/+$/, "");
+  return `${baseUrl || "http://localhost:5173"}/tests/${encodeURIComponent(testId)}/instructions`;
+};
+
+const getGlobalTestShareLink = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
+  const { testId } = req.params;
+
+  const test = await db.test.findUnique({
+    where: { id: testId },
+    include: {
+      _count: { select: { questions: true, submissions: true } },
+    },
+  });
+
+  if (!test) {
+    throw new ApiError(404, "Test not found");
+  }
+
+  res.status(200).json({
+    testId: test.id,
+    title: test.title,
+    status: deriveLifecycleStatus(test),
+    isPublished: Boolean(test.isPublished),
+    startsAt: test.startsAt,
+    endsAt: test.endsAt,
+    questionCount: Number(test?._count?.questions || 0),
+    submissionCount: Number(test?._count?.submissions || 0),
+    shareLink: buildStudentTestLink(test.id),
+  });
+});
+
 module.exports = {
   getTestsGlobal,
   getGlobalTestById,
@@ -1455,4 +1568,5 @@ module.exports = {
   forceSubmitAttempt,
   extendAttemptTime,
   deactivateTest,
+  getGlobalTestShareLink,
 };

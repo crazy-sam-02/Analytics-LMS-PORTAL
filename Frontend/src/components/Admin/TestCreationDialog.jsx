@@ -148,8 +148,11 @@ export default function TestCreationDialog({ context = "admin", onCreated, hideT
   const qbState = useSelector((state) => (isSuperAdminContext ? state.superQuestionBank : state.questionBank));
   const qb = qbState || DEFAULT_QB_STATE;
   const selectedQuestionBankSubjectId = qb.filters?.subjectId || qb.subjects[0]?.id || "";
-  const { form, open, step, stepTitles, errors, isSubmitting, questionRenderLimit, mode } = testCreation;
+  const { form, open, step, stepTitles, errors, isSubmitting, questionRenderLimit, mode, editingTestStatus } = testCreation;
   const isEditMode = mode === "edit";
+  // A non-draft test (SCHEDULED / LIVE) can only have its settings edited —
+  // questions and assignment scope are locked server-side after publishing.
+  const isNonDraftEdit = isEditMode && Boolean(editingTestStatus) && editingTestStatus !== "DRAFT";
   const draftKey = isSuperAdminContext ? SUPER_ADMIN_DRAFT_KEY : ADMIN_DRAFT_KEY;
   const visibleDepartments = isSuperAdminContext
     ? departments
@@ -1123,7 +1126,20 @@ export default function TestCreationDialog({ context = "admin", onCreated, hideT
           {/* Scrollable Form Body */}
           <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-6 lg:px-8 lg:py-6">
             <div className="space-y-6">
-              
+
+              {isNonDraftEdit && (
+                <div className="rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-text-primary">
+                  <p className="font-semibold">
+                    This test is {String(editingTestStatus || "").toLowerCase()} — settings-only edit
+                  </p>
+                  <p className="mt-1 text-text-secondary">
+                    You can update the schedule, proctoring, attempts, marking and other settings.
+                    Questions and batch/department assignments are locked after publishing and
+                    any changes to them here will not be saved.
+                  </p>
+                </div>
+              )}
+
               {/* Step 0: Basic Info */}
               {step === 0 && (
                 <section className="space-y-6 rounded-2xl border border-border bg-card p-5 shadow-sm transition-all duration-200 animate-in slide-in-from-bottom-2 hover:shadow-md lg:p-6">
@@ -2182,20 +2198,26 @@ export default function TestCreationDialog({ context = "admin", onCreated, hideT
                   </Button>
                 ) : (
                   <>
-                    <Button
-                      variant="outline"
-                      onClick={() => onSubmit("DRAFT")}
-                      disabled={isSubmitting}
-                    >
-                      {isSubmitting && form.publishState === "DRAFT" ? "Saving..." : "Save as Draft"}
-                    </Button>
+                    {!isNonDraftEdit ? (
+                      <Button
+                        variant="outline"
+                        onClick={() => onSubmit("DRAFT")}
+                        disabled={isSubmitting}
+                      >
+                        {isSubmitting && form.publishState === "DRAFT" ? "Saving..." : "Save as Draft"}
+                      </Button>
+                    ) : null}
 
                     <Button
                       className="bg-success px-8 hover:bg-success/90"
                       onClick={() => onSubmit(resolvedPrimaryPublishState)}
                       disabled={isSubmitting}
                     >
-                      {isSubmitting && resolvedPrimaryPublishState !== "DRAFT" ? "Publishing..." : "Continue to Publish"}
+                      {isSubmitting && resolvedPrimaryPublishState !== "DRAFT"
+                        ? "Saving..."
+                        : isNonDraftEdit
+                          ? "Save Settings"
+                          : "Continue to Publish"}
                     </Button>
                   </>
                 )}

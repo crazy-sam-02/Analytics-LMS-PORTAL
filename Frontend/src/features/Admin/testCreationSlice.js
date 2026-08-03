@@ -72,6 +72,7 @@ const initialState = {
   context: "admin",
   mode: "create",
   editingTestId: null,
+  editingTestStatus: null,
   open: false,
   step: 0,
   stepTitles: STEP_TITLES,
@@ -565,6 +566,7 @@ const resetTransientDialogState = (state) => {
 const resetToCreateMode = (state) => {
   state.mode = "create";
   state.editingTestId = null;
+  state.editingTestStatus = null;
   state.form = createDefaultForm();
   resetTransientDialogState(state);
 };
@@ -581,6 +583,7 @@ const testCreationSlice = createSlice({
       const { test } = action.payload || {};
       state.mode = "edit";
       state.editingTestId = test?.id || null;
+      state.editingTestStatus = String(test?.status || "DRAFT").toUpperCase();
       state.form = buildFormFromTest(test || {});
       state.open = true;
       resetTransientDialogState(state);

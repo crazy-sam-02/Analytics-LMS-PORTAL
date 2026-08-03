@@ -846,6 +846,7 @@ export const superAdminApi = {
   deleteStudent: (studentId, body) => superAdminApiRequest(`/super-admin/students/${studentId}`, { method: "DELETE", body: JSON.stringify(body || {}) }),
   getTests: (params = "") => superAdminApiRequest(`/super-admin/tests${params}`),
   getTestById: (testId) => superAdminApiRequest(`/super-admin/tests/${testId}`),
+  getTestShareLink: (testId) => superAdminApiRequest(`/super-admin/tests/${testId}/share-link`),
   createGlobalTest: (body) => superAdminApiRequest("/super-admin/tests/global", { method: "POST", body: JSON.stringify(body) }),
   updateTest: (testId, body) => superAdminApiRequest(`/super-admin/tests/${testId}`, { method: "PATCH", body: JSON.stringify(body) }),
   transitionTestStatus: (testId, action) =>
