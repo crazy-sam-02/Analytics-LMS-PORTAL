@@ -169,7 +169,7 @@ docker compose $CF exec api1 npm run prod:check     # MUST print "Readiness chec
 
 ```bash
 docker compose $CF exec api1 npm run create -- \
-  --name="Owner" --email="owner@yourdomain.com" --password="ChangeMeStrong123!"
+  --name="Director" --email="director@analyticsedify.com" --password="SupAdmin@analytics123"
 docker compose $CF exec api1 npm run verify
 ```
 
@@ -180,7 +180,7 @@ can't pass `nginx -t` until the cert exists. Obtain it first, while the default
 NGINX site is still in place:
 
 ```bash
-sudo certbot certonly --nginx -d lms.yourdomain.com
+sudo certbot certonly --nginx -d lms.analyticsedify.com
 ```
 
 ## Step 11 — Host NGINX reverse proxy

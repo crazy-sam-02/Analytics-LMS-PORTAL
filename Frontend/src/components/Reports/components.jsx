@@ -17,6 +17,7 @@ import {
   XAxis,
   YAxis,
   Tooltip,
+  Legend,
   ReferenceLine,
   Scatter,
   ScatterChart,
