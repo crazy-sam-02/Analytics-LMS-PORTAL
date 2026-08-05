@@ -139,7 +139,15 @@ const buildStudentReportPayload = async ({ db, userId, filters = {} }) => {
   const submissions = await db.submission.findMany({
     ...baseWhere,
     include: {
-      test: true,
+      test: {
+        include: {
+          questions: {
+            select: {
+              marks: true,
+            },
+          },
+        },
+      },
     },
     orderBy: {
       submittedAt: "desc",

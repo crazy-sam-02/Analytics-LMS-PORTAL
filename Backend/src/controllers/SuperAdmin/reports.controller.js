@@ -927,11 +927,20 @@ const downloadSuperReport = asyncHandler(async (req, res) => {
 
   // Generate human-readable report and convert to PDF
   const storedPayload = job.resultDataRef ? await readReportPayload(job.resultDataRef) : null;
-  const reportData = storedPayload
+  const rawReportData = storedPayload
     ? storedPayload
     : Array.isArray(job.resultData)
-      ? { rows: job.resultData }
+      ? job.resultData
       : job.resultData || { rows: [] };
+
+  // Normalize the payload shape for the formatter. buildGlobalReportPayload
+  // returns a raw array for STUDENT_WISE / TEST_WISE / BATCH_WISE, but
+  // generateSuperAdminReportHTML reads reportData.rows. Wrapping a raw array in
+  // { rows: [...] } ensures those report types render their real data instead of
+  // an empty PDF. Object payloads (e.g. DEPARTMENT_WISE with meta/kpis) passthrough.
+  const reportData = Array.isArray(rawReportData)
+    ? { rows: rawReportData }
+    : rawReportData;
 
   const htmlContent = generateSuperAdminReportHTML(
     {

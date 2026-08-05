@@ -1920,9 +1920,18 @@ const downloadReport = asyncHandler(async (req, res) => {
     });
   }
 
-  const reportData = job.filters?.generatedDataRef
+const rawReportData = job.filters?.generatedDataRef
     ? await readReportPayload(job.filters.generatedDataRef)
     : job.filters?.generatedData || { rows: [] };
+
+  // Normalize the payload shape for the formatter. The admin report payload
+  // builder (admin-department-report.service.js) returns an object with rows for
+  // some types, but other report paths may supply a raw array. generateAdminReportHTML
+  // reads reportData.rows, so wrap a raw array in { rows: [...] } to ensure the
+  // PDF renders the real data instead of an empty result.
+  const reportData = Array.isArray(rawReportData)
+    ? { rows: rawReportData }
+    : rawReportData;
 
   const htmlContent = generateAdminReportHTML(
     {

@@ -18,6 +18,7 @@ const {
   getSubmissionAnswers,
   calculateAccuracy,
 } = require("../../services/answer.service");
+const { completeSubmission } = require("../../services/test.service");
 const { getMetricsSnapshot } = require("../../services/validation-monitoring.service");
 
 /**
@@ -196,15 +197,13 @@ const submitTest = asyncHandler(async (req, res) => {
   const { submissionId } = req.params;
 
   try {
-    const submission = await updateSubmissionStatus(
-      submissionId,
-      "SUBMITTED",
-      collegeId,
-      "Student submission"
-    );
+    const result = await completeSubmission({ submissionId, autoSubmitted: false, withSummary: true });
 
-    // Calculate accuracy
-    const accuracy = await calculateAccuracy(submissionId, collegeId);
+    if (!result) {
+      throw new ApiError(404, "Submission not found");
+    }
+
+    const { submission, summary } = result;
 
     res.status(200).json({
       success: true,
@@ -212,7 +211,8 @@ const submitTest = asyncHandler(async (req, res) => {
         id: submission.id,
         status: submission.status,
         submittedAt: submission.submittedAt,
-        accuracy,
+        accuracy: summary.accuracy,
+        score: summary.score,
       },
       message: "Test submitted successfully",
     });
