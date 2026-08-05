@@ -582,6 +582,16 @@ const generateAdminReportHTML = (reportJob, reportData) => {
   const { type, generatedAt, expiresAt } = reportJob;
   const rows = reportData?.rows || [];
 
+  // Admin report jobs build the full Institution payload (meta/kpis/…) for EVERY
+  // report type — admin-report-queue.service always calls buildDepartmentReportPayload.
+  // So whenever we receive that meta-shaped payload, render the comprehensive
+  // multi-page report regardless of the job's `type`. Previously TEST_WISE /
+  // STUDENT_WISE / BATCH_WISE fell through to row-based formatters and, finding no
+  // `.rows`, produced a single empty page.
+  if (reportData?.meta || reportData?.rows?.meta) {
+    return buildInstitutionReportHTML(reportJob, reportData);
+  }
+
   if (type === "STUDENT_WISE") return formatStudentWiseReport(rows, generatedAt, expiresAt);
   if (type === "TEST_WISE") return formatTestWiseReport(rows, generatedAt, expiresAt);
   if (type === "DEPARTMENT_WISE") return buildInstitutionReportHTML(reportJob, reportData);
