@@ -1,4 +1,6 @@
 describe("super admin report queue payload builder", () => {
+  const REPORTABLE_STATUSES = ["SUBMITTED", "AUTO_SUBMITTED", "GRADED"];
+
   const loadService = () => {
     jest.resetModules();
     jest.doMock("../../config/redis", () => ({
@@ -28,7 +30,7 @@ describe("super admin report queue payload builder", () => {
     expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({
         collegeId: "college-1",
-        status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
+        status: { in: REPORTABLE_STATUSES },
         submittedAt: {
           gte: new Date("2026-01-01T00:00:00.000Z"),
           lte: new Date("2026-01-31T23:59:59.000Z"),
@@ -58,7 +60,7 @@ describe("super admin report queue payload builder", () => {
         submissions: expect.objectContaining({
           where: expect.objectContaining({
             userId: "student-1",
-            status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
+            status: { in: REPORTABLE_STATUSES },
           }),
         }),
       }),

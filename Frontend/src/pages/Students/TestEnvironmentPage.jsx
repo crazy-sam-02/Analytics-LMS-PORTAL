@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { useNavigate, useParams } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Clock3 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -50,6 +51,7 @@ const exitFullscreenIfActive = async () => {
 export default function TestEnvironmentPage() {
   const dispatch = useDispatch();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { attemptId, testId } = useParams();
   const [submitWarningOpen, setSubmitWarningOpen] = useState(false);
   const [proctoringPaused, setProctoringPaused] = useState(false);
@@ -159,6 +161,10 @@ export default function TestEnvironmentPage() {
       }
 
       await exitFullscreenIfActive();
+      queryClient.invalidateQueries({ queryKey: ["student", "reports"] });
+      queryClient.invalidateQueries({ queryKey: ["student", "leaderboard"] });
+      queryClient.invalidateQueries({ queryKey: ["student", "attempts", "active"] });
+      queryClient.invalidateQueries({ queryKey: ["student", "results", attempt_id] });
       navigate(`/submission/${attempt_id}`, {
         replace: true,
         state: {
@@ -181,7 +187,7 @@ export default function TestEnvironmentPage() {
     } finally {
       submitLockRef.current = false;
     }
-  }, [attempt_id, dispatch, flushPendingSaves, navigate, submit_status, test_id]);
+  }, [attempt_id, dispatch, flushPendingSaves, navigate, queryClient, submit_status, test_id]);
 
   useEffect(() => {
     let timer = null;

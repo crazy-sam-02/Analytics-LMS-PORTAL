@@ -2,8 +2,7 @@ const mongoose = require("mongoose");
 const { withSubmissionScorePercent, toObjectIdIfValid, normalizeMongoId } = require("../utils/analytics-aggregation");
 const { clampPercent } = require("../utils/score");
 const { describeDistribution, PASS_THRESHOLD_PERCENT } = require("../utils/stats");
-
-const SUBMITTED_STATUSES = ["SUBMITTED", "AUTO_SUBMITTED"];
+const { REPORTABLE_SUBMISSION_STATUSES } = require("./report-scope.service");
 
 const toIdArray = (ids) => (Array.isArray(ids) ? ids : []).map((id) => toObjectIdIfValid(id));
 const getStudentNumber = (student = {}) => student.enrollNumber || student.enrollmentNumber || student.studentId || "-";
@@ -25,10 +24,13 @@ const scoreBand = (score) => {
 async function aggregateReportSubmissions({ collegeId, testIds, studentIds, dateFrom, dateTo }) {
   const db = mongoose.connection.db;
 
-  const match = { status: { $in: SUBMITTED_STATUSES } };
+  const match = { status: { $in: REPORTABLE_SUBMISSION_STATUSES } };
   if (collegeId) match.collegeId = toObjectIdIfValid(collegeId);
-  if (Array.isArray(testIds)) match.testId = { $in: toIdArray(testIds) };
-  if (Array.isArray(studentIds)) match.userId = { $in: toIdArray(studentIds) };
+  // IMPORTANT: Only add $in filter when the array is non-empty.
+  // MongoDB's { $in: [] } matches ZERO documents — passing an empty array
+  // would wipe out all results even when submissions exist.
+  if (Array.isArray(testIds) && testIds.length > 0) match.testId = { $in: toIdArray(testIds) };
+  if (Array.isArray(studentIds) && studentIds.length > 0) match.userId = { $in: toIdArray(studentIds) };
   const submittedAt = {};
   if (dateFrom) submittedAt.$gte = dateFrom;
   if (dateTo) submittedAt.$lte = dateTo;

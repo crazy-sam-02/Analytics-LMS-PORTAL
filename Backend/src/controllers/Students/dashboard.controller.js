@@ -2,6 +2,7 @@ const models = require("../../models");
 const { asyncHandler } = require("../../utils/http");
 const { buildStudentAssignmentScope } = require("../../services/student-test-assignment.service");
 const { getSubmissionScorePercent } = require("../../utils/score");
+const { REPORTABLE_SUBMISSION_STATUSES } = require("../../services/report-scope.service");
 
 const getSummary = asyncHandler(async (req, res) => {
   const m = await models.init();
@@ -13,7 +14,7 @@ const getSummary = asyncHandler(async (req, res) => {
     where: {
       userId,
       status: {
-        in: ["SUBMITTED", "AUTO_SUBMITTED"],
+        in: REPORTABLE_SUBMISSION_STATUSES,
       },
     },
     include: {

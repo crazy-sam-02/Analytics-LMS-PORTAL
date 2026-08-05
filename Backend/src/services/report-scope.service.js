@@ -6,6 +6,7 @@ const STUDENT_SCOPE = {
 
 const ALUMNI_STATUSES = ["ALUMNI", "GRADUATED"];
 const CURRENT_EXCLUDED_STATUSES = ["ALUMNI", "GRADUATED", "DROPPED", "SUSPENDED", "BLOCKED"];
+const REPORTABLE_SUBMISSION_STATUSES = ["SUBMITTED", "AUTO_SUBMITTED", "GRADED"];
 
 const VALID_SCOPES = new Set(Object.values(STUDENT_SCOPE));
 
@@ -64,6 +65,7 @@ const buildReportScopeMetadata = (filters = {}) => ({
 
 module.exports = {
   STUDENT_SCOPE,
+  REPORTABLE_SUBMISSION_STATUSES,
   normalizeStudentScope,
   normalizePassoutYear,
   normalizeOptionalId,

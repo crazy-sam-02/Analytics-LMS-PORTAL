@@ -22,6 +22,7 @@ const {
   resolveAdminTestScope,
 } = require("../../utils/admin-test-access");
 const {
+  REPORTABLE_SUBMISSION_STATUSES,
   buildStudentLifecycleWhere,
   buildReportScopeMetadata,
   normalizeStudentScope,
@@ -303,7 +304,7 @@ const buildReportAnalyticsPayload = async (req, queryOverrides = {}) => {
     collegeId,
     ...(testIds.length ? { testId: { in: testIds } } : {}),
     ...submissionStudentFilter,
-    status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
+    status: { in: REPORTABLE_SUBMISSION_STATUSES },
     ...(dateFromValue || dateToValue
       ? {
           submittedAt: {
@@ -759,7 +760,7 @@ const getReportTableDashboard = asyncHandler(async (req, res) => {
   const submissions = await db.submission.findMany({
     where: {
       collegeId: req.collegeId,
-      status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
+      status: { in: REPORTABLE_SUBMISSION_STATUSES },
       ...(scope.testIds.length ? { testId: { in: scope.testIds } } : {}),
       ...submissionStudentFilter,
       ...(filters.dateFrom || filters.dateTo
@@ -965,7 +966,7 @@ const buildReportTestsPayload = async (req) => {
     db,
     where: {
       collegeId: req.collegeId,
-      status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
+      status: { in: REPORTABLE_SUBMISSION_STATUSES },
       testId: { in: scope.testIds },
       ...(filters.dateFrom || filters.dateTo
         ? {
@@ -1095,7 +1096,7 @@ const loadTestAttemptData = async ({ db, req, testId }) => {
     where: {
       collegeId: req.collegeId,
       testId,
-      status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
+      status: { in: REPORTABLE_SUBMISSION_STATUSES },
     },
     include: {
       user: { select: { id: true, fullName: true, studentId: true, enrollNumber: true, enrollmentNumber: true } },
@@ -1255,7 +1256,7 @@ const loadScopedAttempts = async ({ db, req, filters }) => {
         db,
         where: {
           collegeId: req.collegeId,
-          status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
+          status: { in: REPORTABLE_SUBMISSION_STATUSES },
           testId: { in: scope.testIds },
           userId: { in: studentIds },
           ...(filters.dateFrom || filters.dateTo
@@ -1564,7 +1565,7 @@ const getReportStudentDetailDashboard = asyncHandler(async (req, res) => {
       batch: { select: { name: true } },
       submissions: {
         where: {
-          status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
+          status: { in: REPORTABLE_SUBMISSION_STATUSES },
           ...(scope.testIds.length ? { testId: { in: scope.testIds } } : {}),
           ...(filters.dateFrom || filters.dateTo
             ? {

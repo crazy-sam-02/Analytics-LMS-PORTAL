@@ -32,6 +32,7 @@ const {
   buildStudentAssignmentScope,
   isStudentAssignedToTest,
 } = require("../../services/student-test-assignment.service");
+const { REPORTABLE_SUBMISSION_STATUSES } = require("../../services/report-scope.service");
 
 const HEARTBEAT_STALE_SECONDS = 20;
 const HEARTBEAT_FORCE_AUTOSUBMIT_SECONDS = 15 * 60;
@@ -1699,7 +1700,7 @@ const getAttemptResult = asyncHandler(async (req, res) => {
     db.submission.findMany({
       where: {
         testId: submission.testId,
-        status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
+        status: { in: REPORTABLE_SUBMISSION_STATUSES },
       },
       select: { score: true },
       orderBy: { score: "desc" },

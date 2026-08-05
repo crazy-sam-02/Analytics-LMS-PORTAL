@@ -1,8 +1,7 @@
 const mongoose = require("mongoose");
 const { asyncHandler } = require("../../utils/http");
 const { normalizeMongoId, withSubmissionScorePercent } = require("../../utils/analytics-aggregation");
-
-const SUBMITTED_STATUSES = ["SUBMITTED", "AUTO_SUBMITTED"];
+const { REPORTABLE_SUBMISSION_STATUSES } = require("../../services/report-scope.service");
 
 const violationWeightStage = () => ({
   $addFields: {
@@ -36,7 +35,7 @@ const getSuperAnalytics = asyncHandler(async (_req, res) => {
   const submissionsAgg = db
     .collection("submission")
     .aggregate([
-      { $match: { status: { $in: SUBMITTED_STATUSES } } },
+      { $match: { status: { $in: REPORTABLE_SUBMISSION_STATUSES } } },
       ...withSubmissionScorePercent(),
       {
         $group: {

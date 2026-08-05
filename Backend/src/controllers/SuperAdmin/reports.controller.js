@@ -12,6 +12,7 @@ const { clampPercent, getSubmissionScorePercent, getTestTotalMarks } = require("
 const { collectSubmissions } = require("../../services/submission-batch.service");
 const { isQuestionCorrect } = require("../../services/test.service");
 const {
+  REPORTABLE_SUBMISSION_STATUSES,
   buildStudentLifecycleWhere,
   buildReportScopeMetadata,
   normalizeStudentScope,
@@ -261,7 +262,7 @@ const getSuperReportAnalytics = asyncHandler(async (req, res) => {
   const scopedTestIds = new Set(tests.map((test) => test.id));
   const scopedStudentIds = new Set(students.map((student) => student.id));
   const submissionWhere = {
-    status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
+    status: { in: REPORTABLE_SUBMISSION_STATUSES },
     ...(collegeId ? { collegeId } : {}),
     testId: { in: Array.from(scopedTestIds) },
     userId: { in: Array.from(scopedStudentIds) },
@@ -709,7 +710,7 @@ const getSuperReportTestsDashboard = asyncHandler(async (req, res) => {
     db,
     where: {
       collegeId,
-      status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
+      status: { in: REPORTABLE_SUBMISSION_STATUSES },
       testId: { in: testIds },
       ...(dateFrom || dateTo
         ? { submittedAt: { ...(dateFrom ? { gte: dateFrom } : {}), ...(dateTo ? { lte: dateTo } : {}) } }

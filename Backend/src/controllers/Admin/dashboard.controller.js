@@ -1,6 +1,7 @@
 const models = require("../../models");
 const { asyncHandler } = require("../../utils/http");
 const { getSubmissionScorePercent } = require("../../utils/score");
+const { REPORTABLE_SUBMISSION_STATUSES } = require("../../services/report-scope.service");
 
 const getAdminDashboard = asyncHandler(async (req, res) => {
   const m = await models.init();
@@ -36,7 +37,7 @@ const getAdminDashboard = asyncHandler(async (req, res) => {
     db.submission.findMany({
       where: {
         collegeId,
-        status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
+        status: { in: REPORTABLE_SUBMISSION_STATUSES },
       },
       include: {
         user: {
@@ -73,7 +74,7 @@ const getAdminDashboard = asyncHandler(async (req, res) => {
       where: { collegeId },
       include: {
         submissions: {
-          where: { status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] } },
+          where: { status: { in: REPORTABLE_SUBMISSION_STATUSES } },
           select: {
             id: true,
             score: true,

@@ -1,6 +1,10 @@
 const PASS_THRESHOLD_PERCENT = 40;
 const { clampPercent } = require("../utils/score");
-const { buildStudentLifecycleWhere, buildReportScopeMetadata } = require("./report-scope.service");
+const {
+  REPORTABLE_SUBMISSION_STATUSES,
+  buildStudentLifecycleWhere,
+  buildReportScopeMetadata,
+} = require("./report-scope.service");
 
 const toNumber = (value) => (Number.isFinite(Number(value)) ? Number(value) : 0);
 
@@ -184,7 +188,7 @@ const buildDepartmentReportPayload = async ({ db, job }) => {
     where: {
       collegeId,
       testId: { in: testIds },
-      status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
+      status: { in: REPORTABLE_SUBMISSION_STATUSES },
       ...(submissionDateFilter ? { submittedAt: submissionDateFilter } : {}),
       user: {
         ...studentLifecycleWhere,

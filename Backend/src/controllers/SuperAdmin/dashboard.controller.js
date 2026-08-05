@@ -1,6 +1,7 @@
 const { getDb } = require("../../utils/db");
 const { asyncHandler } = require("../../utils/http");
 const { getSubmissionScorePercent } = require("../../utils/score");
+const { REPORTABLE_SUBMISSION_STATUSES } = require("../../services/report-scope.service");
 
 const getSuperAdminDashboard = asyncHandler(async (_req, res) => {
   const db = await getDb();
@@ -33,7 +34,7 @@ const getSuperAdminDashboard = asyncHandler(async (_req, res) => {
     }),
     db.submission.findMany({
       where: {
-        status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
+        status: { in: REPORTABLE_SUBMISSION_STATUSES },
         submittedAt: { gte: new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000) },
       },
       select: {
@@ -50,7 +51,7 @@ const getSuperAdminDashboard = asyncHandler(async (_req, res) => {
         id: true,
         name: true,
         submissions: {
-          where: { status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] } },
+          where: { status: { in: REPORTABLE_SUBMISSION_STATUSES } },
           select: { score: true, test: { select: { totalMarks: true } } },
         },
       },

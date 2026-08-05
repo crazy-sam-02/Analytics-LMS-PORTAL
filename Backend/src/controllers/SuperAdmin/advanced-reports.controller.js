@@ -9,6 +9,7 @@ const { computeAtRisk } = require("../../services/at-risk.service");
 const { collectSubmissions } = require("../../services/submission-batch.service");
 const { buildAdminTestVisibilityWhere, getDepartmentBatchIds } = require("../../utils/admin-test-access");
 const {
+  REPORTABLE_SUBMISSION_STATUSES,
   buildStudentLifecycleWhere,
   normalizeStudentScope,
   normalizePassoutYear,
@@ -20,7 +21,7 @@ const {
 // by their token). All heavy statistics come from the same pure compute
 // services the admin portal uses, so both portals stay in lockstep.
 
-const SUBMITTED_STATUSES = ["SUBMITTED", "AUTO_SUBMITTED"];
+const SUBMITTED_STATUSES = REPORTABLE_SUBMISSION_STATUSES;
 
 const normalizeId = (value) => {
   const normalized = String(value || "").trim();

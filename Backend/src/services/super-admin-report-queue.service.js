@@ -6,7 +6,7 @@ const { emitToRole } = require("../realtime/socket");
 const workerEnabled = env.worker.enabled;
 const { saveReportPayload } = require("./report-payload-store.service");
 const { clampPercent, getSubmissionScorePercent } = require("../utils/score");
-const { buildStudentLifecycleWhere } = require("./report-scope.service");
+const { REPORTABLE_SUBMISSION_STATUSES, buildStudentLifecycleWhere } = require("./report-scope.service");
 
 let Queue = null;
 let Worker = null;
@@ -31,7 +31,7 @@ const getDbClient = async () => {
 const toPercent = (value) => clampPercent(value);
 const getScorePercent = getSubmissionScorePercent;
 const getStudentNumber = (student = {}) => student.enrollNumber || student.enrollmentNumber || student.studentId || "-";
-const SUBMITTED_STATUSES = ["SUBMITTED", "AUTO_SUBMITTED"];
+const SUBMITTED_STATUSES = REPORTABLE_SUBMISSION_STATUSES;
 
 const getSubjectStatus = (avgScore) => {
   if (avgScore < 50) return "Needs Attention";

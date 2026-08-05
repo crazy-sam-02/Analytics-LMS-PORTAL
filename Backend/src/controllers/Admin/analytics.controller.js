@@ -1,13 +1,14 @@
 const mongoose = require("mongoose");
 const { asyncHandler } = require("../../utils/http");
 const { toObjectIdIfValid, withSubmissionScorePercent } = require("../../utils/analytics-aggregation");
+const { REPORTABLE_SUBMISSION_STATUSES } = require("../../services/report-scope.service");
 
 const getCollegeAnalytics = asyncHandler(async (req, res) => {
   const db = mongoose.connection.db;
   const collegeId = toObjectIdIfValid(req.collegeId);
   const submissionMatch = {
     collegeId,
-    status: { $in: ["SUBMITTED", "AUTO_SUBMITTED"] },
+    status: { $in: REPORTABLE_SUBMISSION_STATUSES },
   };
 
   const [

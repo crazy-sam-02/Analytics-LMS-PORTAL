@@ -3,6 +3,7 @@ const { redisClient, isRedisAvailable } = require("../../config/redis");
 const { asyncHandler } = require("../../utils/http");
 const { getPagination } = require("../../utils/pagination");
 const { getSubmissionScorePercent } = require("../../utils/score");
+const { REPORTABLE_SUBMISSION_STATUSES } = require("../../services/report-scope.service");
 
 const normalizeIdList = (values = []) =>
   [...new Set(values.filter(Boolean).map((value) => String(value)))];
@@ -153,7 +154,7 @@ const getLeaderboard = asyncHandler(async (req, res) => {
   }
 
   const where = {
-    status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
+    status: { in: REPORTABLE_SUBMISSION_STATUSES },
     user: userWhere,
     test: { collegeId },
   };

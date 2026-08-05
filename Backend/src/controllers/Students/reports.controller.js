@@ -15,6 +15,7 @@ const {
   maskCorrectAnswer,
   resolveReviewMode,
 } = require("../../services/student-review-policy.service");
+const { REPORTABLE_SUBMISSION_STATUSES } = require("../../services/report-scope.service");
 const { renderHtmlToPdfBuffer } = require("../../services/report-pdf.service");
 const { clampPercent, getSubmissionScorePercent, getTestTotalMarks } = require("../../utils/score");
 
@@ -130,7 +131,7 @@ const buildStudentReportPayload = async ({ db, userId, filters = {} }) => {
     where: {
       userId,
       status: {
-        in: ["SUBMITTED", "AUTO_SUBMITTED"],
+        in: REPORTABLE_SUBMISSION_STATUSES,
       },
     },
   };
@@ -277,7 +278,7 @@ const buildStudentReportPayload = async ({ db, userId, filters = {} }) => {
       where: {
         userId,
         testId,
-        status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
+        status: { in: REPORTABLE_SUBMISSION_STATUSES },
       },
       include: {
         test: {
@@ -306,7 +307,7 @@ const buildStudentReportPayload = async ({ db, userId, filters = {} }) => {
       db.submission.findMany({
         where: {
           testId: target.testId,
-          status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
+          status: { in: REPORTABLE_SUBMISSION_STATUSES },
         },
         select: { score: true },
         orderBy: { score: "desc" },
@@ -650,4 +651,4 @@ const exportReport = asyncHandler(async (req, res) => {
   res.status(200).send(pdfBuffer);
 });
 
-module.exports = { getReport, exportReport };
+module.exports = { getReport, exportReport, buildStudentReportPayload };

@@ -1,4 +1,5 @@
 const { ApiError } = require("../utils/http");
+const { REPORTABLE_SUBMISSION_STATUSES } = require("./report-scope.service");
 
 const DEFAULT_DEGREE_YEARS = 4;
 const STUDENT_LIFECYCLE_STATUS = {
@@ -106,7 +107,7 @@ const tagPassoutSubmissions = async ({ db, students, passoutYear, passoutCohortI
       where: {
         collegeId: student.collegeId,
         userId: student.id,
-        status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
+        status: { in: REPORTABLE_SUBMISSION_STATUSES },
       },
       data: {
         passoutYear,
