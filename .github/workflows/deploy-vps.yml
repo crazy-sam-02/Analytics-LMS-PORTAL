@@ -2,18 +2,11 @@ name: Deploy VPS
 
 on:
   workflow_dispatch:
-  workflow_run:
-    workflows: ["CI"]
-    types: [completed]
-    branches: [main]
 
 jobs:
   deploy:
+    name: Deploy to Production VPS
     runs-on: ubuntu-latest
-    # Deploy on a manual run, or automatically only when CI succeeded on main.
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success'
 
     steps:
       - name: Configure SSH
@@ -41,16 +34,16 @@ jobs:
           docker compose --env-file Backend/.env.production -f docker-compose.production.yml build
           docker compose --env-file Backend/.env.production -f docker-compose.production.yml up -d
 
-          echo "Running migrations and indexes..."
+          echo "Running database migrations..."
           docker compose --env-file Backend/.env.production -f docker-compose.production.yml exec -T api1 npm run db:migrate:refresh-token-hashes
           docker compose --env-file Backend/.env.production -f docker-compose.production.yml exec -T api1 npm run db:migrate:violations
           docker compose --env-file Backend/.env.production -f docker-compose.production.yml exec -T api1 npm run db:create-indexes
 
-          echo "Production readiness check..."
+          echo "Running production readiness check..."
           docker compose --env-file Backend/.env.production -f docker-compose.production.yml exec -T api1 npm run prod:check
 
-          echo "Public API check..."
+          echo "Checking application health..."
           curl -fsS https://lms.analyticsedify.com/api/ready
 
-          echo "Deployment complete."
+          echo "Deployment completed successfully."
           EOF
