@@ -5,8 +5,14 @@ const { emitToRole } = require("../realtime/socket");
 
 const workerEnabled = env.worker.enabled;
 const { saveReportPayload } = require("./report-payload-store.service");
-const { clampPercent, getSubmissionScorePercent } = require("../utils/score");
+const { getSubmissionScorePercent } = require("../utils/score");
 const { REPORTABLE_SUBMISSION_STATUSES, buildStudentLifecycleWhere } = require("./report-scope.service");
+const {
+  aggregateInstitutionReport,
+  buildReportId,
+  REPORT_SUBMISSION_INCLUDE,
+  REPORT_INCOMPLETE_INCLUDE,
+} = require("./admin-department-report.service");
 
 let Queue = null;
 let Worker = null;
@@ -28,22 +34,9 @@ const getDbClient = async () => {
   return m.dbClient;
 };
 
-const toPercent = (value) => clampPercent(value);
 const getScorePercent = getSubmissionScorePercent;
 const getStudentNumber = (student = {}) => student.enrollNumber || student.enrollmentNumber || student.studentId || "-";
 const SUBMITTED_STATUSES = REPORTABLE_SUBMISSION_STATUSES;
-
-const getSubjectStatus = (avgScore) => {
-  if (avgScore < 50) return "Needs Attention";
-  if (avgScore < 70) return "Moderate";
-  return "Good";
-};
-
-const resolveStudentYear = (student) => {
-  const directYear = student?.year;
-  if (directYear != null && directYear !== "") return directYear;
-  return student?.batch?.academicYear || student?.batch?.year || "-";
-};
 
 const normalizeStudentYear = (value) => {
   if (value == null || value === "") return null;
@@ -102,9 +95,16 @@ const buildTestWhere = (filters = {}, departmentBatchIds = []) => ({
     : {}),
 });
 
-const buildDepartmentAcademicPayload = async (db, filters = {}) => {
+const buildDepartmentAcademicPayload = async (db, filters = {}, job = {}) => {
   const studentLifecycleWhere = buildStudentLifecycleWhere(filters);
-  const [college, department, test, students, submissions] = await Promise.all([
+  const scopedYear = normalizeStudentYear(filters.year);
+  const submissionUserWhere = {
+    ...studentLifecycleWhere,
+    ...(filters.departmentId ? { departmentId: filters.departmentId } : {}),
+    ...(scopedYear ? { year: scopedYear } : {}),
+  };
+
+  const [college, department, test, students, submissions, incompleteSubmissions] = await Promise.all([
     db.college.findUnique({
       where: { id: filters.collegeId },
       select: { id: true, name: true },
@@ -121,14 +121,14 @@ const buildDepartmentAcademicPayload = async (db, filters = {}) => {
         id: filters.testId,
         ...(filters.collegeId ? { collegeId: filters.collegeId } : {}),
       },
-      select: { id: true, title: true, subject: true, totalMarks: true },
+      select: { id: true, title: true, subject: true, totalMarks: true, durationMins: true, startsAt: true, endsAt: true },
     }),
     db.student.findMany({
       where: {
         ...(filters.collegeId ? { collegeId: filters.collegeId } : {}),
         ...studentLifecycleWhere,
         ...(filters.departmentId ? { departmentId: filters.departmentId } : {}),
-        ...(normalizeStudentYear(filters.year) ? { year: normalizeStudentYear(filters.year) } : {}),
+        ...(scopedYear ? { year: scopedYear } : {}),
       },
       include: {
         batch: { select: { name: true, year: true, academicYear: true } },
@@ -138,101 +138,41 @@ const buildDepartmentAcademicPayload = async (db, filters = {}) => {
       where: buildSubmittedSubmissionWhere(filters, {
         ...(filters.collegeId ? { collegeId: filters.collegeId } : {}),
         ...(filters.testId ? { testId: filters.testId } : {}),
-        ...(filters.departmentId || normalizeStudentYear(filters.year)
-          ? {
-              user: {
-                ...studentLifecycleWhere,
-                ...(filters.departmentId ? { departmentId: filters.departmentId } : {}),
-                ...(normalizeStudentYear(filters.year) ? { year: normalizeStudentYear(filters.year) } : {}),
-              },
-            }
-          : Object.keys(studentLifecycleWhere).length ? { user: studentLifecycleWhere } : {}),
+        ...(Object.keys(submissionUserWhere).length ? { user: submissionUserWhere } : {}),
       }),
-      include: {
-        user: {
-          select: {
-            id: true,
-            fullName: true,
-            email: true,
-            studentId: true,
-            enrollNumber: true,
-            enrollmentNumber: true,
-            year: true,
-            batch: { select: { name: true, year: true, academicYear: true } },
-          },
-        },
-        test: { select: { id: true, title: true, subject: true, totalMarks: true } },
+      include: REPORT_SUBMISSION_INCLUDE,
+    }),
+    db.submission.findMany({
+      where: {
+        ...(filters.collegeId ? { collegeId: filters.collegeId } : {}),
+        ...(filters.testId ? { testId: filters.testId } : {}),
+        status: { in: ["IN_PROGRESS"] },
+        ...(Object.keys(submissionUserWhere).length ? { user: submissionUserWhere } : {}),
       },
+      include: REPORT_INCOMPLETE_INCLUDE,
     }),
   ]);
 
-  const studentBest = new Map();
-  submissions.forEach((submission) => {
-    const studentId = submission.user?.id || submission.userId;
-    if (!studentId) return;
-    const scorePercent = getScorePercent(submission);
-    const current = studentBest.get(studentId);
-    if (!current || scorePercent > current.scorePercent) {
-      studentBest.set(studentId, {
-        studentId,
-        name: submission.user?.fullName || "Student",
-        email: submission.user?.email || "-",
-        year: resolveStudentYear(submission.user),
-        registerNumber: getStudentNumber(submission.user),
-        scorePercent,
-      });
-    }
-  });
+  const departmentNameById = department ? new Map([[String(department.id), department.name]]) : new Map();
 
-  const totalStudents = students.length;
-  const studentsAppeared = studentBest.size;
-  const studentsNotAttended = Math.max(totalStudents - studentsAppeared, 0);
-  const averageScore = studentsAppeared
-    ? toPercent(Array.from(studentBest.values()).reduce((sum, row) => sum + row.scorePercent, 0) / studentsAppeared)
-    : 0;
-  const passedCount = Array.from(studentBest.values()).filter((row) => row.scorePercent >= 40).length;
-  const failedCount = Math.max(studentsAppeared - passedCount, 0);
-  const passPercent = studentsAppeared ? toPercent((passedCount / studentsAppeared) * 100) : 0;
-  const subject = test?.subject || "General";
-
-  return {
-    meta: {
-      departmentName: department?.name || "-",
-      collegeName: college?.name || "-",
-      testTitle: test?.title || "Selected Test",
-      semester: filters.semester || "-",
-      academicYear: filters.academicYear || "-",
-      logoUrl: filters.logoUrl || "",
-      hasSelectedTest: Boolean(filters.testId),
-    },
-    kpis: {
-      totalStudents,
-      studentsAppeared,
-      studentsNotAttended,
-      averageScore,
-      passPercentage: passPercent,
-    },
-    subjectPerformance: [{ subject, averageScore }],
-    passFail: {
-      passPercent,
-      failPercent: toPercent(100 - passPercent),
-      passedCount,
-      failedCount,
-    },
-    weakSubjects: [{ subject, averageScore, status: getSubjectStatus(averageScore) }],
-    studentPerformance: Array.from(studentBest.values())
-      .sort((a, b) => b.scorePercent - a.scorePercent)
-      .map((row, index) => ({
-        rank: index + 1,
-        studentId: row.studentId,
-        name: row.name,
-        email: row.email,
-        year: row.year,
-        registerNumber: row.registerNumber,
-        scorePercent: row.scorePercent,
-      })),
+  const meta = {
+    departmentName: department?.name || "-",
+    collegeName: college?.name || "-",
+    testTitle: test?.title || "Selected Test",
+    subject: test?.subject || "Placement Assessment",
+    semester: filters.semester || "-",
+    academicYear: filters.academicYear || "-",
+    logoUrl: filters.logoUrl || "",
+    hasSelectedTest: Boolean(filters.testId),
+    reportId: buildReportId(job),
+    generatedBy: "Analytics Edify LMS",
+    durationMins: test?.durationMins || null,
+    testDate: test?.startsAt || test?.endsAt || null,
+    departmentsCount: 1,
     remarks: filters.remarks || "",
   };
+
+  return aggregateInstitutionReport({ meta, students, submissions, incompleteSubmissions, departmentNameById });
 };
 
 if (Queue && redisClient && queueConnection) {
@@ -350,7 +290,7 @@ const buildGlobalReportPayload = async (db, job) => {
 
   if (job.type === "DEPARTMENT_WISE") {
     if (filters.testId && filters.departmentId && filters.collegeId) {
-      return buildDepartmentAcademicPayload(db, filters);
+      return buildDepartmentAcademicPayload(db, filters, job);
     }
 
     const departments = await db.department.findMany({

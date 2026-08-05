@@ -67,6 +67,39 @@ const describeIncompleteStatus = (status) => {
   return raw ? raw.replace(/_/g, " ") : "Incomplete";
 };
 
+// Standard submission include shape so admin and super-admin fetch exactly the
+// fields aggregateInstitutionReport() consumes.
+const REPORT_SUBMISSION_INCLUDE = {
+  user: {
+    select: {
+      id: true,
+      fullName: true,
+      email: true,
+      studentId: true,
+      enrollNumber: true,
+      enrollmentNumber: true,
+      year: true,
+      departmentId: true,
+      batch: { select: { name: true, year: true, academicYear: true } },
+    },
+  },
+  test: { select: { id: true, title: true, subject: true, totalMarks: true } },
+  violations: { select: { type: true } },
+};
+
+const REPORT_INCOMPLETE_INCLUDE = {
+  user: {
+    select: {
+      id: true,
+      fullName: true,
+      studentId: true,
+      enrollNumber: true,
+      enrollmentNumber: true,
+      departmentId: true,
+    },
+  },
+};
+
 const buildTestScope = async ({ db, collegeId, departmentId, batchIds, testId }) => {
   const orFilters = [];
 
@@ -115,201 +148,16 @@ const buildReportId = (job) => {
   return `AED-${year}-${tail}`;
 };
 
-const buildDepartmentReportPayload = async ({ db, job }) => {
-  const filters = job.filters || {};
-  const admin = await db.admin.findUnique({
-    where: { id: job.adminId },
-    include: {
-      department: { select: { id: true, name: true } },
-      college: { select: { id: true, name: true } },
-    },
-  });
-
-  const collegeId = job.collegeId;
-  // Prefer an explicit filter department, then the admin's own department.
-  // A college-wide admin (no department) falls back to a college-wide scope
-  // instead of throwing, so the report renders for every panel.
-  const departmentId = filters.departmentId
-    ? String(filters.departmentId)
-    : admin?.departmentId
-      ? String(admin.departmentId)
-      : null;
-  const batchId = filters.batchId ? String(filters.batchId) : null;
-  const testId = filters.testId ? String(filters.testId) : null;
-  const year = filters.year ? Number(filters.year) : null;
-  const studentLifecycleWhere = buildStudentLifecycleWhere(filters);
-
-  const batchWhere = { collegeId, ...(departmentId ? { departmentId } : {}) };
-  const scopeBatches = await db.batch.findMany({
-    where: batchWhere,
-    select: { id: true, name: true, academicYear: true, departmentId: true },
-  });
-  const scopeBatchIds = scopeBatches.map((batch) => String(batch.id));
-  const scopedBatch = batchId ? scopeBatches.find((batch) => String(batch.id) === batchId) : null;
-
-  if (batchId && !scopedBatch) {
-    throw new Error("Batch not found for this department");
-  }
-
-  const departments = await db.department.findMany({
-    where: { collegeId, ...(departmentId ? { id: departmentId } : {}) },
-    select: { id: true, name: true },
-  });
-  const departmentNameById = new Map(departments.map((dept) => [String(dept.id), dept.name]));
-
-  const tests = await buildTestScope({
-    db,
-    collegeId,
-    departmentId,
-    batchIds: scopeBatchIds,
-    testId,
-  });
-
-  const testIds = tests.map((test) => test.id);
-  const selectedTest = testId ? tests.find((test) => String(test.id) === testId) || tests[0] : null;
-  const testTitle = testId
-    ? selectedTest?.title || "Selected Test"
-    : tests.length > 1
-      ? "All Tests"
-      : tests[0]?.title || "All Tests";
-  const durationMins = selectedTest?.durationMins || (tests.length === 1 ? tests[0]?.durationMins : null) || null;
-  const testDate = selectedTest?.startsAt || selectedTest?.endsAt || (tests.length === 1 ? tests[0]?.startsAt : null) || null;
-
-  const studentWhere = {
-    collegeId,
-    ...(departmentId ? { departmentId } : {}),
-    ...studentLifecycleWhere,
-    ...(year ? { year } : {}),
-    ...(batchId ? { OR: [{ batchId }, { batchIds: { in: [batchId] } }] } : {}),
-  };
-
-  const students = await db.student.findMany({
-    where: studentWhere,
-    include: {
-      batch: { select: { name: true, year: true, academicYear: true } },
-    },
-  });
+/**
+ * Pure aggregator: turns already-fetched students + submissions into the full
+ * "Institution Assessment Report" payload. Shared by the admin and super-admin
+ * report builders so both PDFs contain identical analytics. Does no I/O.
+ */
+const aggregateInstitutionReport = ({ meta, students = [], submissions = [], incompleteSubmissions = [], departmentNameById = new Map() }) => {
   const totalStudents = students.length;
   const studentById = new Map(students.map((student) => [String(student.id), student]));
+  const fallbackDeptName = meta?.departmentName || "-";
 
-  const meta = {
-    departmentName: departmentId ? departmentNameById.get(departmentId) || admin?.department?.name || "-" : "All Departments",
-    collegeName: admin?.college?.name || "-",
-    testTitle,
-    subject: selectedTest?.subject || (tests.length === 1 ? tests[0]?.subject : "") || "Placement Assessment",
-    semester: resolveSemester(filters),
-    academicYear: resolveAcademicYear({ filters, batch: scopedBatch }),
-    logoUrl: resolveLogoUrl(filters),
-    hasSelectedTest: Boolean(testId),
-    reportScope: buildReportScopeMetadata(filters),
-    reportId: buildReportId(job),
-    generatedBy: "Analytics Edify LMS",
-    durationMins,
-    testDate,
-    departmentsCount: departments.length,
-  };
-
-  const emptyPayload = () => ({
-    meta,
-    kpis: {
-      totalStudents,
-      studentsAppeared: 0,
-      studentsNotAttended: totalStudents,
-      passedCount: 0,
-      failedCount: 0,
-      incompleteCount: 0,
-      averageScore: 0,
-      highestScore: 0,
-      lowestScore: 0,
-      averageTimeMin: 0,
-      passPercentage: 0,
-      placementReadyPercent: 0,
-      cheatingCases: 0,
-    },
-    attendance: { attempted: 0, notAttended: totalStudents, incomplete: 0 },
-    passFail: { passPercent: 0, failPercent: 0, passedCount: 0, failedCount: 0 },
-    subjectPerformance: [],
-    weakSubjects: [],
-    strongSubjects: [],
-    departmentPerformance: [],
-    topPerformers: [],
-    needImprovement: [],
-    notAttendedStudents: students.map((student) => ({
-      name: student.fullName || "Student",
-      registerNumber: getStudentNumber(student),
-      department: departmentNameById.get(String(student.departmentId)) || meta.departmentName,
-      year: resolveStudentYear(student),
-    })),
-    incompleteStudents: [],
-    failedStudents: [],
-    attendedByDepartment: [],
-    malpractice: [],
-    studentPerformance: [],
-    remarks: resolveRemarks(filters),
-  });
-
-  if (testIds.length === 0) {
-    return emptyPayload();
-  }
-
-  const submissionDateFilter = buildSubmissionDateFilter(filters);
-  const submissionUserWhere = {
-    ...studentLifecycleWhere,
-    ...(departmentId ? { departmentId } : {}),
-    ...(year ? { year } : {}),
-    ...(batchId ? { OR: [{ batchId }, { batchIds: { in: [batchId] } }] } : {}),
-  };
-
-  const [submissions, incompleteSubmissions] = await Promise.all([
-    db.submission.findMany({
-      where: {
-        collegeId,
-        testId: { in: testIds },
-        status: { in: REPORTABLE_SUBMISSION_STATUSES },
-        ...(submissionDateFilter ? { submittedAt: submissionDateFilter } : {}),
-        ...(Object.keys(submissionUserWhere).length ? { user: submissionUserWhere } : {}),
-      },
-      include: {
-        user: {
-          select: {
-            id: true,
-            fullName: true,
-            email: true,
-            studentId: true,
-            enrollNumber: true,
-            enrollmentNumber: true,
-            year: true,
-            departmentId: true,
-            batch: { select: { name: true, year: true, academicYear: true } },
-          },
-        },
-        test: { select: { id: true, title: true, subject: true, totalMarks: true } },
-        violations: { select: { type: true } },
-      },
-    }),
-    db.submission.findMany({
-      where: {
-        collegeId,
-        testId: { in: testIds },
-        status: { in: ["IN_PROGRESS"] },
-        ...(Object.keys(submissionUserWhere).length ? { user: submissionUserWhere } : {}),
-      },
-      include: {
-        user: {
-          select: {
-            id: true,
-            fullName: true,
-            studentId: true,
-            enrollNumber: true,
-            enrollmentNumber: true,
-            departmentId: true,
-          },
-        },
-      },
-    }),
-  ]);
-
-  // Keep each student's single best attempt for score-based stats.
   const studentBest = new Map();
   const subjectStudentBest = new Map();
   const subjectStats = new Map();
@@ -325,8 +173,8 @@ const buildDepartmentReportPayload = async ({ db, job }) => {
     const violationCount = toNumber(submission.violationCount || submission.violations?.length || 0);
     if (violationCount > 0) cheatingCases += 1;
 
-    const deptId = String(submission.user?.departmentId || studentById.get(studentKey)?.departmentId || departmentId || "");
-    const deptName = departmentNameById.get(deptId) || meta.departmentName;
+    const deptId = String(submission.user?.departmentId || studentById.get(studentKey)?.departmentId || "");
+    const deptName = departmentNameById.get(deptId) || fallbackDeptName;
 
     const record = {
       studentId: studentKey,
@@ -369,10 +217,8 @@ const buildDepartmentReportPayload = async ({ db, job }) => {
   const lowestScore = scores.length ? round1(Math.min(...scores)) : 0;
   const averageTimeMin = times.length ? Math.round(times.reduce((sum, value) => sum + value, 0) / times.length) : 0;
 
-  const passedRows = bestRows.filter((row) => row.scorePercent >= PASS_THRESHOLD_PERCENT);
-  const failedRows = bestRows.filter((row) => row.scorePercent < PASS_THRESHOLD_PERCENT);
-  const passedCount = passedRows.length;
-  const failedCount = failedRows.length;
+  const passedCount = bestRows.filter((row) => row.scorePercent >= PASS_THRESHOLD_PERCENT).length;
+  const failedCount = bestRows.filter((row) => row.scorePercent < PASS_THRESHOLD_PERCENT).length;
   const passPercentage = studentsAppeared > 0 ? round1((passedCount / studentsAppeared) * 100) : 0;
   const placementReadyCount = bestRows.filter((row) => row.scorePercent >= PLACEMENT_READY_PERCENT).length;
   const placementReadyPercent = studentsAppeared > 0 ? round1((placementReadyCount / studentsAppeared) * 100) : 0;
@@ -384,7 +230,7 @@ const buildDepartmentReportPayload = async ({ db, job }) => {
     .map((submission) => ({
       name: submission.user?.fullName || "Student",
       registerNumber: getStudentNumber(submission.user),
-      department: departmentNameById.get(String(submission.user?.departmentId)) || meta.departmentName,
+      department: departmentNameById.get(String(submission.user?.departmentId)) || fallbackDeptName,
       status: describeIncompleteStatus(submission.status),
     }));
 
@@ -410,19 +256,19 @@ const buildDepartmentReportPayload = async ({ db, job }) => {
     .map((row) => ({ subject: row.subject, averageScore: row.averageScore, status: getSubjectStatus(row.averageScore) }));
   const strongSubjects = subjectPerformance.slice(0, 5);
 
-  // Per-department comparison (one row for a department-scoped admin, many for
-  // a college-wide admin).
+  // Per-department comparison (one row for a department-scoped report, many for
+  // a college-wide scope).
   const departmentAgg = new Map();
   const ensureDept = (id, name) => {
     const key = String(id || "");
     if (!departmentAgg.has(key)) {
-      departmentAgg.set(key, { departmentId: key, departmentName: name || "-", registered: 0, scores: [], times: [], passed: 0, placement: 0 });
+      departmentAgg.set(key, { departmentId: key, departmentName: name || fallbackDeptName, registered: 0, scores: [], times: [], passed: 0, placement: 0 });
     }
     return departmentAgg.get(key);
   };
   students.forEach((student) => {
-    const key = String(student.departmentId || departmentId || "");
-    ensureDept(key, departmentNameById.get(key) || meta.departmentName).registered += 1;
+    const key = String(student.departmentId || "");
+    ensureDept(key, departmentNameById.get(key) || fallbackDeptName).registered += 1;
   });
   bestRows.forEach((row) => {
     const bucket = ensureDept(row.departmentId, row.departmentName);
@@ -515,7 +361,7 @@ const buildDepartmentReportPayload = async ({ db, job }) => {
     .map((student) => ({
       name: student.fullName || "Student",
       registerNumber: getStudentNumber(student),
-      department: departmentNameById.get(String(student.departmentId)) || meta.departmentName,
+      department: departmentNameById.get(String(student.departmentId)) || fallbackDeptName,
       year: resolveStudentYear(student),
     }));
 
@@ -572,10 +418,144 @@ const buildDepartmentReportPayload = async ({ db, job }) => {
     attendedByDepartment,
     malpractice,
     studentPerformance: rankedStudents,
+    remarks: meta?.remarks || "",
+  };
+};
+
+const buildDepartmentReportPayload = async ({ db, job }) => {
+  const filters = job.filters || {};
+  const admin = await db.admin.findUnique({
+    where: { id: job.adminId },
+    include: {
+      department: { select: { id: true, name: true } },
+      college: { select: { id: true, name: true } },
+    },
+  });
+
+  const collegeId = job.collegeId;
+  // Prefer an explicit filter department, then the admin's own department.
+  // A college-wide admin (no department) falls back to a college-wide scope
+  // instead of throwing, so the report renders for every panel.
+  const departmentId = filters.departmentId
+    ? String(filters.departmentId)
+    : admin?.departmentId
+      ? String(admin.departmentId)
+      : null;
+  const batchId = filters.batchId ? String(filters.batchId) : null;
+  const testId = filters.testId ? String(filters.testId) : null;
+  const year = filters.year ? Number(filters.year) : null;
+  const studentLifecycleWhere = buildStudentLifecycleWhere(filters);
+
+  const batchWhere = { collegeId, ...(departmentId ? { departmentId } : {}) };
+  const scopeBatches = await db.batch.findMany({
+    where: batchWhere,
+    select: { id: true, name: true, academicYear: true, departmentId: true },
+  });
+  const scopeBatchIds = scopeBatches.map((batch) => String(batch.id));
+  const scopedBatch = batchId ? scopeBatches.find((batch) => String(batch.id) === batchId) : null;
+
+  if (batchId && !scopedBatch) {
+    throw new Error("Batch not found for this department");
+  }
+
+  const departments = await db.department.findMany({
+    where: { collegeId, ...(departmentId ? { id: departmentId } : {}) },
+    select: { id: true, name: true },
+  });
+  const departmentNameById = new Map(departments.map((dept) => [String(dept.id), dept.name]));
+
+  const tests = await buildTestScope({
+    db,
+    collegeId,
+    departmentId,
+    batchIds: scopeBatchIds,
+    testId,
+  });
+
+  const testIds = tests.map((test) => test.id);
+  const selectedTest = testId ? tests.find((test) => String(test.id) === testId) || tests[0] : null;
+  const testTitle = testId
+    ? selectedTest?.title || "Selected Test"
+    : tests.length > 1
+      ? "All Tests"
+      : tests[0]?.title || "All Tests";
+  const durationMins = selectedTest?.durationMins || (tests.length === 1 ? tests[0]?.durationMins : null) || null;
+  const testDate = selectedTest?.startsAt || selectedTest?.endsAt || (tests.length === 1 ? tests[0]?.startsAt : null) || null;
+
+  const studentWhere = {
+    collegeId,
+    ...(departmentId ? { departmentId } : {}),
+    ...studentLifecycleWhere,
+    ...(year ? { year } : {}),
+    ...(batchId ? { OR: [{ batchId }, { batchIds: { in: [batchId] } }] } : {}),
+  };
+
+  const students = await db.student.findMany({
+    where: studentWhere,
+    include: {
+      batch: { select: { name: true, year: true, academicYear: true } },
+    },
+  });
+
+  const meta = {
+    departmentName: departmentId ? departmentNameById.get(departmentId) || admin?.department?.name || "-" : "All Departments",
+    collegeName: admin?.college?.name || "-",
+    testTitle,
+    subject: selectedTest?.subject || (tests.length === 1 ? tests[0]?.subject : "") || "Placement Assessment",
+    semester: resolveSemester(filters),
+    academicYear: resolveAcademicYear({ filters, batch: scopedBatch }),
+    logoUrl: resolveLogoUrl(filters),
+    hasSelectedTest: Boolean(testId),
+    reportScope: buildReportScopeMetadata(filters),
+    reportId: buildReportId(job),
+    generatedBy: "Analytics Edify LMS",
+    durationMins,
+    testDate,
+    departmentsCount: departments.length,
     remarks: resolveRemarks(filters),
   };
+
+  let submissions = [];
+  let incompleteSubmissions = [];
+  if (testIds.length > 0) {
+    const submissionDateFilter = buildSubmissionDateFilter(filters);
+    const submissionUserWhere = {
+      ...studentLifecycleWhere,
+      ...(departmentId ? { departmentId } : {}),
+      ...(year ? { year } : {}),
+      ...(batchId ? { OR: [{ batchId }, { batchIds: { in: [batchId] } }] } : {}),
+    };
+
+    [submissions, incompleteSubmissions] = await Promise.all([
+      db.submission.findMany({
+        where: {
+          collegeId,
+          testId: { in: testIds },
+          status: { in: REPORTABLE_SUBMISSION_STATUSES },
+          ...(submissionDateFilter ? { submittedAt: submissionDateFilter } : {}),
+          ...(Object.keys(submissionUserWhere).length ? { user: submissionUserWhere } : {}),
+        },
+        include: REPORT_SUBMISSION_INCLUDE,
+      }),
+      db.submission.findMany({
+        where: {
+          collegeId,
+          testId: { in: testIds },
+          status: { in: ["IN_PROGRESS"] },
+          ...(Object.keys(submissionUserWhere).length ? { user: submissionUserWhere } : {}),
+        },
+        include: REPORT_INCOMPLETE_INCLUDE,
+      }),
+    ]);
+  }
+
+  return aggregateInstitutionReport({ meta, students, submissions, incompleteSubmissions, departmentNameById });
 };
 
 module.exports = {
   buildDepartmentReportPayload,
+  aggregateInstitutionReport,
+  buildReportId,
+  REPORT_SUBMISSION_INCLUDE,
+  REPORT_INCOMPLETE_INCLUDE,
 };

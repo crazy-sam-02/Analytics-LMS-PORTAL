@@ -2,6 +2,8 @@ const mongoose = require("mongoose");
 const { asyncHandler } = require("../../utils/http");
 const { normalizeMongoId, withSubmissionScorePercent } = require("../../utils/analytics-aggregation");
 const { REPORTABLE_SUBMISSION_STATUSES } = require("../../services/report-scope.service");
+// Submissions that count toward analytics aggregations (submitted / graded).
+const SUBMITTED_STATUSES = REPORTABLE_SUBMISSION_STATUSES;
 
 const violationWeightStage = () => ({
   $addFields: {
