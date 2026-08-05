@@ -26,17 +26,31 @@ const resolveExecutablePath = () => {
 };
 
 const renderHtmlToPdfBuffer = async (html, options = {}) => {
-  const browser = await puppeteer.launch({
-    headless: true,
-    executablePath: resolveExecutablePath(),
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
+  let browser;
+  try {
+    browser = await puppeteer.launch({
+      headless: true,
+      executablePath: resolveExecutablePath(),
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
+  } catch (error) {
+    // Surface a clear, actionable message instead of a raw spawn error so the
+    // report job's errorMessage tells the operator what is actually missing.
+    throw new Error(
+      `PDF renderer could not start a browser. Ensure Chrome/Chromium is installed or PUPPETEER_EXECUTABLE_PATH is set. (${error.message})`
+    );
+  }
 
   try {
     const page = await browser.newPage();
+    // The report HTML is fully self-contained (no external fonts, scripts, or
+    // images), so we deliberately wait ONLY for the DOM to parse. Waiting for
+    // "networkidle0" here used to hang the whole render whenever an outbound
+    // request (e.g. a CDN) could not settle on a locked-down server, which
+    // surfaced to admins as "error while generating PDF".
     await page.setContent(String(html || ""), {
-      waitUntil: ["domcontentloaded", "networkidle0"],
-      timeout: options.timeout || 45000,
+      waitUntil: "domcontentloaded",
+      timeout: options.timeout || 30000,
     });
 
     await page.emulateMediaType("screen");

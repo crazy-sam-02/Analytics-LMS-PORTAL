@@ -951,7 +951,11 @@ const downloadSuperReport = asyncHandler(async (req, res) => {
     reportData
   );
 
-  const pdfBuffer = await renderHtmlToPdfBuffer(htmlContent);
+  // The report HTML carries its own page padding and branded footer, so keep
+  // the Puppeteer page margins at zero to avoid overflow/blank pages.
+  const pdfBuffer = await renderHtmlToPdfBuffer(htmlContent, {
+    margin: { top: "0mm", right: "0mm", bottom: "0mm", left: "0mm" },
+  });
 
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `attachment; filename="super-admin-report-${reportJobId}.pdf"`);

@@ -1,9 +1,15 @@
 /**
  * Report Formatter Service
- * Converts raw report data into human-readable HTML reports with charts, tables, and metrics
+ * Converts raw report data into a self-contained, print-ready HTML report.
+ *
+ * IMPORTANT: every chart here is rendered as inline SVG/CSS on the server. The
+ * report must NOT reference any external script, font, stylesheet, or image,
+ * because it is rendered to PDF by a headless browser that may run on a
+ * network-isolated host. A single unreachable CDN request would otherwise hang
+ * the whole render and surface to admins as "error while generating PDF".
  */
 
-const escapeHtml = (value) => String(value || "")
+const escapeHtml = (value) => String(value ?? "")
   .replace(/&/g, "&amp;")
   .replace(/</g, "&lt;")
   .replace(/>/g, "&gt;")
@@ -18,7 +24,101 @@ const formatDateValue = (value) => {
 };
 
 const clampPercent = (value) => Math.max(0, Math.min(100, Number(value || 0)));
-const formatPercentCompact = (value) => `${clampPercent(value).toFixed(1)}%`;
+const num = (value) => (Number.isFinite(Number(value)) ? Number(value) : 0);
+const round1 = (value) => Math.round(num(value) * 10) / 10;
+const formatPercentCompact = (value) => `${round1(clampPercent(value)).toFixed(1)}%`;
+
+const PALETTE = {
+  primary: "#2563EB",
+  success: "#16A34A",
+  danger: "#DC2626",
+  amber: "#D97706",
+  violet: "#7C3AED",
+  cyan: "#0891B2",
+  slate: "#64748B",
+  track: "#EEF2F7",
+};
+const SERIES = [PALETTE.primary, PALETTE.success, PALETTE.amber, PALETTE.violet, PALETTE.cyan, PALETTE.danger, "#0EA5E9", "#EA580C"];
+
+// ============ Inline SVG chart primitives ============
+
+const svgDoughnut = (segments = [], { size = 168, thickness = 30, centerTop = "", centerSub = "" } = {}) => {
+  const usable = segments.filter((seg) => num(seg.value) > 0);
+  const total = usable.reduce((sum, seg) => sum + num(seg.value), 0);
+  const r = (size - thickness) / 2;
+  const cx = size / 2;
+  const cy = size / 2;
+  const circumference = 2 * Math.PI * r;
+  let offset = 0;
+  const arcs = total > 0
+    ? usable.map((seg) => {
+        const dash = (num(seg.value) / total) * circumference;
+        const arc = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${seg.color}" stroke-width="${thickness}" stroke-dasharray="${dash.toFixed(2)} ${(circumference - dash).toFixed(2)}" stroke-dashoffset="${(-offset).toFixed(2)}" transform="rotate(-90 ${cx} ${cy})" />`;
+        offset += dash;
+        return arc;
+      }).join("")
+    : "";
+  return `
+    <svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" role="img">
+      <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${PALETTE.track}" stroke-width="${thickness}" />
+      ${arcs}
+      ${centerTop ? `<text x="${cx}" y="${cy - 1}" text-anchor="middle" font-size="21" font-weight="700" fill="#0F172A">${escapeHtml(centerTop)}</text>` : ""}
+      ${centerSub ? `<text x="${cx}" y="${cy + 16}" text-anchor="middle" font-size="9.5" fill="#64748B">${escapeHtml(centerSub)}</text>` : ""}
+    </svg>`;
+};
+
+const chartLegend = (segments = []) => `
+  <div class="legend">
+    ${segments.map((seg) => `
+      <div class="legend-item">
+        <span class="legend-dot" style="background:${seg.color}"></span>
+        <span class="legend-label">${escapeHtml(seg.label)}</span>
+        <span class="legend-value">${escapeHtml(String(seg.value))}</span>
+      </div>`).join("")}
+  </div>`;
+
+// Horizontal labelled bars used for department/subject comparisons.
+const svgBarList = (items = [], { max = 100, unit = "%", color = PALETTE.primary } = {}) => {
+  if (!items.length) return `<p class="muted">No data available.</p>`;
+  const ceiling = Math.max(max, ...items.map((item) => num(item.value))) || 1;
+  return `
+    <div class="bar-list">
+      ${items.map((item, index) => {
+        const width = clampPercent((num(item.value) / ceiling) * 100);
+        const fill = item.color || (color === "series" ? SERIES[index % SERIES.length] : color);
+        return `
+          <div class="bar-row">
+            <div class="bar-label" title="${escapeHtml(item.label)}">${escapeHtml(item.label)}</div>
+            <div class="bar-track"><div class="bar-fill" style="width:${width}%;background:${fill}"></div></div>
+            <div class="bar-value">${escapeHtml(item.display ?? `${round1(item.value)}${unit}`)}</div>
+          </div>`;
+      }).join("")}
+    </div>`;
+};
+
+// Vertical column chart (score-band distribution).
+const svgColumns = (items = [], { width = 460, height = 170, color = PALETTE.primary } = {}) => {
+  if (!items.length) return `<p class="muted">No data available.</p>`;
+  const max = Math.max(1, ...items.map((item) => num(item.value)));
+  const padBottom = 24;
+  const padTop = 14;
+  const gap = 14;
+  const barW = (width - gap * (items.length + 1)) / items.length;
+  const plotH = height - padBottom - padTop;
+  const bars = items.map((item, index) => {
+    const h = (num(item.value) / max) * plotH;
+    const x = gap + index * (barW + gap);
+    const y = padTop + (plotH - h);
+    const fill = item.color || color;
+    return `
+      <rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${Math.max(1, h).toFixed(1)}" rx="3" fill="${fill}" />
+      <text x="${(x + barW / 2).toFixed(1)}" y="${(y - 4).toFixed(1)}" text-anchor="middle" font-size="10" font-weight="700" fill="#0F172A">${escapeHtml(String(item.value))}</text>
+      <text x="${(x + barW / 2).toFixed(1)}" y="${(height - 8).toFixed(1)}" text-anchor="middle" font-size="9" fill="#64748B">${escapeHtml(item.label)}</text>`;
+  }).join("");
+  return `<svg viewBox="0 0 ${width} ${height}" width="100%" role="img"><line x1="0" y1="${height - padBottom}" x2="${width}" y2="${height - padBottom}" stroke="#E2E8F0" />${bars}</svg>`;
+};
+
+// ============ Comprehensive Institution Assessment Report ============
 
 const normalizeAdminReportPayload = (reportData = {}) => {
   if (reportData?.meta) return reportData;
@@ -26,422 +126,467 @@ const normalizeAdminReportPayload = (reportData = {}) => {
   return reportData || {};
 };
 
-const buildDepartmentReportHTML = (reportJob, reportData) => {
+const kpiCard = (value, label, tone = "") => `
+  <div class="kpi-card ${tone}">
+    <div class="kpi-value">${escapeHtml(String(value))}</div>
+    <div class="kpi-label">${escapeHtml(label)}</div>
+  </div>`;
+
+const sheetFooter = (meta, page, total) => `
+  <div class="sheet-footer">
+    <span>${escapeHtml(meta.generatedBy || "Analytics Edify LMS")} · Institution Assessment Report</span>
+    <span>Generated ${escapeHtml(formatDateValue(meta.testDate || new Date()))}</span>
+    <span>Page ${page} of ${total}</span>
+    <span>Confidential</span>
+  </div>`;
+
+const tableOrEmpty = (rows, columns, emptyMessage) => {
+  if (!rows.length) return `<p class="muted">${escapeHtml(emptyMessage)}</p>`;
+  return `
+    <table class="table">
+      <thead><tr>${columns.map((col) => `<th class="${col.align || ""}">${escapeHtml(col.label)}</th>`).join("")}</tr></thead>
+      <tbody>
+        ${rows.map((row) => `<tr>${columns.map((col) => `<td class="${col.align || ""}">${col.render ? col.render(row) : escapeHtml(row[col.key] ?? "-")}</td>`).join("")}</tr>`).join("")}
+      </tbody>
+    </table>`;
+};
+
+const resultPill = (result) => {
+  const pass = String(result).toUpperCase() === "PASS";
+  return `<span class="pill ${pass ? "pill-pass" : "pill-fail"}">${escapeHtml(result)}</span>`;
+};
+
+const buildInstitutionReportHTML = (reportJob, reportData) => {
   const payload = normalizeAdminReportPayload(reportData);
   const meta = payload.meta || {};
   const kpis = payload.kpis || {};
-  const subjectPerformance = Array.isArray(payload.subjectPerformance) ? payload.subjectPerformance : [];
+  const attendance = payload.attendance || {};
   const passFail = payload.passFail || {};
-  const weakSubjects = Array.isArray(payload.weakSubjects) ? payload.weakSubjects : [];
-  const remarks = payload.remarks || "";
-  const studentPerformance = Array.isArray(payload.studentPerformance)
+
+  const studentPerformance = Array.isArray(payload.studentPerformance) && payload.studentPerformance.length
     ? payload.studentPerformance
-    : Array.isArray(payload.scoreboard)
-      ? payload.scoreboard
-      : [];
-  const canRenderStudentPerformance = Boolean(
-    meta.hasSelectedTest &&
-    (reportJob?.adminId || reportJob?.initiatedById || reportJob?.role === "ADMIN" || reportJob?.role === "SUPER_ADMIN")
-  );
+    : Array.isArray(payload.scoreboard) ? payload.scoreboard : [];
 
-  const headerLogo = meta.logoUrl
-    ? `<div class="logo"><img src="${escapeHtml(meta.logoUrl)}" alt="College logo" /></div>`
-    : "";
+  const topPerformers = (Array.isArray(payload.topPerformers) && payload.topPerformers.length
+    ? payload.topPerformers
+    : studentPerformance).slice(0, 20);
+  const needImprovement = Array.isArray(payload.needImprovement) ? payload.needImprovement : [];
+  const notAttendedStudents = Array.isArray(payload.notAttendedStudents) ? payload.notAttendedStudents : [];
+  const incompleteStudents = Array.isArray(payload.incompleteStudents) ? payload.incompleteStudents : [];
+  const failedStudents = Array.isArray(payload.failedStudents) ? payload.failedStudents : [];
+  const attendedByDepartment = Array.isArray(payload.attendedByDepartment) ? payload.attendedByDepartment : [];
+  const departmentPerformance = Array.isArray(payload.departmentPerformance) ? payload.departmentPerformance : [];
+  const subjectPerformance = Array.isArray(payload.subjectPerformance) ? payload.subjectPerformance : [];
+  const weakSubjects = Array.isArray(payload.weakSubjects) ? payload.weakSubjects : [];
+  const strongSubjects = Array.isArray(payload.strongSubjects) ? payload.strongSubjects.slice(0, 5) : subjectPerformance.slice(0, 5);
+  const malpractice = Array.isArray(payload.malpractice) ? payload.malpractice : [];
 
-  const renderSubjectBars = subjectPerformance.length > 0
-    ? subjectPerformance
-        .map((row) => `
-          <div class="bar-row">
-            <div class="bar-label">${escapeHtml(row.subject)}</div>
-            <div class="bar-track">
-              <div class="bar-fill" style="width: ${clampPercent(row.averageScore)}%"></div>
-            </div>
-            <div class="bar-value">${formatPercentCompact(row.averageScore)}</div>
-          </div>
-        `)
-        .join("")
-    : `<p class="muted">No subject performance data available.</p>`;
+  const registered = num(kpis.totalStudents);
+  const attempted = num(kpis.studentsAppeared);
+  const notAttended = num(kpis.studentsNotAttended != null ? kpis.studentsNotAttended : attendance.notAttended);
+  const passed = num(kpis.passedCount != null ? kpis.passedCount : passFail.passedCount);
+  const failed = num(kpis.failedCount != null ? kpis.failedCount : passFail.failedCount);
+  const incomplete = num(kpis.incompleteCount != null ? kpis.incompleteCount : attendance.incomplete);
 
-  const renderWeakSubjects = weakSubjects.length > 0
-    ? weakSubjects
-        .map((row) => {
-          const statusClass = row.status === "Good" ? "badge-good" : row.status === "Moderate" ? "badge-moderate" : "badge-attention";
-          return `
-            <tr>
-              <td>${escapeHtml(row.subject)}</td>
-              <td class="text-right">${formatPercentCompact(row.averageScore)}</td>
-              <td><span class="status-badge ${statusClass}">${escapeHtml(row.status)}</span></td>
-            </tr>
-          `;
-        })
-        .join("")
-    : `<tr><td colspan="3" class="muted">No subject data available.</td></tr>`;
+  // Score-band distribution derived from the ranked list.
+  const bands = [
+    { label: "0-20", min: 0, max: 20 },
+    { label: "21-40", min: 20, max: 40 },
+    { label: "41-60", min: 40, max: 60 },
+    { label: "61-80", min: 60, max: 80 },
+    { label: "81-100", min: 80, max: 100 },
+  ];
+  const distribution = bands.map((band, index) => ({
+    label: band.label,
+    value: studentPerformance.filter((row) => {
+      const score = num(row.scorePercent ?? row.score ?? row.avgScore);
+      return index === 0 ? score >= band.min && score <= band.max : score > band.min && score <= band.max;
+    }).length,
+    color: SERIES[index % SERIES.length],
+  }));
 
-  const renderStudentPerformanceRows = studentPerformance.length > 0
-    ? studentPerformance
-        .map((row) => `
-          <tr>
-            <td class="rank-cell">#${Number(row.rank || 0) || "-"}</td>
-            <td>${escapeHtml(row.name || row.studentName || "-")}</td>
-            <td>${escapeHtml(row.email || "-")}</td>
-            <td>${escapeHtml(row.year || "-")}</td>
-            <td>${escapeHtml(row.registerNumber || row.rollNo || row.studentId || "-")}</td>
-            <td class="text-right strong">${formatPercentCompact(row.scorePercent ?? row.score ?? row.avgScore)}</td>
-          </tr>
-        `)
-        .join("")
-    : `<tr><td colspan="6" class="muted">No students have submitted this test yet.</td></tr>`;
+  const attendanceSegments = [
+    { label: "Attempted", value: attempted, color: PALETTE.primary },
+    { label: "Not Attended", value: notAttended, color: PALETTE.slate },
+    { label: "Incomplete", value: incomplete, color: PALETTE.amber },
+  ];
+  const passFailSegments = [
+    { label: "Pass", value: passed, color: PALETTE.success },
+    { label: "Fail", value: failed, color: PALETTE.danger },
+  ];
 
-  const passPercent = clampPercent(passFail.passPercent);
-  const failPercent = clampPercent(passFail.failPercent);
+  const infoRows = [
+    ["Test Name", meta.testTitle || "-"],
+    ["Subject", meta.subject || "-"],
+    ["Date", formatDateValue(meta.testDate || reportJob.generatedAt)],
+    ["Duration", meta.durationMins ? `${meta.durationMins} Minutes` : "-"],
+    ["Departments", String(meta.departmentsCount ?? departmentPerformance.length ?? "-")],
+    ["Generated By", meta.generatedBy || "Analytics Edify LMS"],
+    ["Report ID", meta.reportId || "-"],
+  ];
 
-  return `
-    <!doctype html>
-    <html lang="en">
-      <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>Department Academic Report</title>
-        <style>
-          :root {
-            --primary: #2563EB;
-            --success: #16A34A;
-            --danger: #DC2626;
-            --bg: #F8FAFC;
-            --card: #FFFFFF;
-            --text: #0F172A;
-            --muted: #64748B;
-            --border: #E2E8F0;
-          }
-          * { box-sizing: border-box; }
-          body {
-            margin: 0;
-            background: var(--bg);
-            color: var(--text);
-            font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-            font-size: 13px;
-          }
-          .page {
-            padding: 18px;
-          }
-          .header {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 16px;
-            align-items: center;
-            justify-content: space-between;
-            background: var(--card);
-            border-radius: 16px;
-            padding: 16px;
-            box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
-          }
-          .header-title h1 {
-            margin: 0 0 4px 0;
-            font-size: 22px;
-            font-weight: 700;
-          }
-          .header-title p {
-            margin: 0;
-            color: var(--muted);
-            font-size: 13px;
-          }
-          .logo img {
-            max-height: 54px;
-            max-width: 120px;
-            object-fit: contain;
-          }
-          .meta-grid {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 6px 16px;
-            font-size: 12px;
-            color: var(--muted);
-          }
-          .meta-grid span {
-            color: var(--text);
-            font-weight: 600;
-          }
-          .section {
-            margin-top: 16px;
-          }
-          .section-title {
-            margin: 0 0 10px 0;
-            font-size: 14px;
-            font-weight: 700;
-          }
-          .kpi-grid {
-            display: grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
-            gap: 12px;
-          }
-          .kpi-card {
-            background: var(--card);
-            border-radius: 14px;
-            padding: 12px 14px;
-            box-shadow: 0 8px 18px rgba(15, 23, 42, 0.06);
-          }
-          .kpi-value {
-            font-size: 20px;
-            font-weight: 700;
-          }
-          .kpi-label {
-            margin-top: 4px;
-            font-size: 11px;
-            color: var(--muted);
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-          }
-          .card {
-            background: var(--card);
-            border-radius: 14px;
-            padding: 14px;
-            box-shadow: 0 8px 18px rgba(15, 23, 42, 0.06);
-          }
-          .bar-row {
-            display: grid;
-            grid-template-columns: 120px 1fr 60px;
-            gap: 10px;
-            align-items: center;
-            margin-bottom: 8px;
-          }
-          .bar-label {
-            font-weight: 600;
-            font-size: 12px;
-          }
-          .bar-track {
-            height: 10px;
-            background: #E2E8F0;
-            border-radius: 999px;
-            overflow: hidden;
-          }
-          .bar-fill {
-            height: 100%;
-            background: var(--primary);
-          }
-          .bar-value {
-            text-align: right;
-            font-weight: 600;
-            color: var(--primary);
-          }
-          .pass-fail {
-            display: grid;
-            grid-template-columns: 1fr;
-            gap: 10px;
-          }
-          .progress-track {
-            background: #E2E8F0;
-            border-radius: 999px;
-            overflow: hidden;
-            height: 12px;
-          }
-          .progress-fill {
-            height: 100%;
-            background: var(--success);
-          }
-          .progress-meta {
-            display: flex;
-            justify-content: space-between;
-            font-size: 12px;
-            color: var(--muted);
-          }
-          .table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 12px;
-          }
-          .table th,
-          .table td {
-            padding: 8px 6px;
-            border-bottom: 1px solid var(--border);
-            text-align: left;
-          }
-          .table th {
-            color: var(--muted);
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-            font-size: 10px;
-          }
-          .text-right { text-align: right; }
-          .strong { font-weight: 700; }
-          .rank-cell { white-space: nowrap; font-weight: 700; color: var(--primary); }
-          .status-badge {
-            display: inline-flex;
-            padding: 2px 8px;
-            border-radius: 999px;
-            font-size: 11px;
-            font-weight: 600;
-          }
-          .badge-good { background: rgba(22, 163, 74, 0.12); color: var(--success); }
-          .badge-moderate { background: rgba(37, 99, 235, 0.12); color: var(--primary); }
-          .badge-attention { background: rgba(220, 38, 38, 0.12); color: var(--danger); }
-          .remarks {
-            min-height: 60px;
-            color: var(--muted);
-            white-space: pre-wrap;
-          }
-          .muted { color: var(--muted); font-size: 12px; }
-          .final-page {
-            break-before: page;
-            page-break-before: always;
-          }
-          .performance-table {
-            table-layout: fixed;
-            font-size: 11px;
-          }
-          .performance-table th:nth-child(1),
-          .performance-table td:nth-child(1) { width: 9%; }
-          .performance-table th:nth-child(2),
-          .performance-table td:nth-child(2) { width: 22%; }
-          .performance-table th:nth-child(3),
-          .performance-table td:nth-child(3) { width: 27%; word-break: break-word; }
-          .performance-table th:nth-child(4),
-          .performance-table td:nth-child(4) { width: 10%; }
-          .performance-table th:nth-child(5),
-          .performance-table td:nth-child(5) { width: 17%; }
-          .performance-table th:nth-child(6),
-          .performance-table td:nth-child(6) { width: 15%; }
-          thead { display: table-header-group; }
-          tr { break-inside: avoid; page-break-inside: avoid; }
-          @media (max-width: 720px) {
-            .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-            .bar-row { grid-template-columns: 1fr; align-items: flex-start; }
-            .bar-value { text-align: left; }
-          }
-        </style>
-      </head>
-      <body>
-        <div class="page">
-          <section class="header">
-            <div class="header-title">
-              <h1>Department Academic Report</h1>
-              <p>${escapeHtml(meta.departmentName || "Department")} Department</p>
-            </div>
-            ${headerLogo}
-            <div class="meta-grid">
-              <div>Test: <span>${escapeHtml(meta.testTitle || "-")}</span></div>
-              <div>Semester: <span>${escapeHtml(meta.semester || "-")}</span></div>
-              <div>Academic Year: <span>${escapeHtml(meta.academicYear || "-")}</span></div>
-              <div>Generated: <span>${formatDateValue(reportJob.generatedAt)}</span></div>
-            </div>
-          </section>
+  const TOTAL_PAGES = 7;
 
-          <section class="section">
-            <h2 class="section-title">KPI Summary</h2>
-            <div class="kpi-grid">
-              <div class="kpi-card">
-                <div class="kpi-value">${Number(kpis.totalStudents || 0)}</div>
-                <div class="kpi-label">Total Students</div>
-              </div>
-              <div class="kpi-card">
-                <div class="kpi-value">${Number(kpis.studentsAppeared || 0)}</div>
-                <div class="kpi-label">Students Appeared</div>
-              </div>
-              <div class="kpi-card">
-                <div class="kpi-value">${Number(kpis.studentsNotAttended || 0)}</div>
-                <div class="kpi-label">Students Not Attended</div>
-              </div>
-              <div class="kpi-card">
-                <div class="kpi-value">${formatPercentCompact(kpis.averageScore)}</div>
-                <div class="kpi-label">Average Score</div>
-              </div>
-            </div>
-          </section>
-
-          <section class="section">
-            <h2 class="section-title">Subject Wise Performance</h2>
-            <div class="card">
-              ${renderSubjectBars}
-            </div>
-          </section>
-
-          <section class="section">
-            <h2 class="section-title">Pass vs Fail Summary</h2>
-            <div class="card pass-fail">
-              <div class="progress-meta">
-                <span>Pass: ${formatPercentCompact(passPercent)} (${Number(passFail.passedCount || 0)})</span>
-                <span>Fail: ${formatPercentCompact(failPercent)} (${Number(passFail.failedCount || 0)})</span>
-              </div>
-              <div class="progress-track">
-                <div class="progress-fill" style="width: ${passPercent}%"></div>
-              </div>
-            </div>
-          </section>
-
-          <section class="section">
-            <h2 class="section-title">Weak Subject Analysis</h2>
-            <div class="card">
-              <table class="table">
-                <thead>
-                  <tr>
-                    <th>Subject</th>
-                    <th class="text-right">Average Score</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${renderWeakSubjects}
-                </tbody>
-              </table>
-            </div>
-          </section>
-
-          <section class="section">
-            <h2 class="section-title">Faculty Remarks</h2>
-            <div class="card remarks">${remarks ? escapeHtml(remarks) : "Add optional remarks for faculty review."}</div>
-          </section>
-
-          ${canRenderStudentPerformance ? `
-            <section class="section final-page">
-              <h2 class="section-title">Student Performance</h2>
-              <div class="card">
-                <table class="table performance-table">
-                  <thead>
-                    <tr>
-                      <th>Rank</th>
-                      <th>Student Name</th>
-                      <th>Email</th>
-                      <th>Year</th>
-                      <th>Register No</th>
-                      <th class="text-right">Score</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    ${renderStudentPerformanceRows}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-          ` : ""}
+  // ---- Page 1: Executive summary ----
+  const page1 = `
+    <section class="sheet">
+      <header class="brand">
+        <div>
+          <h1>Institution Assessment Report</h1>
+          <p class="brand-sub">${escapeHtml(meta.generatedBy || "Analytics Edify LMS")}${meta.collegeName && meta.collegeName !== "-" ? ` · ${escapeHtml(meta.collegeName)}` : ""}</p>
         </div>
-      </body>
-    </html>
-  `;
+        ${meta.logoUrl ? `<img class="brand-logo" src="${escapeHtml(meta.logoUrl)}" alt="Logo" />` : `<div class="brand-badge">AE</div>`}
+      </header>
+
+      <h2 class="section-title">Test Information</h2>
+      <table class="info-table">
+        <tbody>${infoRows.map(([field, value]) => `<tr><th>${escapeHtml(field)}</th><td>${escapeHtml(value)}</td></tr>`).join("")}</tbody>
+      </table>
+
+      <h2 class="section-title">Key Metrics</h2>
+      <div class="kpi-grid">
+        ${kpiCard(registered, "Registered Students")}
+        ${kpiCard(attempted, "Attempted", "tone-primary")}
+        ${kpiCard(notAttended, "Not Attended", "tone-slate")}
+        ${kpiCard(passed, "Pass", "tone-success")}
+        ${kpiCard(failed, "Fail", "tone-danger")}
+        ${kpiCard(incomplete, "Incomplete / Skipped", "tone-amber")}
+        ${kpiCard(formatPercentCompact(kpis.averageScore), "Average Score")}
+        ${kpiCard(`${round1(kpis.highestScore ?? 0)}%`, "Highest Score", "tone-success")}
+        ${kpiCard(`${round1(kpis.lowestScore ?? 0)}%`, "Lowest Score", "tone-danger")}
+        ${kpiCard(`${num(kpis.averageTimeMin)} min`, "Average Time")}
+        ${kpiCard(formatPercentCompact(kpis.placementReadyPercent), "Placement Ready", "tone-primary")}
+        ${kpiCard(num(kpis.cheatingCases), "Cheating Cases", num(kpis.cheatingCases) > 0 ? "tone-danger" : "")}
+      </div>
+
+      <div class="chart-row">
+        <div class="chart-card">
+          <h3 class="chart-title">Attendance</h3>
+          <div class="chart-body">
+            ${svgDoughnut(attendanceSegments, { centerTop: String(registered), centerSub: "registered" })}
+            ${chartLegend(attendanceSegments)}
+          </div>
+        </div>
+        <div class="chart-card">
+          <h3 class="chart-title">Pass vs Fail</h3>
+          <div class="chart-body">
+            ${svgDoughnut(passFailSegments, { centerTop: formatPercentCompact(passFail.passPercent), centerSub: "pass rate" })}
+            ${chartLegend(passFailSegments)}
+          </div>
+        </div>
+      </div>
+
+      <div class="chart-card">
+        <h3 class="chart-title">Department Comparison — Average Score</h3>
+        ${svgBarList(departmentPerformance.map((dept) => ({ label: dept.departmentName, value: dept.averageScore })), { color: "series" })}
+      </div>
+
+      ${sheetFooter(meta, 1, TOTAL_PAGES)}
+    </section>`;
+
+  // ---- Page 2: Department analytics ----
+  const deptColumns = [
+    { label: "Department", key: "departmentName" },
+    { label: "Reg.", align: "num", render: (row) => num(row.registered) },
+    { label: "Att.", align: "num", render: (row) => num(row.attempted) },
+    { label: "Not Att.", align: "num", render: (row) => num(row.notAttended) },
+    { label: "Pass", align: "num", render: (row) => num(row.passed) },
+    { label: "Fail", align: "num", render: (row) => num(row.failed) },
+    { label: "Avg", align: "num", render: (row) => `${round1(row.averageScore)}%` },
+    { label: "High", align: "num", render: (row) => `${round1(row.highest)}%` },
+  ];
+  const page2 = `
+    <section class="sheet">
+      <h2 class="section-title">Department Analytics</h2>
+      ${tableOrEmpty(departmentPerformance, deptColumns, "No department data available.")}
+
+      <div class="chart-grid-2">
+        <div class="chart-card">
+          <h3 class="chart-title">Department Performance</h3>
+          ${svgBarList(departmentPerformance.map((dept) => ({ label: dept.departmentName, value: dept.averageScore })), { color: "series" })}
+        </div>
+        <div class="chart-card">
+          <h3 class="chart-title">Placement Ready %</h3>
+          ${svgBarList(departmentPerformance.map((dept) => ({ label: dept.departmentName, value: dept.placementReady })), { color: PALETTE.violet })}
+        </div>
+        <div class="chart-card">
+          <h3 class="chart-title">Attendance / Participation %</h3>
+          ${svgBarList(departmentPerformance.map((dept) => ({ label: dept.departmentName, value: dept.participation })), { color: PALETTE.cyan })}
+        </div>
+        <div class="chart-card">
+          <h3 class="chart-title">Pass Rate %</h3>
+          ${svgBarList(departmentPerformance.map((dept) => ({ label: dept.departmentName, value: dept.passRate })), { color: PALETTE.success })}
+        </div>
+      </div>
+
+      <h3 class="chart-title">Department Ranking</h3>
+      ${tableOrEmpty(departmentPerformance, [
+        { label: "Rank", align: "num", render: (row) => `#${num(row.rank)}` },
+        { label: "Department", key: "departmentName" },
+        { label: "Avg Score", align: "num", render: (row) => `${round1(row.averageScore)}%` },
+        { label: "Placement Ready", align: "num", render: (row) => `${round1(row.placementReady)}%` },
+        { label: "Avg Time", align: "num", render: (row) => `${num(row.avgTimeMin)} min` },
+      ], "No ranking data available.")}
+
+      ${sheetFooter(meta, 2, TOTAL_PAGES)}
+    </section>`;
+
+  // ---- Page 3: Student analytics ----
+  const page3 = `
+    <section class="sheet">
+      <h2 class="section-title">Student Analytics — Top Performers</h2>
+      ${tableOrEmpty(topPerformers, [
+        { label: "Rank", align: "num", render: (row) => `#${num(row.rank)}` },
+        { label: "Name", render: (row) => escapeHtml(row.name || row.studentName || "-") },
+        { label: "Reg No", render: (row) => escapeHtml(row.registerNumber || row.rollNo || row.studentId || "-") },
+        { label: "Dept", render: (row) => escapeHtml(row.department || "-") },
+        { label: "Score", align: "num", render: (row) => `${round1(row.scorePercent ?? row.score ?? row.avgScore)}%` },
+        { label: "Accuracy", align: "num", render: (row) => `${round1(row.accuracy ?? row.scorePercent ?? row.score)}%` },
+        { label: "Time", align: "num", render: (row) => `${num(row.timeMin)} min` },
+      ], "No students have submitted this test yet.")}
+
+      <h2 class="section-title">Students Needing Improvement (below 40%)</h2>
+      ${tableOrEmpty(needImprovement, [
+        { label: "Name", render: (row) => escapeHtml(row.name) },
+        { label: "Reg No", render: (row) => escapeHtml(row.registerNumber) },
+        { label: "Dept", render: (row) => escapeHtml(row.department) },
+        { label: "Score", align: "num", render: (row) => `${round1(row.scorePercent)}%` },
+        { label: "Weak Topic", render: (row) => escapeHtml(row.weakSubject) },
+        { label: "Avg Time", align: "num", render: (row) => `${num(row.avgTimeMin)} min` },
+      ], "No students scored below the pass threshold.")}
+
+      <div class="chart-grid-2">
+        <div class="chart-card">
+          <h3 class="chart-title">Score Distribution</h3>
+          ${svgColumns(distribution)}
+        </div>
+        <div class="chart-card">
+          <h3 class="chart-title">Incomplete / Skipped</h3>
+          ${tableOrEmpty(incompleteStudents.slice(0, 12), [
+            { label: "Name", render: (row) => escapeHtml(row.name) },
+            { label: "Reg No", render: (row) => escapeHtml(row.registerNumber) },
+            { label: "Status", render: (row) => escapeHtml(row.status) },
+          ], "No incomplete attempts.")}
+        </div>
+      </div>
+
+      ${sheetFooter(meta, 3, TOTAL_PAGES)}
+    </section>`;
+
+  // ---- Page 4: Subject analytics ----
+  const page4 = `
+    <section class="sheet">
+      <h2 class="section-title">Subject Analytics</h2>
+      ${tableOrEmpty(subjectPerformance, [
+        { label: "Subject", key: "subject" },
+        { label: "Average", align: "num", render: (row) => `${round1(row.averageScore)}%` },
+        { label: "Highest", align: "num", render: (row) => `${round1(row.highest ?? 0)}%` },
+        { label: "Lowest", align: "num", render: (row) => `${round1(row.lowest ?? 0)}%` },
+        { label: "Avg Time", align: "num", render: (row) => `${num(row.avgTimeMin)} min` },
+        { label: "Status", render: (row) => escapeHtml(getSubjectBand(row.averageScore)) },
+      ], "No subject data available.")}
+
+      <div class="chart-grid-2">
+        <div class="chart-card">
+          <h3 class="chart-title">Subject Comparison</h3>
+          ${svgBarList(subjectPerformance.map((row) => ({ label: row.subject, value: row.averageScore })), { color: "series" })}
+        </div>
+        <div class="chart-card">
+          <h3 class="chart-title">Average Time per Subject</h3>
+          ${svgBarList(subjectPerformance.map((row) => ({ label: row.subject, value: row.avgTimeMin, display: `${num(row.avgTimeMin)} min` })), { max: Math.max(1, ...subjectPerformance.map((row) => num(row.avgTimeMin))), unit: " min", color: PALETTE.cyan })}
+        </div>
+      </div>
+
+      <div class="chart-grid-2">
+        <div class="chart-card">
+          <h3 class="chart-title">Strong Topics</h3>
+          ${tableOrEmpty(strongSubjects, [
+            { label: "Subject", key: "subject" },
+            { label: "Average", align: "num", render: (row) => `${round1(row.averageScore)}%` },
+          ], "No data.")}
+        </div>
+        <div class="chart-card">
+          <h3 class="chart-title">Weak Topics</h3>
+          ${tableOrEmpty(weakSubjects.slice(0, 5), [
+            { label: "Subject", key: "subject" },
+            { label: "Average", align: "num", render: (row) => `${round1(row.averageScore)}%` },
+            { label: "Status", render: (row) => escapeHtml(row.status) },
+          ], "No data.")}
+        </div>
+      </div>
+
+      ${sheetFooter(meta, 4, TOTAL_PAGES)}
+    </section>`;
+
+  // ---- Page 5: Failed students + performance table ----
+  const page5 = `
+    <section class="sheet">
+      <h2 class="section-title">Failed Students</h2>
+      ${tableOrEmpty(failedStudents, [
+        { label: "Name", render: (row) => escapeHtml(row.name) },
+        { label: "Reg No", render: (row) => escapeHtml(row.registerNumber) },
+        { label: "Department", render: (row) => escapeHtml(row.department) },
+        { label: "Score", align: "num", render: (row) => `${round1(row.scorePercent)}%` },
+        { label: "Result", render: () => resultPill("FAIL") },
+      ], "No students failed this assessment.")}
+
+      <h2 class="section-title">Complete Performance Sheet</h2>
+      ${tableOrEmpty(studentPerformance, [
+        { label: "Rank", align: "num", render: (row) => `#${num(row.rank)}` },
+        { label: "Name", render: (row) => escapeHtml(row.name || row.studentName || "-") },
+        { label: "Reg No", render: (row) => escapeHtml(row.registerNumber || row.rollNo || row.studentId || "-") },
+        { label: "Dept", render: (row) => escapeHtml(row.department || "-") },
+        { label: "Year", render: (row) => escapeHtml(row.year || "-") },
+        { label: "Score", align: "num", render: (row) => `${round1(row.scorePercent ?? row.score ?? row.avgScore)}%` },
+        { label: "Result", render: (row) => resultPill(num(row.scorePercent ?? row.score ?? row.avgScore) >= 40 ? "PASS" : "FAIL") },
+      ], "No students have submitted this test yet.")}
+
+      ${sheetFooter(meta, 5, TOTAL_PAGES)}
+    </section>`;
+
+  // ---- Page 6: Complete lists + malpractice ----
+  const attendedBlocks = attendedByDepartment.length
+    ? attendedByDepartment.map((group) => `
+        <div class="group-block">
+          <h4 class="group-title">${escapeHtml(group.department)}</h4>
+          ${tableOrEmpty(group.students, [
+            { label: "Name", render: (row) => escapeHtml(row.name) },
+            { label: "Reg No", render: (row) => escapeHtml(row.registerNumber) },
+            { label: "Score", align: "num", render: (row) => `${round1(row.scorePercent)}%` },
+            { label: "Result", render: (row) => resultPill(row.result) },
+          ], "No students.")}
+        </div>`).join("")
+    : `<p class="muted">No attended students in scope.</p>`;
+
+  const page6 = `
+    <section class="sheet">
+      <h2 class="section-title">Attended Students — Grouped by Department</h2>
+      ${attendedBlocks}
+
+      <h2 class="section-title">Not Attended — Grouped by Department</h2>
+      ${tableOrEmpty(notAttendedStudents, [
+        { label: "Name", render: (row) => escapeHtml(row.name) },
+        { label: "Reg No", render: (row) => escapeHtml(row.registerNumber) },
+        { label: "Department", render: (row) => escapeHtml(row.department) },
+        { label: "Year", render: (row) => escapeHtml(row.year || "-") },
+      ], "Every registered student attended.")}
+
+      <h2 class="section-title">Malpractice Cases</h2>
+      ${tableOrEmpty(malpractice, [
+        { label: "Student", render: (row) => escapeHtml(row.name) },
+        { label: "Department", render: (row) => escapeHtml(row.department) },
+        { label: "Violations", render: (row) => escapeHtml(Object.entries(row.byType || {}).map(([type, count]) => `${type.replace(/_/g, " ")} ×${count}`).join(", ") || "-") },
+        { label: "Total", align: "num", render: (row) => num(row.total) },
+      ], "No malpractice cases detected.")}
+
+      ${sheetFooter(meta, 6, TOTAL_PAGES)}
+    </section>`;
+
+  // ---- Page 7: Complete master list, ranked by marks, split by attendance ----
+  const page7 = `
+    <section class="sheet">
+      <h2 class="section-title">Complete Student Test Report — Ranked by Marks</h2>
+
+      <h3 class="chart-title">Attended Students (${studentPerformance.length}) — highest to lowest</h3>
+      ${tableOrEmpty(studentPerformance, [
+        { label: "Rank", align: "num", render: (row) => `#${num(row.rank)}` },
+        { label: "Name", render: (row) => escapeHtml(row.name || row.studentName || "-") },
+        { label: "Reg No", render: (row) => escapeHtml(row.registerNumber || row.rollNo || row.studentId || "-") },
+        { label: "Department", render: (row) => escapeHtml(row.department || "-") },
+        { label: "Year", render: (row) => escapeHtml(row.year || "-") },
+        { label: "Marks / Score", align: "num", render: (row) => `${round1(row.scorePercent ?? row.score ?? row.avgScore)}%` },
+        { label: "Result", render: (row) => resultPill(num(row.scorePercent ?? row.score ?? row.avgScore) >= 40 ? "PASS" : "FAIL") },
+      ], "No students attended this assessment.")}
+
+      <h2 class="section-title">Not Attended Students (${notAttendedStudents.length})</h2>
+      ${tableOrEmpty(notAttendedStudents.map((row, index) => ({ ...row, __sno: index + 1 })), [
+        { label: "S.No", align: "num", render: (row) => escapeHtml(String(row.__sno)) },
+        { label: "Name", render: (row) => escapeHtml(row.name) },
+        { label: "Reg No", render: (row) => escapeHtml(row.registerNumber) },
+        { label: "Department", render: (row) => escapeHtml(row.department) },
+        { label: "Year", render: (row) => escapeHtml(row.year || "-") },
+      ], "Every registered student attended.")}
+
+      ${sheetFooter(meta, 7, TOTAL_PAGES)}
+    </section>`;
+
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Institution Assessment Report</title>${reportStyles()}</head><body>${page1}${page2}${page3}${page4}${page5}${page6}${page7}</body></html>`;
 };
+
+const getSubjectBand = (avg) => {
+  const value = num(avg);
+  if (value < 50) return "Needs Attention";
+  if (value < 70) return "Moderate";
+  return "Good";
+};
+
+const reportStyles = () => `
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #0F172A; background: #fff; font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; font-size: 12px; }
+    .sheet { position: relative; padding: 22px 26px 46px; min-height: 100vh; page-break-after: always; }
+    .sheet:last-child { page-break-after: auto; }
+    .brand { display: flex; align-items: center; justify-content: space-between; border-bottom: 3px solid ${PALETTE.primary}; padding-bottom: 14px; margin-bottom: 18px; }
+    .brand h1 { margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -0.02em; }
+    .brand-sub { margin: 4px 0 0; color: ${PALETTE.slate}; font-size: 12px; font-weight: 600; }
+    .brand-logo { max-height: 52px; max-width: 130px; object-fit: contain; }
+    .brand-badge { width: 52px; height: 52px; border-radius: 14px; background: ${PALETTE.primary}; color: #fff; font-weight: 800; font-size: 20px; display: flex; align-items: center; justify-content: center; }
+    .section-title { font-size: 15px; font-weight: 700; margin: 20px 0 10px; padding-bottom: 6px; border-bottom: 1px solid #E2E8F0; }
+    .info-table { width: 100%; border-collapse: collapse; }
+    .info-table th, .info-table td { text-align: left; padding: 7px 10px; border: 1px solid #E2E8F0; font-size: 12px; }
+    .info-table th { width: 32%; background: #F8FAFC; color: ${PALETTE.slate}; font-weight: 600; }
+    .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+    .kpi-card { border: 1px solid #E2E8F0; border-radius: 12px; padding: 12px 14px; background: #fff; border-left: 3px solid ${PALETTE.primary}; }
+    .kpi-card.tone-primary { border-left-color: ${PALETTE.primary}; }
+    .kpi-card.tone-success { border-left-color: ${PALETTE.success}; }
+    .kpi-card.tone-danger { border-left-color: ${PALETTE.danger}; }
+    .kpi-card.tone-amber { border-left-color: ${PALETTE.amber}; }
+    .kpi-card.tone-slate { border-left-color: ${PALETTE.slate}; }
+    .kpi-value { font-size: 22px; font-weight: 800; line-height: 1.1; }
+    .kpi-label { margin-top: 4px; font-size: 10px; color: ${PALETTE.slate}; text-transform: uppercase; letter-spacing: 0.03em; font-weight: 600; }
+    .chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 16px; }
+    .chart-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 12px; }
+    .chart-card { border: 1px solid #E2E8F0; border-radius: 12px; padding: 14px; margin-top: 12px; break-inside: avoid; }
+    .chart-title { font-size: 12px; font-weight: 700; margin: 0 0 10px; }
+    .chart-body { display: flex; align-items: center; gap: 16px; }
+    .legend { display: flex; flex-direction: column; gap: 6px; flex: 1; }
+    .legend-item { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+    .legend-dot { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+    .legend-label { flex: 1; color: #334155; }
+    .legend-value { font-weight: 700; }
+    .bar-list { display: flex; flex-direction: column; gap: 8px; }
+    .bar-row { display: grid; grid-template-columns: 120px 1fr 54px; gap: 10px; align-items: center; }
+    .bar-label { font-size: 11px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .bar-track { height: 10px; background: ${PALETTE.track}; border-radius: 999px; overflow: hidden; }
+    .bar-fill { height: 100%; border-radius: 999px; }
+    .bar-value { text-align: right; font-size: 11px; font-weight: 700; }
+    .table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 4px; }
+    .table th, .table td { padding: 6px 8px; border-bottom: 1px solid #E2E8F0; text-align: left; }
+    .table th { color: ${PALETTE.slate}; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; font-size: 9.5px; background: #F8FAFC; }
+    .table td.num, .table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+    thead { display: table-header-group; }
+    tr { break-inside: avoid; }
+    .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 10px; font-weight: 700; }
+    .pill-pass { background: rgba(22,163,74,0.12); color: ${PALETTE.success}; }
+    .pill-fail { background: rgba(220,38,38,0.12); color: ${PALETTE.danger}; }
+    .group-block { margin-top: 10px; break-inside: avoid; }
+    .group-title { font-size: 12px; font-weight: 700; margin: 8px 0 4px; color: ${PALETTE.primary}; }
+    .muted { color: ${PALETTE.slate}; font-size: 12px; padding: 8px 0; }
+    .sheet-footer { position: absolute; left: 26px; right: 26px; bottom: 16px; display: flex; justify-content: space-between; gap: 8px; font-size: 9px; color: #94A3B8; border-top: 1px solid #E2E8F0; padding-top: 6px; }
+    @media print { .sheet { min-height: auto; } }
+  </style>`;
+
+// ============ Report type dispatch ============
 
 const generateAdminReportHTML = (reportJob, reportData) => {
   const { type, generatedAt, expiresAt } = reportJob;
   const rows = reportData?.rows || [];
 
-  if (type === "STUDENT_WISE") {
-    return formatStudentWiseReport(rows, generatedAt, expiresAt);
-  }
-
-  if (type === "TEST_WISE") {
-    return formatTestWiseReport(rows, generatedAt, expiresAt);
-  }
-
-  if (type === "DEPARTMENT_WISE") {
-    return buildDepartmentReportHTML(reportJob, reportData);
-  }
-
-  if (type === "BATCH_WISE") {
-    return formatBatchWiseReport(rows, generatedAt, expiresAt);
-  }
-
-  if (type === "COMPREHENSIVE") {
-    return formatComprehensiveReport(reportData, generatedAt, expiresAt);
-  }
+  if (type === "STUDENT_WISE") return formatStudentWiseReport(rows, generatedAt, expiresAt);
+  if (type === "TEST_WISE") return formatTestWiseReport(rows, generatedAt, expiresAt);
+  if (type === "DEPARTMENT_WISE") return buildInstitutionReportHTML(reportJob, reportData);
+  if (type === "BATCH_WISE") return formatBatchWiseReport(rows, generatedAt, expiresAt);
+  if (type === "COMPREHENSIVE") return formatComprehensiveReport(reportData, generatedAt, expiresAt);
 
   return generateBasicHTML("Unknown Report Type", "No formatting available for this report type.");
 };
@@ -450,36 +595,18 @@ const generateSuperAdminReportHTML = (reportJob, reportData) => {
   const { type, generatedAt, expiresAt } = reportJob;
   const rows = reportData?.rows || [];
 
-  if (type === "STUDENT_WISE") {
-    return formatStudentWiseReport(rows, generatedAt, expiresAt, true);
-  }
-
-  if (type === "TEST_WISE") {
-    return formatTestWiseReport(rows, generatedAt, expiresAt, true);
-  }
-
+  if (type === "STUDENT_WISE") return formatStudentWiseReport(rows, generatedAt, expiresAt, true);
+  if (type === "TEST_WISE") return formatTestWiseReport(rows, generatedAt, expiresAt, true);
   if (type === "DEPARTMENT_WISE") {
-    if (reportData?.meta) {
-      return buildDepartmentReportHTML(
-        {
-          ...reportJob,
-          role: "SUPER_ADMIN",
-        },
-        reportData
-      );
-    }
-
+    if (reportData?.meta) return buildInstitutionReportHTML({ ...reportJob, role: "SUPER_ADMIN" }, reportData);
     return formatDepartmentWiseReport(rows, generatedAt, expiresAt, true);
   }
-
-  if (type === "BATCH_WISE") {
-    return formatBatchWiseReport(rows, generatedAt, expiresAt, true);
-  }
+  if (type === "BATCH_WISE") return formatBatchWiseReport(rows, generatedAt, expiresAt, true);
 
   return generateBasicHTML("Unknown Report Type", "No formatting available for this report type.");
 };
 
-// ============ Report Formatters ============
+// ============ Simple list report formatters (self-contained) ============
 
 const formatStudentWiseReport = (rows = [], generatedAt, expiresAt, isGlobal = false) => {
   const safeRows = [...rows]
@@ -487,406 +614,139 @@ const formatStudentWiseReport = (rows = [], generatedAt, expiresAt, isGlobal = f
       ...row,
       testName: row.testName || "-",
       date: row.date || row.submittedAt || null,
-      scorePercent: Number(row.scorePercent ?? row.accuracy ?? row.score ?? 0),
-      percentile: row.percentile == null ? null : Number(row.percentile),
-      timeTaken: Number(row.timeTaken || 0),
-      violationsCount: Number(row.violationsCount || row.violationCount || 0),
+      scorePercent: num(row.scorePercent ?? row.accuracy ?? row.score),
+      percentile: row.percentile == null ? null : num(row.percentile),
+      timeTaken: num(row.timeTaken),
+      violationsCount: num(row.violationsCount || row.violationCount),
       status: row.status || "-",
-      violationEvents: Array.isArray(row.violationEvents) ? row.violationEvents : [],
     }))
     .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
   const totalStudents = safeRows.length;
-  const avgScore = totalStudents > 0 ? (safeRows.reduce((sum, r) => sum + Number(r.scorePercent || 0), 0) / totalStudents).toFixed(2) : 0;
-
-  // Group by student for average scores
+  const avgScore = totalStudents > 0 ? (safeRows.reduce((sum, r) => sum + r.scorePercent, 0) / totalStudents).toFixed(2) : 0;
   const studentMap = new Map();
   safeRows.forEach((row) => {
-    if (!studentMap.has(row.studentId)) {
-      studentMap.set(row.studentId, { studentName: row.studentName, scores: [], count: 0 });
-    }
-    const student = studentMap.get(row.studentId);
-    student.scores.push(Number(row.scorePercent || 0));
-    student.count += 1;
+    if (!studentMap.has(row.studentId)) studentMap.set(row.studentId, { studentName: row.studentName, scores: [] });
+    studentMap.get(row.studentId).scores.push(row.scorePercent);
   });
+  const topPerformers = Array.from(studentMap.values())
+    .map((s) => ({ name: s.studentName, avgScore: (s.scores.reduce((a, b) => a + b, 0) / s.scores.length), submissions: s.scores.length }))
+    .sort((a, b) => b.avgScore - a.avgScore)
+    .slice(0, 10);
+  const distribution = [
+    { label: "0-20", value: safeRows.filter((r) => r.scorePercent <= 20).length, color: SERIES[0] },
+    { label: "21-40", value: safeRows.filter((r) => r.scorePercent > 20 && r.scorePercent <= 40).length, color: SERIES[1] },
+    { label: "41-60", value: safeRows.filter((r) => r.scorePercent > 40 && r.scorePercent <= 60).length, color: SERIES[2] },
+    { label: "61-80", value: safeRows.filter((r) => r.scorePercent > 60 && r.scorePercent <= 80).length, color: SERIES[3] },
+    { label: "81-100", value: safeRows.filter((r) => r.scorePercent > 80).length, color: SERIES[4] },
+  ];
 
-  const studentPerformance = Array.from(studentMap.values()).map((s) => ({
-    name: s.studentName,
-    avgScore: (s.scores.reduce((a, b) => a + b) / s.scores.length).toFixed(2),
-    submissions: s.count,
-  }));
-
-  const topPerformers = studentPerformance.sort((a, b) => b.avgScore - a.avgScore).slice(0, 10);
-  const scoreDistribution = calculateScoreDistribution(safeRows, "scorePercent");
-
-  return `
-    ${generateHTMLHeader("Student-Wise Report" + (isGlobal ? " (Platform)" : ""), generatedAt, expiresAt)}
-    
-    <div class="metrics-grid">
-      <div class="metric-card">
-        <div class="metric-value">${totalStudents}</div>
-        <div class="metric-label">Total Submissions</div>
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Student-Wise Report</title>${reportStyles()}</head><body>
+    <section class="sheet">
+      ${basicHeader("Student-Wise Report" + (isGlobal ? " (Platform)" : ""), generatedAt, expiresAt)}
+      <div class="kpi-grid">
+        ${kpiCard(totalStudents, "Total Submissions")}
+        ${kpiCard(`${avgScore}%`, "Average Score", "tone-primary")}
+        ${kpiCard(safeRows.reduce((sum, row) => sum + row.violationsCount, 0), "Total Violations", "tone-danger")}
+        ${kpiCard(studentMap.size, "Unique Students")}
       </div>
-      <div class="metric-card">
-        <div class="metric-value">${avgScore}%</div>
-        <div class="metric-label">Average Score</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-value">${safeRows.reduce((sum, row) => sum + row.violationsCount, 0)}</div>
-        <div class="metric-label">Total Violations</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-value">${studentMap.size}</div>
-        <div class="metric-label">Unique Students</div>
-      </div>
-    </div>
-
-    <div class="chart-container">
-      <h2>Score Distribution</h2>
-      <canvas id="scoreChart" width="400" height="150"></canvas>
-      <script>
-        const ctx = document.getElementById('scoreChart').getContext('2d');
-        new Chart(ctx, {
-          type: 'bar',
-          data: {
-            labels: ${JSON.stringify(scoreDistribution.labels)},
-            datasets: [{
-              label: 'Number of Students',
-              data: ${JSON.stringify(scoreDistribution.counts)},
-              backgroundColor: 'rgba(59, 130, 246, 0.8)',
-              borderColor: 'rgba(59, 130, 246, 1)',
-              borderWidth: 1
-            }]
-          },
-          options: {
-            responsive: true,
-            maintainAspectRatio: true,
-            plugins: { legend: { display: false } },
-            scales: { y: { beginAtZero: true } }
-          }
-        });
-      </script>
-    </div>
-
-    <div class="section">
-      <h2>Top 10 Performing Students</h2>
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Rank</th>
-            <th>Student Name</th>
-            <th>Average Score</th>
-            <th>Submissions</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${topPerformers.map((p, i) => `
-            <tr>
-              <td>${i + 1}</td>
-              <td>${p.name}</td>
-              <td><strong>${p.avgScore}%</strong></td>
-              <td>${p.submissions}</td>
-            </tr>
-          `).join("")}
-        </tbody>
-      </table>
-    </div>
-
-    <div class="section">
-      <h2>Student Test Timeline (${safeRows.length} records)</h2>
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Date</th>
-            <th>Test Name</th>
-            <th>Score</th>
-            <th>Percentile</th>
-            <th>Pass/Fail</th>
-            <th>Time Taken</th>
-            <th>Violations Count</th>
-            <th>Status</th>
-            <th>First Violation</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${safeRows.slice(0, 100).map((row) => `
-            <tr>
-              <td>${formatDate(row.date)}</td>
-              <td>${row.testName || "-"}</td>
-              <td>${formatPercentValue(row.scorePercent)}</td>
-              <td>${row.percentile == null ? "-" : `${row.percentile.toFixed(1)}%`}</td>
-              <td>${row.scorePercent >= 40 ? "PASS" : "FAIL"}</td>
-              <td>${formatMinutes(row.timeTaken)}</td>
-              <td>${row.violationsCount}</td>
-              <td><span class="badge badge-${(row.status || "").toLowerCase()}">${row.status || "-"}</span></td>
-              <td>${row.violationEvents[0]?.anomalyType || "-"}</td>
-            </tr>
-          `).join("")}
-        </tbody>
-      </table>
-      ${safeRows.length > 100 ? `<p class="text-muted">Showing first 100 of ${safeRows.length} records</p>` : ""}
-    </div>
-
-    ${generateHTMLFooter()}
-  `;
+      <div class="chart-card"><h3 class="chart-title">Score Distribution</h3>${svgColumns(distribution)}</div>
+      <h2 class="section-title">Top Performing Students</h2>
+      ${tableOrEmpty(topPerformers.map((p, i) => ({ ...p, rank: i + 1 })), [
+        { label: "Rank", align: "num", render: (row) => row.rank },
+        { label: "Student", render: (row) => escapeHtml(row.name) },
+        { label: "Avg Score", align: "num", render: (row) => `${row.avgScore.toFixed(2)}%` },
+        { label: "Submissions", align: "num", render: (row) => row.submissions },
+      ], "No submissions found.")}
+      <h2 class="section-title">Test Timeline (${safeRows.length} records)</h2>
+      ${tableOrEmpty(safeRows.slice(0, 100), [
+        { label: "Date", render: (row) => formatDate(row.date) },
+        { label: "Test", render: (row) => escapeHtml(row.testName) },
+        { label: "Score", align: "num", render: (row) => `${row.scorePercent.toFixed(2)}%` },
+        { label: "Result", render: (row) => resultPill(row.scorePercent >= 40 ? "PASS" : "FAIL") },
+        { label: "Time", align: "num", render: (row) => `${Math.round(row.timeTaken / 60)} min` },
+        { label: "Violations", align: "num", render: (row) => row.violationsCount },
+        { label: "Status", render: (row) => escapeHtml(row.status) },
+      ], "No records.")}
+      ${safeRows.length > 100 ? `<p class="muted">Showing first 100 of ${safeRows.length} records.</p>` : ""}
+    </section></body></html>`;
 };
 
 const formatTestWiseReport = (rows = [], generatedAt, expiresAt, isGlobal = false) => {
   const totalTests = rows.length;
-  const totalParticipants = rows.reduce((sum, r) => sum + Number(r.participants || 0), 0);
-  const avgScore = totalTests > 0 ? (rows.reduce((sum, r) => sum + Number(r.avgScore || 0), 0) / totalTests).toFixed(2) : 0;
+  const totalParticipants = rows.reduce((sum, r) => sum + num(r.participants), 0);
+  const avgScore = totalTests > 0 ? (rows.reduce((sum, r) => sum + num(r.avgScore), 0) / totalTests).toFixed(2) : 0;
+  const topTests = [...rows].sort((a, b) => num(b.avgScore) - num(a.avgScore)).slice(0, 12);
 
-  const topTests = [...rows].sort((a, b) => Number(b.avgScore || 0) - Number(a.avgScore || 0)).slice(0, 10);
-  const anomaliesList = rows.filter((r) => r.anomalies && Object.keys(r.anomalies).length > 0);
-
-  return `
-    ${generateHTMLHeader("Test-Wise Report" + (isGlobal ? " (Platform)" : ""), generatedAt, expiresAt)}
-    
-    <div class="metrics-grid">
-      <div class="metric-card">
-        <div class="metric-value">${totalTests}</div>
-        <div class="metric-label">Total Tests</div>
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Test-Wise Report</title>${reportStyles()}</head><body>
+    <section class="sheet">
+      ${basicHeader("Test-Wise Report" + (isGlobal ? " (Platform)" : ""), generatedAt, expiresAt)}
+      <div class="kpi-grid">
+        ${kpiCard(totalTests, "Total Tests")}
+        ${kpiCard(totalParticipants, "Total Participants", "tone-primary")}
+        ${kpiCard(`${avgScore}%`, "Average Score", "tone-success")}
+        ${kpiCard(rows.filter((r) => r.anomalies && Object.keys(r.anomalies).length > 0).length, "Tests with Anomalies", "tone-danger")}
       </div>
-      <div class="metric-card">
-        <div class="metric-value">${totalParticipants}</div>
-        <div class="metric-label">Total Participants</div>
+      <div class="chart-card"><h3 class="chart-title">Top Tests — Average Score</h3>
+        ${svgBarList(topTests.map((t) => ({ label: t.testName || "-", value: num(t.avgScore) })), { color: "series" })}
       </div>
-      <div class="metric-card">
-        <div class="metric-value">${avgScore}%</div>
-        <div class="metric-label">Average Score</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-value">${anomaliesList.length}</div>
-        <div class="metric-label">Tests with Anomalies</div>
-      </div>
-    </div>
-
-    <div class="chart-container">
-      <h2>Test Performance (Top 10)</h2>
-      <canvas id="testChart" width="400" height="200"></canvas>
-      <script>
-        const ctx = document.getElementById('testChart').getContext('2d');
-        new Chart(ctx, {
-          type: 'bar',
-          data: {
-            labels: ${JSON.stringify(topTests.map((t) => t.testName).slice(0, 10))},
-            datasets: [{
-              label: 'Average Score',
-              data: ${JSON.stringify(topTests.map((t) => t.avgScore).slice(0, 10))},
-              backgroundColor: 'rgba(34, 197, 94, 0.8)',
-              borderColor: 'rgba(34, 197, 94, 1)',
-              borderWidth: 1
-            }]
-          },
-          options: {
-            indexAxis: 'y',
-            responsive: true,
-            maintainAspectRatio: true,
-            plugins: { legend: { display: false } },
-            scales: { x: { beginAtZero: true, max: 100 } }
-          }
-        });
-      </script>
-    </div>
-
-    <div class="section">
-      <h2>All Tests (${rows.length} records)</h2>
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Test Name</th>
-            <th>Subject</th>
-            <th>Participants</th>
-            <th>Average Score</th>
-            <th>Average Accuracy</th>
-            <th>Anomalies</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${rows.slice(0, 100).map((row) => {
-            const anomalyCount = row.anomalies ? Object.values(row.anomalies).flat().length : 0;
-            return `
-              <tr>
-                <td>${row.testName || "-"}</td>
-                <td>${row.subject || "-"}</td>
-                <td>${row.participants || 0}</td>
-                <td><strong>${row.avgScore || 0}%</strong></td>
-                <td>${row.avgAccuracy || 0}%</td>
-                <td>${anomalyCount > 0 ? `<span class="badge badge-warning">${anomalyCount} flagged</span>` : "None"}</td>
-              </tr>
-            `;
-          }).join("")}
-        </tbody>
-      </table>
-    </div>
-
-    ${anomaliesList.length > 0 ? `
-      <div class="section">
-        <h2>Anomaly Summary</h2>
-        <div class="alert alert-warning">
-          <strong>${anomaliesList.length} test(s)</strong> have potential integrity issues requiring review.
-        </div>
-        ${anomaliesList.map((test) => `
-          <div class="anomaly-card">
-            <h3>${test.testName}</h3>
-            ${test.anomalies?.unusuallyFastHighScore?.length > 0 ? `
-              <p><strong>Unusually Fast High Scores:</strong> ${test.anomalies.unusuallyFastHighScore.length} cases</p>
-            ` : ""}
-            ${test.anomalies?.highViolationsHighScore?.length > 0 ? `
-              <p><strong>High Violations + High Score:</strong> ${test.anomalies.highViolationsHighScore.length} cases</p>
-            ` : ""}
-            ${test.anomalies?.identicalAnswerPatternPairs?.length > 0 ? `
-              <p><strong>Identical Answer Patterns:</strong> ${test.anomalies.identicalAnswerPatternPairs.length} pairs</p>
-            ` : ""}
-          </div>
-        `).join("")}
-      </div>
-    ` : ""}
-
-    ${generateHTMLFooter()}
-  `;
+      <h2 class="section-title">All Tests (${rows.length})</h2>
+      ${tableOrEmpty(rows.slice(0, 120), [
+        { label: "Test", render: (row) => escapeHtml(row.testName || "-") },
+        { label: "Subject", render: (row) => escapeHtml(row.subject || "-") },
+        { label: "Participants", align: "num", render: (row) => num(row.participants) },
+        { label: "Avg Score", align: "num", render: (row) => `${num(row.avgScore)}%` },
+      ], "No tests found.")}
+    </section></body></html>`;
 };
 
 const formatDepartmentWiseReport = (rows = [], generatedAt, expiresAt, isGlobal = false) => {
   const totalDepts = rows.length;
-  const totalStudents = rows.reduce((sum, r) => sum + Number(r.students || 0), 0);
-  const avgScore = totalDepts > 0 ? (rows.reduce((sum, r) => sum + Number(r.avgScore || 0), 0) / totalDepts).toFixed(2) : 0;
+  const totalStudents = rows.reduce((sum, r) => sum + num(r.students), 0);
+  const avgScore = totalDepts > 0 ? (rows.reduce((sum, r) => sum + num(r.avgScore), 0) / totalDepts).toFixed(2) : 0;
 
-  const topDepts = [...rows].sort((a, b) => Number(b.avgScore || 0) - Number(a.avgScore || 0)).slice(0, 10);
-
-  return `
-    ${generateHTMLHeader("Department-Wise Report" + (isGlobal ? " (Platform)" : ""), generatedAt, expiresAt)}
-    
-    <div class="metrics-grid">
-      <div class="metric-card">
-        <div class="metric-value">${totalDepts}</div>
-        <div class="metric-label">Total Departments</div>
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Department-Wise Report</title>${reportStyles()}</head><body>
+    <section class="sheet">
+      ${basicHeader("Department-Wise Report" + (isGlobal ? " (Platform)" : ""), generatedAt, expiresAt)}
+      <div class="kpi-grid">
+        ${kpiCard(totalDepts, "Total Departments")}
+        ${kpiCard(totalStudents, "Total Students", "tone-primary")}
+        ${kpiCard(`${avgScore}%`, "Average Score", "tone-success")}
+        ${kpiCard(totalDepts ? (totalStudents / totalDepts).toFixed(1) : 0, "Students / Dept")}
       </div>
-      <div class="metric-card">
-        <div class="metric-value">${totalStudents}</div>
-        <div class="metric-label">Total Students</div>
+      <div class="chart-card"><h3 class="chart-title">Department Performance</h3>
+        ${svgBarList(rows.map((d) => ({ label: d.departmentName || "-", value: num(d.avgScore) })), { color: "series" })}
       </div>
-      <div class="metric-card">
-        <div class="metric-value">${avgScore}%</div>
-        <div class="metric-label">Average Score</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-value">${(totalStudents / totalDepts).toFixed(1)}</div>
-        <div class="metric-label">Students per Department</div>
-      </div>
-    </div>
-
-    <div class="chart-container">
-      <h2>Department Performance Comparison</h2>
-      <canvas id="deptChart" width="400" height="200"></canvas>
-      <script>
-        const ctx = document.getElementById('deptChart').getContext('2d');
-        new Chart(ctx, {
-          type: 'radar',
-          data: {
-            labels: ${JSON.stringify(topDepts.map((d) => d.departmentName).slice(0, 8))},
-            datasets: [{
-              label: 'Average Score',
-              data: ${JSON.stringify(topDepts.map((d) => d.avgScore).slice(0, 8))},
-              borderColor: 'rgb(59, 130, 246)',
-              backgroundColor: 'rgba(59, 130, 246, 0.2)',
-              borderWidth: 2,
-              pointRadius: 4
-            }]
-          },
-          options: {
-            responsive: true,
-            maintainAspectRatio: true,
-            scales: { r: { beginAtZero: true, max: 100 } }
-          }
-        });
-      </script>
-    </div>
-
-    <div class="section">
-      <h2>All Departments (${rows.length} records)</h2>
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Department Name</th>
-            <th>College</th>
-            <th>Students</th>
-            <th>Average Score</th>
-            <th>Pass Rate</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${rows.slice(0, 100).map((row) => `
-            <tr>
-              <td>${row.departmentName || "-"}</td>
-              <td>${row.collegeName || "-"}</td>
-              <td>${row.students || 0}</td>
-              <td><strong>${row.avgScore || 0}%</strong></td>
-              <td>${row.passRate || "N/A"}</td>
-            </tr>
-          `).join("")}
-        </tbody>
-      </table>
-    </div>
-
-    ${generateHTMLFooter()}
-  `;
+      <h2 class="section-title">All Departments (${rows.length})</h2>
+      ${tableOrEmpty(rows.slice(0, 120), [
+        { label: "Department", render: (row) => escapeHtml(row.departmentName || "-") },
+        { label: "Students", align: "num", render: (row) => num(row.students) },
+        { label: "Avg Score", align: "num", render: (row) => `${num(row.avgScore)}%` },
+      ], "No departments found.")}
+    </section></body></html>`;
 };
 
 const formatBatchWiseReport = (rows = [], generatedAt, expiresAt, isGlobal = false) => {
   const totalBatches = rows.length;
-  const totalStudents = rows.reduce((sum, r) => sum + Number(r.students || 0), 0);
-  const avgScore = totalBatches > 0 ? (rows.reduce((sum, r) => sum + Number(r.avgScore || 0), 0) / totalBatches).toFixed(2) : 0;
+  const totalStudents = rows.reduce((sum, r) => sum + num(r.students), 0);
+  const avgScore = totalBatches > 0 ? (rows.reduce((sum, r) => sum + num(r.avgScore), 0) / totalBatches).toFixed(2) : 0;
 
-  return `
-    ${generateHTMLHeader("Batch-Wise Report" + (isGlobal ? " (Platform)" : ""), generatedAt, expiresAt)}
-    
-    <div class="metrics-grid">
-      <div class="metric-card">
-        <div class="metric-value">${totalBatches}</div>
-        <div class="metric-label">Total Batches</div>
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Batch-Wise Report</title>${reportStyles()}</head><body>
+    <section class="sheet">
+      ${basicHeader("Batch-Wise Report" + (isGlobal ? " (Platform)" : ""), generatedAt, expiresAt)}
+      <div class="kpi-grid">
+        ${kpiCard(totalBatches, "Total Batches")}
+        ${kpiCard(totalStudents, "Total Students", "tone-primary")}
+        ${kpiCard(`${avgScore}%`, "Average Score", "tone-success")}
+        ${kpiCard(totalBatches ? (totalStudents / totalBatches).toFixed(1) : 0, "Students / Batch")}
       </div>
-      <div class="metric-card">
-        <div class="metric-value">${totalStudents}</div>
-        <div class="metric-label">Total Students</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-value">${avgScore}%</div>
-        <div class="metric-label">Average Score</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-value">${(totalStudents / totalBatches).toFixed(1)}</div>
-        <div class="metric-label">Students per Batch</div>
-      </div>
-    </div>
-
-    <div class="section">
-      <h2>All Batches (${rows.length} records)</h2>
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Batch Name</th>
-            <th>Department</th>
-            <th>College</th>
-            <th>Students</th>
-            <th>Average Score</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${rows.slice(0, 100).map((row) => `
-            <tr>
-              <td>${row.batchName || "-"}</td>
-              <td>${row.departmentName || "-"}</td>
-              <td>${row.collegeName || "-"}</td>
-              <td>${row.students || 0}</td>
-              <td><strong>${row.avgScore || 0}%</strong></td>
-            </tr>
-          `).join("")}
-        </tbody>
-      </table>
-    </div>
-
-    ${generateHTMLFooter()}
-  `;
+      <h2 class="section-title">All Batches (${rows.length})</h2>
+      ${tableOrEmpty(rows.slice(0, 120), [
+        { label: "Batch", render: (row) => escapeHtml(row.batchName || "-") },
+        { label: "Department", render: (row) => escapeHtml(row.departmentName || "-") },
+        { label: "Students", align: "num", render: (row) => num(row.students) },
+        { label: "Avg Score", align: "num", render: (row) => `${num(row.avgScore)}%` },
+      ], "No batches found.")}
+    </section></body></html>`;
 };
 
 const formatComprehensiveReport = (data = {}, generatedAt, expiresAt) => {
@@ -894,340 +754,50 @@ const formatComprehensiveReport = (data = {}, generatedAt, expiresAt) => {
   const tests = data.tests || [];
   const recentSubmissions = data.recentSubmissions || [];
 
-  return `
-    ${generateHTMLHeader("Comprehensive Report", generatedAt, expiresAt)}
-    
-    <div class="metrics-grid">
-      <div class="metric-card">
-        <div class="metric-value">${summary.tests || 0}</div>
-        <div class="metric-label">Total Tests</div>
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Comprehensive Report</title>${reportStyles()}</head><body>
+    <section class="sheet">
+      ${basicHeader("Comprehensive Report", generatedAt, expiresAt)}
+      <div class="kpi-grid">
+        ${kpiCard(num(summary.tests), "Total Tests")}
+        ${kpiCard(num(summary.departments), "Departments", "tone-primary")}
+        ${kpiCard(num(summary.batches), "Batches")}
+        ${kpiCard(num(summary.submissions), "Total Submissions", "tone-success")}
       </div>
-      <div class="metric-card">
-        <div class="metric-value">${summary.departments || 0}</div>
-        <div class="metric-label">Departments</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-value">${summary.batches || 0}</div>
-        <div class="metric-label">Batches</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-value">${summary.submissions || 0}</div>
-        <div class="metric-label">Total Submissions</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-value">${summary.averageScore || 0}%</div>
-        <div class="metric-label">Overall Average Score</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-value">${summary.averageAccuracy || 0}%</div>
-        <div class="metric-label">Overall Accuracy</div>
-      </div>
-    </div>
-
-    <div class="section">
-      <h2>Top Tests (${Math.min(tests.length, 10)})</h2>
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Test Name</th>
-            <th>Participants</th>
-            <th>Average Score</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${tests.slice(0, 10).map((t) => `
-            <tr>
-              <td>${t.testName || "-"}</td>
-              <td>${t.participants || 0}</td>
-              <td><strong>${t.avgScore || 0}%</strong></td>
-            </tr>
-          `).join("")}
-        </tbody>
-      </table>
-    </div>
-
-    <div class="section">
-      <h2>Recent Submissions (${Math.min(recentSubmissions.length, 20)})</h2>
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Student Name</th>
-            <th>Test Name</th>
-            <th>Score</th>
-            <th>Submitted At</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${recentSubmissions.slice(0, 20).map((s) => `
-            <tr>
-              <td>${s.studentName || "-"}</td>
-              <td>${s.testName || "-"}</td>
-              <td><strong>${s.score || 0}</strong></td>
-              <td>${new Date(s.submittedAt).toLocaleString() || "-"}</td>
-            </tr>
-          `).join("")}
-        </tbody>
-      </table>
-    </div>
-
-    ${generateHTMLFooter()}
-  `;
+      <h2 class="section-title">Top Tests</h2>
+      ${tableOrEmpty(tests.slice(0, 12), [
+        { label: "Test", render: (row) => escapeHtml(row.testName || "-") },
+        { label: "Participants", align: "num", render: (row) => num(row.participants) },
+        { label: "Avg Score", align: "num", render: (row) => `${num(row.avgScore)}%` },
+      ], "No tests found.")}
+      <h2 class="section-title">Recent Submissions</h2>
+      ${tableOrEmpty(recentSubmissions.slice(0, 20), [
+        { label: "Student", render: (row) => escapeHtml(row.studentName || "-") },
+        { label: "Test", render: (row) => escapeHtml(row.testName || "-") },
+        { label: "Score", align: "num", render: (row) => num(row.score) },
+        { label: "Submitted", render: (row) => formatDate(row.submittedAt) },
+      ], "No submissions found.")}
+    </section></body></html>`;
 };
 
-// ============ Helper Functions ============
+// ============ Helpers ============
 
-const calculateScoreDistribution = (rows = [], key = "score") => {
-  const ranges = [
-    { label: "0-20", min: 0, max: 20 },
-    { label: "21-40", min: 21, max: 40 },
-    { label: "41-60", min: 41, max: 60 },
-    { label: "61-80", min: 61, max: 80 },
-    { label: "81-100", min: 81, max: 100 },
-  ];
-
-  const counts = ranges.map((range) =>
-    rows.filter((r) => {
-      const score = Number(r?.[key] || 0);
-      return score >= range.min && score <= range.max;
-    }).length
-  );
-
-  return {
-    labels: ranges.map((r) => r.label),
-    counts,
-  };
-};
 const formatDate = (value) => {
   const date = new Date(value || 0);
-  return Number.isFinite(date.getTime()) ? date.toLocaleDateString() : "-";
+  return Number.isFinite(date.getTime()) && value ? date.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "-";
 };
-const formatPercentValue = (value) => `${Number(value || 0).toFixed(2)}%`;
-const formatMinutes = (seconds) => `${Math.round(Number(seconds || 0) / 60)} min`;
 
-const generateHTMLHeader = (title, generatedAt, expiresAt) => `
-  <!DOCTYPE html>
-  <html lang="en">
-  <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>${title}</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
-    <style>
-      * { margin: 0; padding: 0; box-sizing: border-box; }
-      body {
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-        line-height: 1.6;
-        color: #333;
-        background: #f5f5f5;
-      }
-      .container {
-        max-width: 1200px;
-        margin: 0 auto;
-        background: white;
-        padding: 40px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-      }
-      .header {
-        border-bottom: 3px solid #3b82f6;
-        padding-bottom: 20px;
-        margin-bottom: 30px;
-      }
-      .header h1 {
-        font-size: 2.5rem;
-        color: #1f2937;
-        margin-bottom: 10px;
-      }
-      .header-meta {
-        display: flex;
-        justify-content: space-between;
-        gap: 20px;
-        font-size: 0.9rem;
-        color: #666;
-      }
-      .metrics-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-        gap: 20px;
-        margin-bottom: 40px;
-      }
-      .metric-card {
-        background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-        color: white;
-        padding: 25px;
-        border-radius: 10px;
-        text-align: center;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-      }
-      .metric-card:nth-child(2) {
-        background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-      }
-      .metric-card:nth-child(3) {
-        background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
-      }
-      .metric-card:nth-child(4) {
-        background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
-      }
-      .metric-value {
-        font-size: 2.5rem;
-        font-weight: bold;
-        margin-bottom: 10px;
-      }
-      .metric-label {
-        font-size: 0.95rem;
-        opacity: 0.9;
-      }
-      .section {
-        margin-bottom: 40px;
-      }
-      .section h2 {
-        font-size: 1.8rem;
-        color: #1f2937;
-        margin-bottom: 20px;
-        border-bottom: 2px solid #e5e7eb;
-        padding-bottom: 10px;
-      }
-      .chart-container {
-        background: #f9fafb;
-        padding: 25px;
-        border-radius: 10px;
-        margin-bottom: 40px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-      }
-      .chart-container h2 {
-        margin-bottom: 20px;
-      }
-      .data-table {
-        width: 100%;
-        border-collapse: collapse;
-        background: white;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-      }
-      .data-table thead {
-        background: #f3f4f6;
-        border-bottom: 2px solid #e5e7eb;
-      }
-      .data-table th {
-        padding: 15px;
-        text-align: left;
-        font-weight: 600;
-        color: #374151;
-      }
-      .data-table td {
-        padding: 12px 15px;
-        border-bottom: 1px solid #e5e7eb;
-      }
-      .data-table tbody tr:hover {
-        background: #f9fafb;
-      }
-      .badge {
-        display: inline-block;
-        padding: 4px 12px;
-        border-radius: 20px;
-        font-size: 0.85rem;
-        font-weight: 600;
-      }
-      .badge-submitted {
-        background: #d1fae5;
-        color: #065f46;
-      }
-      .badge-auto_submitted {
-        background: #bfdbfe;
-        color: #1e40af;
-      }
-      .badge-pending {
-        background: #fef3c7;
-        color: #92400e;
-      }
-      .badge-warning {
-        background: #fed7aa;
-        color: #92400e;
-      }
-      .alert {
-        padding: 15px 20px;
-        border-radius: 8px;
-        margin-bottom: 20px;
-        border-left: 4px solid #f59e0b;
-        background: #fffbeb;
-        color: #92400e;
-      }
-      .anomaly-card {
-        background: #fef3c7;
-        border-left: 4px solid #f59e0b;
-        padding: 15px;
-        margin-bottom: 15px;
-        border-radius: 6px;
-      }
-      .anomaly-card h3 {
-        color: #92400e;
-        margin-bottom: 10px;
-      }
-      .anomaly-card p {
-        color: #78350f;
-        margin: 5px 0;
-      }
-      .text-muted {
-        color: #999;
-        font-size: 0.9rem;
-        font-style: italic;
-        margin-top: 10px;
-      }
-      .footer {
-        margin-top: 50px;
-        padding-top: 20px;
-        border-top: 2px solid #e5e7eb;
-        text-align: center;
-        color: #999;
-        font-size: 0.9rem;
-      }
-      @media print {
-        body { background: white; }
-        .container { box-shadow: none; }
-        .data-table { page-break-inside: avoid; }
-        .section { page-break-inside: avoid; }
-      }
-    </style>
-  </head>
-  <body>
-    <div class="container">
-      <div class="header">
-        <h1>${title}</h1>
-        <div class="header-meta">
-          <div><strong>Generated:</strong> ${new Date(generatedAt).toLocaleString()}</div>
-          <div><strong>Valid Until:</strong> ${new Date(expiresAt).toLocaleString()}</div>
-        </div>
-      </div>
-`;
-
-const generateHTMLFooter = () => `
-      <div class="footer">
-        <p>This report was automatically generated by the LMS Portal. For questions, contact your administrator.</p>
-        <p style="margin-top: 10px; font-size: 0.85rem;">© 2026 LMS Portal. All rights reserved.</p>
-      </div>
+const basicHeader = (title, generatedAt, expiresAt) => `
+  <header class="brand">
+    <div>
+      <h1>${escapeHtml(title)}</h1>
+      <p class="brand-sub">Analytics Edify LMS · Generated ${escapeHtml(formatDate(generatedAt))}${expiresAt ? ` · Valid until ${escapeHtml(formatDate(expiresAt))}` : ""}</p>
     </div>
-  </body>
-  </html>
-`;
+    <div class="brand-badge">AE</div>
+  </header>`;
 
-const generateBasicHTML = (title, message) => `
-  <!DOCTYPE html>
-  <html>
-  <head>
-    <title>${title}</title>
-    <style>
-      body { font-family: Arial, sans-serif; padding: 40px; }
-      .container { max-width: 800px; margin: 0 auto; }
-      h1 { color: #333; }
-      p { color: #666; }
-    </style>
-  </head>
-  <body>
-    <div class="container">
-      <h1>${title}</h1>
-      <p>${message}</p>
-    </div>
-  </body>
-  </html>
-`;
+const generateBasicHTML = (title, message) => `<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>${escapeHtml(title)}</title>${reportStyles()}</head><body>
+  <section class="sheet">${basicHeader(title, new Date(), null)}<p class="muted">${escapeHtml(message)}</p></section>
+</body></html>`;
 
 module.exports = {
   generateAdminReportHTML,

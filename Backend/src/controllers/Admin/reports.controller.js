@@ -1942,10 +1942,10 @@ const rawReportData = job.filters?.generatedDataRef
     reportData
   );
 
+  // The report HTML renders its own branded per-page footer, so we keep the
+  // Puppeteer margins tight and do not add a second header/footer band.
   const pdfBuffer = await renderHtmlToPdfBuffer(htmlContent, {
-    displayHeaderFooter: true,
-    footerTemplate:
-      '<div style="width:100%;font-size:10px;color:#94a3b8;padding:0 10mm;text-align:right;">Page <span class="pageNumber"></span> of <span class="totalPages"></span></div>',
+    margin: { top: "0mm", right: "0mm", bottom: "0mm", left: "0mm" },
   });
 
   res.setHeader("Content-Type", "application/pdf");
