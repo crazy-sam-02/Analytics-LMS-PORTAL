@@ -21,16 +21,12 @@ const {
   recordLoginFailure,
 } = require("../../services/login-attempt.service");
 const { recordSecurityEvent } = require("../../services/security-audit.service");
+const { buildRefreshCookieOptions } = require("../../utils/refresh-cookie");
 
 const ADMIN_REFRESH_COOKIE = "lms_admin_refresh_token";
 
-const getRefreshCookieOptions = (path = "/api/admin/auth", { keepLoggedIn = false } = {}) => ({
-  httpOnly: true,
-  secure: process.env.NODE_ENV === "production",
-  sameSite: "lax",
-  path,
-  ...(keepLoggedIn ? { maxAge: 1000 * 60 * 60 * 24 * 30 } : {}),
-});
+const getRefreshCookieOptions = (path = "/api/admin/auth", { keepLoggedIn = false } = {}) =>
+  buildRefreshCookieOptions({ path, keepLoggedIn });
 
 const adminLogin = asyncHandler(async (req, res) => {
   const m = await models.init();

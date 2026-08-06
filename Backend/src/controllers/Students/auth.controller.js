@@ -24,6 +24,7 @@ const {
   recordLoginFailure,
 } = require("../../services/login-attempt.service");
 const { recordSecurityEvent } = require("../../services/security-audit.service");
+const { buildRefreshCookieOptions } = require("../../utils/refresh-cookie");
 
 const STUDENT_REFRESH_COOKIE = "student_refresh_token";
 const getEnrollmentDisplay = (user = {}) => user.enrollNumber || user.enrollmentNumber || user.studentId;
@@ -45,13 +46,8 @@ const buildStudentProfilePayload = (user = {}) => ({
   isActive: user.isActive !== false,
 });
 
-const getRefreshCookieOptions = ({ keepLoggedIn = false } = {}) => ({
-  httpOnly: true,
-  secure: process.env.NODE_ENV === "production",
-  sameSite: "lax",
-  path: "/api/auth",
-  ...(keepLoggedIn ? { maxAge: 1000 * 60 * 60 * 24 * 30 } : {}),
-});
+const getRefreshCookieOptions = ({ keepLoggedIn = false } = {}) =>
+  buildRefreshCookieOptions({ path: "/api/auth", keepLoggedIn });
 
 const login = asyncHandler(async (req, res) => {
   if (normalizeRole(req.body?.role) === ROLES.SUPER_ADMIN) {
