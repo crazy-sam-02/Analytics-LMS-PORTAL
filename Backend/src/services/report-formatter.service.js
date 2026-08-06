@@ -669,6 +669,12 @@ const generateSuperAdminReportHTML = (reportJob, reportData) => {
   const { type, generatedAt, expiresAt } = reportJob;
   const rows = reportData?.rows || [];
 
+  // A meta-shaped payload (produced whenever a specific test is selected) renders
+  // the full Institution report regardless of the job's report type.
+  if (reportData?.meta || reportData?.rows?.meta) {
+    return buildInstitutionReportHTML({ ...reportJob, role: "SUPER_ADMIN" }, reportData);
+  }
+
   if (type === "STUDENT_WISE") return formatStudentWiseReport(rows, generatedAt, expiresAt, true);
   if (type === "TEST_WISE") return formatTestWiseReport(rows, generatedAt, expiresAt, true);
   if (type === "DEPARTMENT_WISE") {

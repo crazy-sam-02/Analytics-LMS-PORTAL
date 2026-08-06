@@ -99,36 +99,39 @@ const buildTestWhere = (filters = {}, departmentBatchIds = []) => ({
 const buildDepartmentAcademicPayload = async (db, filters = {}, job = {}) => {
   const studentLifecycleWhere = buildStudentLifecycleWhere(filters);
   const scopedYear = normalizeStudentYear(filters.year);
+
+  // The test identifies its own college, so a super-admin can select just a test
+  // (no college/department) and still get the full single-test report. Fetch the
+  // test first, then derive the college scope from it when not pinned.
+  const test = await db.test.findFirst({
+    where: {
+      id: filters.testId,
+      ...(filters.collegeId ? { collegeId: filters.collegeId } : {}),
+    },
+    select: { id: true, title: true, subject: true, totalMarks: true, durationMins: true, startsAt: true, endsAt: true, collegeId: true },
+  });
+
+  const collegeId = filters.collegeId || test?.collegeId || null;
+  const departmentId = filters.departmentId || null;
   const submissionUserWhere = {
     ...studentLifecycleWhere,
-    ...(filters.departmentId ? { departmentId: filters.departmentId } : {}),
+    ...(departmentId ? { departmentId } : {}),
     ...(scopedYear ? { year: scopedYear } : {}),
   };
 
-  const [college, department, test, students, submissions, incompleteSubmissions] = await Promise.all([
-    db.college.findUnique({
-      where: { id: filters.collegeId },
+  const [college, departments, students, submissions, incompleteSubmissions] = await Promise.all([
+    collegeId ? db.college.findUnique({ where: { id: collegeId }, select: { id: true, name: true } }) : null,
+    // One department when scoped, otherwise every department in the college so the
+    // department comparison charts have real names.
+    db.department.findMany({
+      where: { ...(collegeId ? { collegeId } : {}), ...(departmentId ? { id: departmentId } : {}) },
       select: { id: true, name: true },
-    }),
-    db.department.findFirst({
-      where: {
-        id: filters.departmentId,
-        ...(filters.collegeId ? { collegeId: filters.collegeId } : {}),
-      },
-      select: { id: true, name: true },
-    }),
-    db.test.findFirst({
-      where: {
-        id: filters.testId,
-        ...(filters.collegeId ? { collegeId: filters.collegeId } : {}),
-      },
-      select: { id: true, title: true, subject: true, totalMarks: true, durationMins: true, startsAt: true, endsAt: true },
     }),
     db.student.findMany({
       where: {
-        ...(filters.collegeId ? { collegeId: filters.collegeId } : {}),
+        ...(collegeId ? { collegeId } : {}),
         ...studentLifecycleWhere,
-        ...(filters.departmentId ? { departmentId: filters.departmentId } : {}),
+        ...(departmentId ? { departmentId } : {}),
         ...(scopedYear ? { year: scopedYear } : {}),
       },
       include: {
@@ -137,7 +140,7 @@ const buildDepartmentAcademicPayload = async (db, filters = {}, job = {}) => {
     }),
     db.submission.findMany({
       where: buildSubmittedSubmissionWhere(filters, {
-        ...(filters.collegeId ? { collegeId: filters.collegeId } : {}),
+        ...(collegeId ? { collegeId } : {}),
         ...(filters.testId ? { testId: filters.testId } : {}),
         ...(Object.keys(submissionUserWhere).length ? { user: submissionUserWhere } : {}),
       }),
@@ -145,7 +148,7 @@ const buildDepartmentAcademicPayload = async (db, filters = {}, job = {}) => {
     }),
     db.submission.findMany({
       where: {
-        ...(filters.collegeId ? { collegeId: filters.collegeId } : {}),
+        ...(collegeId ? { collegeId } : {}),
         ...(filters.testId ? { testId: filters.testId } : {}),
         status: { in: ["IN_PROGRESS"] },
         ...(Object.keys(submissionUserWhere).length ? { user: submissionUserWhere } : {}),
@@ -154,11 +157,11 @@ const buildDepartmentAcademicPayload = async (db, filters = {}, job = {}) => {
     }),
   ]);
 
-  const departmentNameById = department ? new Map([[String(department.id), department.name]]) : new Map();
+  const departmentNameById = new Map(departments.map((dept) => [String(dept.id), dept.name]));
   const questionAnalytics = test ? await buildQuestionAnalytics({ db, test, submissions }) : null;
 
   const meta = {
-    departmentName: department?.name || "-",
+    departmentName: departmentId ? departmentNameById.get(departmentId) || "-" : "All Departments",
     collegeName: college?.name || "-",
     testTitle: test?.title || "Selected Test",
     subject: test?.subject || "Placement Assessment",
@@ -170,7 +173,7 @@ const buildDepartmentAcademicPayload = async (db, filters = {}, job = {}) => {
     generatedBy: "Analytics Edify LMS",
     durationMins: test?.durationMins || null,
     testDate: test?.startsAt || test?.endsAt || null,
-    departmentsCount: 1,
+    departmentsCount: departments.length,
     remarks: filters.remarks || "",
   };
 
@@ -208,6 +211,14 @@ if (Queue && redisClient && queueConnection) {
 
 const buildGlobalReportPayload = async (db, job) => {
   const filters = job.filters || {};
+
+  // Selecting a specific test always yields the full single-test Institution
+  // report (scoped to that test's college, optionally a department), regardless
+  // of the chosen report type. Only test-less reports stay platform-wide lists.
+  if (filters.testId) {
+    return buildDepartmentAcademicPayload(db, filters, job);
+  }
+
   const scopedYear = normalizeStudentYear(filters.year);
   const studentLifecycleWhere = buildStudentLifecycleWhere(filters);
   const departmentBatchIds = await getDepartmentBatchIds(db, filters);
