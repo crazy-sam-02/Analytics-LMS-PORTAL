@@ -561,7 +561,14 @@ export default function ReportsPage() {
   // on top of the sortable columns.
   const DETAIL_PAGE_SIZE = 10;
   const detailQueryText = detailSearch.trim().toLowerCase();
+  const attendedStudentRows = sortedStudentRows.filter((row) => toNumber(row.testsTaken) > 0);
   const detailFilteredRows = sortedStudentRows.filter((row) => {
+    // This per-test results table ranks students who actually attempted the
+    // selected test. Non-attendees (testsTaken === 0) carry no rank and a 0%
+    // avg, so including them here renders the whole scope as "no rank / Fail"
+    // — and with a rank-ascending sort they float to the top and bury the real
+    // performers. They are surfaced separately in the AbsentStudentsCard below.
+    if (toNumber(row.testsTaken) === 0) return false;
     if (detailQueryText && !`${row.name} ${row.rollNo} ${row.department} ${row.batch}`.toLowerCase().includes(detailQueryText)) {
       return false;
     }
@@ -1062,9 +1069,9 @@ export default function ReportsPage() {
                     <tr>
                       <td colSpan={6} className="px-4 py-8">
                         <EmptyState
-                          title={sortedStudentRows.length === 0 ? "No submissions yet" : "No students match"}
+                          title={attendedStudentRows.length === 0 ? "No submissions yet" : "No students match"}
                           description={
-                            sortedStudentRows.length === 0
+                            attendedStudentRows.length === 0
                               ? "Student results appear once this test has submissions."
                               : "Adjust the search or result filter to see students."
                           }
