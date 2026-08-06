@@ -9,6 +9,7 @@ const { getSubmissionScorePercent } = require("../utils/score");
 const { REPORTABLE_SUBMISSION_STATUSES, buildStudentLifecycleWhere } = require("./report-scope.service");
 const {
   aggregateInstitutionReport,
+  buildQuestionAnalytics,
   buildReportId,
   REPORT_SUBMISSION_INCLUDE,
   REPORT_INCOMPLETE_INCLUDE,
@@ -154,6 +155,7 @@ const buildDepartmentAcademicPayload = async (db, filters = {}, job = {}) => {
   ]);
 
   const departmentNameById = department ? new Map([[String(department.id), department.name]]) : new Map();
+  const questionAnalytics = test ? await buildQuestionAnalytics({ db, test, submissions }) : null;
 
   const meta = {
     departmentName: department?.name || "-",
@@ -172,7 +174,7 @@ const buildDepartmentAcademicPayload = async (db, filters = {}, job = {}) => {
     remarks: filters.remarks || "",
   };
 
-  return aggregateInstitutionReport({ meta, students, submissions, incompleteSubmissions, departmentNameById });
+  return aggregateInstitutionReport({ meta, students, submissions, incompleteSubmissions, departmentNameById, questionAnalytics });
 };
 
 if (Queue && redisClient && queueConnection) {

@@ -6,6 +6,12 @@ const {
   buildStudentLifecycleWhere,
   buildReportScopeMetadata,
 } = require("./report-scope.service");
+const { computeItemAnalysis } = require("./item-analysis.service");
+const { isQuestionCorrect } = require("./test.service");
+
+// Above this many attempts we skip per-question item analysis in the report to
+// avoid loading an unbounded number of answer rows in the worker.
+const MAX_QUESTION_ANALYTICS_SUBMISSIONS = 8000;
 
 const toNumber = (value) => (Number.isFinite(Number(value)) ? Number(value) : 0);
 
@@ -149,11 +155,84 @@ const buildReportId = (job) => {
 };
 
 /**
+ * Per-question item analysis for a single selected test. Loads the test's
+ * questions and every answer for the scoped submissions, resolves correctness,
+ * and runs classical test-theory item analysis. Returns null when there is no
+ * single test in scope (an "All Tests" report has no per-question view) or the
+ * attempt count is too large to itemise safely.
+ */
+const buildQuestionAnalytics = async ({ db, test, submissions }) => {
+  if (!test?.id || !Array.isArray(submissions) || submissions.length === 0) return null;
+  if (submissions.length > MAX_QUESTION_ANALYTICS_SUBMISSIONS) return null;
+
+  const questions = await db.question.findMany({
+    where: { testId: test.id },
+    select: {
+      id: true, order: true, prompt: true, type: true, options: true,
+      correctOption: true, correctOptions: true, correctBoolean: true, correctText: true, marks: true,
+    },
+  });
+  if (!questions.length) return null;
+
+  const questionById = new Map(questions.map((question) => [String(question.id), question]));
+  const submissionIds = submissions.map((submission) => String(submission.id));
+  const answerRows = await db.answer.findMany({
+    where: { submissionId: { in: submissionIds } },
+    select: {
+      submissionId: true, questionId: true, selectedOption: true, selectedOptions: true,
+      selectedBoolean: true, selectedText: true, answerBoolean: true, answerText: true,
+      isCorrect: true, markedForReview: true, timeSpentSeconds: true,
+    },
+  });
+
+  // Persisted isCorrect can be null on older rows, so resolve it here and keep
+  // computeItemAnalysis pure.
+  const answers = answerRows.map((answer) => {
+    const question = questionById.get(String(answer.questionId));
+    const resolved = typeof answer.isCorrect === "boolean"
+      ? answer.isCorrect
+      : question ? Boolean(isQuestionCorrect(question, answer)) : false;
+    return { ...answer, isCorrect: resolved };
+  });
+
+  const analysisSubmissions = submissions.map((submission) => ({
+    id: String(submission.id),
+    scorePercent: formatScorePercent(submission.score, test.totalMarks || 0),
+  }));
+
+  const { items, summary } = computeItemAnalysis({ questions, submissions: analysisSubmissions, answers });
+
+  return {
+    summary: {
+      totalQuestions: summary.totalQuestions,
+      analysedQuestions: summary.analysedQuestions,
+      flaggedQuestions: summary.flaggedQuestions,
+      averageDifficulty: summary.averageDifficulty,
+      averageDiscrimination: summary.averageDiscrimination,
+    },
+    items: items.map((item) => ({
+      order: item.order,
+      prompt: item.prompt,
+      attempts: item.attempts,
+      correct: item.correct,
+      incorrect: item.incorrect,
+      unanswered: item.unanswered,
+      difficultyLabel: item.difficultyLabel,
+      discrimination: item.discrimination,
+      discriminationLabel: item.discriminationLabel,
+      avgTimeSeconds: item.medianTimeSeconds,
+      topDistractor: item.topDistractor,
+      flagged: item.flagged,
+    })),
+  };
+};
+
+/**
  * Pure aggregator: turns already-fetched students + submissions into the full
  * "Institution Assessment Report" payload. Shared by the admin and super-admin
  * report builders so both PDFs contain identical analytics. Does no I/O.
  */
-const aggregateInstitutionReport = ({ meta, students = [], submissions = [], incompleteSubmissions = [], departmentNameById = new Map() }) => {
+const aggregateInstitutionReport = ({ meta, students = [], submissions = [], incompleteSubmissions = [], departmentNameById = new Map(), questionAnalytics = null }) => {
   const totalStudents = students.length;
   const studentById = new Map(students.map((student) => [String(student.id), student]));
   const fallbackDeptName = meta?.departmentName || "-";
@@ -418,6 +497,7 @@ const aggregateInstitutionReport = ({ meta, students = [], submissions = [], inc
     attendedByDepartment,
     malpractice,
     studentPerformance: rankedStudents,
+    questionAnalytics,
     remarks: meta?.remarks || "",
   };
 };
@@ -549,12 +629,17 @@ const buildDepartmentReportPayload = async ({ db, job }) => {
     ]);
   }
 
-  return aggregateInstitutionReport({ meta, students, submissions, incompleteSubmissions, departmentNameById });
+  // Per-question item analysis only applies to a single selected test.
+  const singleTest = testId ? selectedTest : tests.length === 1 ? tests[0] : null;
+  const questionAnalytics = singleTest ? await buildQuestionAnalytics({ db, test: singleTest, submissions }) : null;
+
+  return aggregateInstitutionReport({ meta, students, submissions, incompleteSubmissions, departmentNameById, questionAnalytics });
 };
 
 module.exports = {
   buildDepartmentReportPayload,
   aggregateInstitutionReport,
+  buildQuestionAnalytics,
   buildReportId,
   REPORT_SUBMISSION_INCLUDE,
   REPORT_INCOMPLETE_INCLUDE,

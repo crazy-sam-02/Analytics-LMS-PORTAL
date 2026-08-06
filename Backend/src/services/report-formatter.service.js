@@ -225,7 +225,14 @@ const buildInstitutionReportHTML = (reportJob, reportData) => {
     ["Report ID", meta.reportId || "-"],
   ];
 
-  const TOTAL_PAGES = 7;
+  // Question Analytics is only meaningful for a single selected test; when it is
+  // present it becomes an extra page and every page after Subject Analytics shifts
+  // by one, so the footer numbering stays correct in both cases.
+  const questionAnalytics = payload.questionAnalytics && Array.isArray(payload.questionAnalytics.items) && payload.questionAnalytics.items.length
+    ? payload.questionAnalytics
+    : null;
+  const qaOffset = questionAnalytics ? 1 : 0;
+  const TOTAL_PAGES = 7 + qaOffset;
 
   // ---- Page 1: Executive summary ----
   const page1 = `
@@ -418,6 +425,63 @@ const buildInstitutionReportHTML = (reportJob, reportData) => {
       ${sheetFooter(meta, 4, TOTAL_PAGES)}
     </section>`;
 
+  // ---- Question Analytics (only when a single test is in scope) ----
+  const qaPct = (n, d) => (num(d) > 0 ? round1((num(n) / num(d)) * 100) : 0);
+  const questionPage = questionAnalytics
+    ? (() => {
+        const qaItems = questionAnalytics.items;
+        const qaSummary = questionAnalytics.summary || {};
+        const difficultyBands = [
+          { label: "Easy", key: "EASY", color: PALETTE.success },
+          { label: "Moderate", key: "MODERATE", color: PALETTE.primary },
+          { label: "Hard", key: "HARD", color: PALETTE.amber },
+          { label: "Very Hard", key: "VERY_HARD", color: PALETTE.danger },
+        ];
+        const difficultyDist = difficultyBands.map((band) => ({
+          label: band.label,
+          value: qaItems.filter((item) => item.difficultyLabel === band.key).length,
+          color: band.color,
+        }));
+        const accuracyCols = qaItems.slice(0, 14).map((item) => ({ label: `Q${num(item.order)}`, value: qaPct(item.correct, item.attempts), color: PALETTE.primary }));
+        return `
+    <section class="sheet">
+      <h2 class="section-title">Question Analytics</h2>
+      <div class="kpi-grid">
+        ${kpiCard(num(qaSummary.totalQuestions), "Questions")}
+        ${kpiCard(`${round1(num(qaSummary.averageDifficulty) * 100)}%`, "Avg Correct", "tone-primary")}
+        ${kpiCard(round1(num(qaSummary.averageDiscrimination)), "Avg Discrimination")}
+        ${kpiCard(num(qaSummary.flaggedQuestions), "Need Revision", num(qaSummary.flaggedQuestions) > 0 ? "tone-danger" : "")}
+      </div>
+
+      <div class="chart-grid-2">
+        <div class="chart-card">
+          <h3 class="chart-title">Difficulty Distribution</h3>
+          ${svgColumns(difficultyDist)}
+        </div>
+        <div class="chart-card">
+          <h3 class="chart-title">Question Accuracy (Correct %)</h3>
+          ${svgColumns(accuracyCols)}
+        </div>
+      </div>
+
+      <h3 class="chart-title">Per-Question Breakdown</h3>
+      ${tableOrEmpty(qaItems, [
+          { label: "Q", align: "num", render: (row) => `Q${num(row.order)}` },
+          { label: "Difficulty", render: (row) => escapeHtml(String(row.difficultyLabel || "-").replace(/_/g, " ")) },
+          { label: "Correct %", align: "num", render: (row) => `${qaPct(row.correct, row.attempts)}%` },
+          { label: "Wrong %", align: "num", render: (row) => `${qaPct(row.incorrect, row.attempts)}%` },
+          { label: "Skipped %", align: "num", render: (row) => `${qaPct(row.unanswered, row.attempts)}%` },
+          { label: "Avg Time", align: "num", render: (row) => `${num(row.avgTimeSeconds)}s` },
+          { label: "Top Wrong", render: (row) => escapeHtml(row.topDistractor || "-") },
+          { label: "Discr.", align: "num", render: (row) => round1(num(row.discrimination)) },
+          { label: "Status", render: (row) => (row.flagged ? `<span class="pill pill-fail">Revise</span>` : `<span class="pill pill-pass">OK</span>`) },
+        ], "No per-question data for this scope.")}
+
+      ${sheetFooter(meta, 5, TOTAL_PAGES)}
+    </section>`;
+      })()
+    : "";
+
   // ---- Page 5: Failed students + performance table ----
   const page5 = `
     <section class="sheet">
@@ -441,7 +505,7 @@ const buildInstitutionReportHTML = (reportJob, reportData) => {
         { label: "Result", render: (row) => resultPill(num(row.scorePercent ?? row.score ?? row.avgScore) >= 40 ? "PASS" : "FAIL") },
       ], "No students have submitted this test yet.")}
 
-      ${sheetFooter(meta, 5, TOTAL_PAGES)}
+      ${sheetFooter(meta, 5 + qaOffset, TOTAL_PAGES)}
     </section>`;
 
   // ---- Page 6: Complete lists + malpractice ----
@@ -479,7 +543,7 @@ const buildInstitutionReportHTML = (reportJob, reportData) => {
         { label: "Total", align: "num", render: (row) => num(row.total) },
       ], "No malpractice cases detected.")}
 
-      ${sheetFooter(meta, 6, TOTAL_PAGES)}
+      ${sheetFooter(meta, 6 + qaOffset, TOTAL_PAGES)}
     </section>`;
 
   // ---- Page 7: Complete master list, ranked by marks, split by attendance ----
@@ -507,10 +571,10 @@ const buildInstitutionReportHTML = (reportJob, reportData) => {
         { label: "Year", render: (row) => escapeHtml(row.year || "-") },
       ], "Every registered student attended.")}
 
-      ${sheetFooter(meta, 7, TOTAL_PAGES)}
+      ${sheetFooter(meta, 7 + qaOffset, TOTAL_PAGES)}
     </section>`;
 
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Institution Assessment Report</title>${reportStyles()}</head><body>${page1}${page2}${page3}${page4}${page5}${page6}${page7}</body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Institution Assessment Report</title>${reportStyles()}</head><body>${page1}${page2}${page3}${page4}${questionPage}${page5}${page6}${page7}</body></html>`;
 };
 
 const getSubjectBand = (avg) => {
