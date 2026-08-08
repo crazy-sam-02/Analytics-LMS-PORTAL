@@ -24,7 +24,7 @@ const paginationQuerySchema = z.object({
   params: z.object({}).optional().default({}),
   query: z.object({
     page: z.coerce.number().int().min(1).default(1),
-    limit: z.coerce.number().int().min(1).max(100).default(20),
+    limit: z.coerce.number().int().min(1).max(200).default(20),
     search: z.string().optional(),
     year: z.coerce.number().int().min(1).max(4).optional(),
     studentScope: z.enum(["current", "passout", "all"]).optional(),
