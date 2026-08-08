@@ -22,6 +22,55 @@ const round1 = (value) => Math.round(toNumber(value) * 10) / 10;
 const normalizeSubject = (value) => String(value || "General").trim() || "General";
 const getStudentNumber = (student = {}) => student.enrollNumber || student.enrollmentNumber || student.studentId || "-";
 
+const normId = (value) => String(value || "").trim();
+const uniqIds = (values = []) => [...new Set((Array.isArray(values) ? values : []).map(normId).filter(Boolean))];
+const getTestBatchIds = (test = {}) =>
+  uniqIds([test.batchId, ...(Array.isArray(test.batchAssignments) ? test.batchAssignments.map((assignment) => assignment.batchId) : [])]);
+const getStudentBatchIds = (student = {}) =>
+  uniqIds([student.batchId, ...(Array.isArray(student.batchIds) ? student.batchIds : [])]);
+const normalizeYearList = (values) =>
+  Array.isArray(values)
+    ? [...new Set(values.map((value) => Number(value)).filter((value) => Number.isInteger(value) && value >= 1 && value <= 4))]
+    : [];
+
+// Mirrors the analytics controller's rule: which students a test actually
+// "registers", honouring its assignment method (everyone / department_wise /
+// batch_wise), assigned years, and legacy (null-method) tests.
+const isStudentAssignedToTest = (student = {}, test = null) => {
+  if (!test?.id) return true;
+
+  const method = String(test.assignmentMethod || "").trim().toLowerCase();
+  const studentDepartmentId = normId(student.departmentId);
+  const studentBatchIds = getStudentBatchIds(student);
+  const testYears = normalizeYearList(test.years);
+
+  if (testYears.length > 0 && !testYears.includes(Number(student.year))) {
+    return false;
+  }
+
+  if (method === "everyone") return true;
+
+  if (method === "department_wise") {
+    const departmentIds = uniqIds([test.departmentId, ...(Array.isArray(test.assignedTo) ? test.assignedTo : [])]);
+    return departmentIds.length > 0 && departmentIds.includes(studentDepartmentId);
+  }
+
+  if (method === "batch_wise") {
+    const batchIds = getTestBatchIds(test);
+    return batchIds.length > 0 && studentBatchIds.some((id) => batchIds.includes(id));
+  }
+
+  // Legacy tests with no assignment method: match by department or batch, else
+  // fall back to visible-to-all.
+  const legacyDepartmentIds = uniqIds([test.departmentId, ...(Array.isArray(test.assignedTo) ? test.assignedTo : [])]);
+  const legacyBatchIds = getTestBatchIds(test);
+  return (
+    (legacyDepartmentIds.length > 0 && legacyDepartmentIds.includes(studentDepartmentId))
+    || (legacyBatchIds.length > 0 && studentBatchIds.some((id) => legacyBatchIds.includes(id)))
+    || (legacyDepartmentIds.length === 0 && legacyBatchIds.length === 0)
+  );
+};
+
 const formatScorePercent = (score, totalMarks) => {
   const safeTotal = toNumber(totalMarks);
   const safeScore = toNumber(score);
@@ -137,7 +186,11 @@ const buildTestScope = async ({ db, collegeId, departmentId, batchIds, testId })
 
   return db.test.findMany({
     where: testWhere,
-    select: { id: true, title: true, subject: true, totalMarks: true, durationMins: true, startsAt: true, endsAt: true },
+    select: {
+      id: true, title: true, subject: true, totalMarks: true, durationMins: true, startsAt: true, endsAt: true,
+      assignmentMethod: true, assignedTo: true, departmentId: true, batchId: true, years: true,
+      batchAssignments: { select: { batchId: true } },
+    },
   });
 };
 
@@ -633,13 +686,19 @@ const buildDepartmentReportPayload = async ({ db, job }) => {
   const singleTest = testId ? selectedTest : tests.length === 1 ? tests[0] : null;
   const questionAnalytics = singleTest ? await buildQuestionAnalytics({ db, test: singleTest, submissions }) : null;
 
-  return aggregateInstitutionReport({ meta, students, submissions, incompleteSubmissions, departmentNameById, questionAnalytics });
+  // A single selected test only "registers" the students actually assigned to it,
+  // so a batch-assigned test counts just that batch — not the whole department —
+  // as registered / not-attended.
+  const scopedStudents = singleTest ? students.filter((student) => isStudentAssignedToTest(student, singleTest)) : students;
+
+  return aggregateInstitutionReport({ meta, students: scopedStudents, submissions, incompleteSubmissions, departmentNameById, questionAnalytics });
 };
 
 module.exports = {
   buildDepartmentReportPayload,
   aggregateInstitutionReport,
   buildQuestionAnalytics,
+  isStudentAssignedToTest,
   buildReportId,
   REPORT_SUBMISSION_INCLUDE,
   REPORT_INCOMPLETE_INCLUDE,

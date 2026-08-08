@@ -10,6 +10,7 @@ const { REPORTABLE_SUBMISSION_STATUSES, buildStudentLifecycleWhere } = require("
 const {
   aggregateInstitutionReport,
   buildQuestionAnalytics,
+  isStudentAssignedToTest,
   buildReportId,
   REPORT_SUBMISSION_INCLUDE,
   REPORT_INCOMPLETE_INCLUDE,
@@ -108,7 +109,11 @@ const buildDepartmentAcademicPayload = async (db, filters = {}, job = {}) => {
       id: filters.testId,
       ...(filters.collegeId ? { collegeId: filters.collegeId } : {}),
     },
-    select: { id: true, title: true, subject: true, totalMarks: true, durationMins: true, startsAt: true, endsAt: true, collegeId: true },
+    select: {
+      id: true, title: true, subject: true, totalMarks: true, durationMins: true, startsAt: true, endsAt: true, collegeId: true,
+      assignmentMethod: true, assignedTo: true, departmentId: true, batchId: true, years: true,
+      batchAssignments: { select: { batchId: true } },
+    },
   });
 
   const collegeId = filters.collegeId || test?.collegeId || null;
@@ -159,6 +164,8 @@ const buildDepartmentAcademicPayload = async (db, filters = {}, job = {}) => {
 
   const departmentNameById = new Map(departments.map((dept) => [String(dept.id), dept.name]));
   const questionAnalytics = test ? await buildQuestionAnalytics({ db, test, submissions }) : null;
+  // A batch-assigned test registers only its batch(es), not the whole college scope.
+  const scopedStudents = test ? students.filter((student) => isStudentAssignedToTest(student, test)) : students;
 
   const meta = {
     departmentName: departmentId ? departmentNameById.get(departmentId) || "-" : "All Departments",
@@ -177,7 +184,7 @@ const buildDepartmentAcademicPayload = async (db, filters = {}, job = {}) => {
     remarks: filters.remarks || "",
   };
 
-  return aggregateInstitutionReport({ meta, students, submissions, incompleteSubmissions, departmentNameById, questionAnalytics });
+  return aggregateInstitutionReport({ meta, students: scopedStudents, submissions, incompleteSubmissions, departmentNameById, questionAnalytics });
 };
 
 if (Queue && redisClient && queueConnection) {
