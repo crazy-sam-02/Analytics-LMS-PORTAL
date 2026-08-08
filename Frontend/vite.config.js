@@ -29,7 +29,13 @@ export default defineConfig({
     },
   },
   build: {
-    cssCodeSplit: true,
+    // Bundle ALL CSS into one hashed stylesheet referenced by index.html.
+    // index.html is served no-store (always fresh) from the current container,
+    // so that stylesheet is always present. Per-route CSS splitting instead let
+    // a stale tab request an old hashed CSS chunk that a deploy had already
+    // deleted -> 404 -> unstyled page for that student. One shared sheet removes
+    // that failure mode entirely.
+    cssCodeSplit: false,
     modulePreload: {
       polyfill: false,
       resolveDependencies(_filename, deps) {

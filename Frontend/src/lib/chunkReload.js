@@ -52,4 +52,24 @@ export const registerChunkReloadHandler = () => {
       reloadOnceForFreshAssets();
     }
   });
+
+  // A failed <link rel="stylesheet"> or <script> (e.g. a hashed asset that a
+  // deploy already deleted) fires an "error" event that does NOT bubble, so the
+  // window-level listeners above never see it. Capture-phase catches it. This is
+  // what recovers a student left on an UNSTYLED page after a deploy.
+  window.addEventListener(
+    "error",
+    (event) => {
+      const target = event.target;
+      if (!target || target === window) {
+        return;
+      }
+      const tag = target.tagName;
+      const url = String(target.href || target.src || "");
+      if ((tag === "LINK" || tag === "SCRIPT") && /\/assets\/.+\.(css|js)(\?|$)/.test(url)) {
+        reloadOnceForFreshAssets();
+      }
+    },
+    true
+  );
 };
