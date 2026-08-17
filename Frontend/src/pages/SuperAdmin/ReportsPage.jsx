@@ -235,9 +235,10 @@ export default function ReportsPage() {
   const [deepDiveView, setDeepDiveView] = useState("performance");
   const [trendGroupBy, setTrendGroupBy] = useState("department");
   const [trendIndexed, setTrendIndexed] = useState(false);
-  // Deep-dive ("view details") student table: search + result filter + pagination.
+  // Deep-dive ("view details") student results table: server-side search + sort +
+  // pagination, matching the College Admin per-test results table.
   const [detailSearch, setDetailSearch] = useState("");
-  const [detailResult, setDetailResult] = useState("all");
+  const [deepDiveSort, setDeepDiveSort] = useState("date");
   const [detailPage, setDetailPage] = useState(1);
   const [sortState, setSortState] = useState(MODE_DEFAULT_SORT[mode]);
   const [error, setError] = useState(null);
@@ -372,6 +373,34 @@ export default function ReportsPage() {
     enabled: hasCollegeSelected && isTestDeepDive && deepDiveView === "integrity",
     placeholderData: (prev) => prev,
     staleTime: 60000,
+  });
+
+  // Per-submission student results for the selected test, scoped to the active
+  // college/department/batch — the same endpoint shape College Admin uses, so the
+  // batch-wise test report is identical across both portals.
+  const testTableQuery = useQuery({
+    queryKey: ["super-report-test-table-v1", collegeId, departmentId, batchId, testId, detailPage, detailSearch.trim(), deepDiveSort, studentYear, studentScope, passoutYear, passoutCohortId],
+    queryFn: () =>
+      superAdminApi.getReportTable(
+        toQueryString({
+          collegeId,
+          departmentId: departmentId || undefined,
+          batchId: batchId || undefined,
+          testId,
+          year: studentYear || undefined,
+          page: detailPage,
+          limit: 10,
+          sortBy: deepDiveSort,
+          sortDir: deepDiveSort === "studentName" ? "asc" : "desc",
+          search: detailSearch.trim() || undefined,
+          studentScope,
+          passoutYear: passoutYear || undefined,
+          passoutCohortId: passoutCohortId || undefined,
+        })
+      ),
+    enabled: hasCollegeSelected && isTestDeepDive && deepDiveView === "performance",
+    placeholderData: (prev) => prev,
+    staleTime: 30000,
   });
 
   const trendsQuery = useQuery({
@@ -561,28 +590,10 @@ export default function ReportsPage() {
   const sortedDepartmentRows = sortRows(departmentRows, sortState);
   const sortedStudentRows = sortRows(studentRows, sortState);
 
-  // Deep-dive ("view details") table: search + pass/fail filter + pagination
-  // on top of the sortable columns.
-  const DETAIL_PAGE_SIZE = 10;
-  const detailQueryText = detailSearch.trim().toLowerCase();
-  const attendedStudentRows = sortedStudentRows.filter((row) => toNumber(row.testsTaken) > 0);
-  const detailFilteredRows = sortedStudentRows.filter((row) => {
-    // This per-test results table ranks students who actually attempted the
-    // selected test. Non-attendees (testsTaken === 0) carry no rank and a 0%
-    // avg, so including them here renders the whole scope as "no rank / Fail"
-    // — and with a rank-ascending sort they float to the top and bury the real
-    // performers. They are surfaced separately in the AbsentStudentsCard below.
-    if (toNumber(row.testsTaken) === 0) return false;
-    if (detailQueryText && !`${row.name} ${row.rollNo} ${row.department} ${row.batch}`.toLowerCase().includes(detailQueryText)) {
-      return false;
-    }
-    if (detailResult === "pass") return clampPercent(row.avgScore) >= 40;
-    if (detailResult === "fail") return clampPercent(row.avgScore) < 40;
-    return true;
-  });
-  const detailTotalPages = Math.max(1, Math.ceil(detailFilteredRows.length / DETAIL_PAGE_SIZE));
-  const detailSafePage = Math.min(detailPage, detailTotalPages);
-  const detailPageRows = detailFilteredRows.slice((detailSafePage - 1) * DETAIL_PAGE_SIZE, detailSafePage * DETAIL_PAGE_SIZE);
+  // Per-test student results table: driven by the /table endpoint (per-submission
+  // rows, server-side search/sort/pagination), matching College Admin.
+  const testTableRows = Array.isArray(testTableQuery.data?.data) ? testTableQuery.data.data : [];
+  const testTablePagination = testTableQuery.data?.pagination || { page: 1, totalPages: 1, total: 0 };
   const sortedAttemptRows = sortRows(attemptRows, sortState);
   const visibleStudentRows = sortedStudentRows.slice(0, studentVisibleLimit);
 
@@ -606,15 +617,15 @@ export default function ReportsPage() {
     setTestsPage(1);
   }, [testsSearch, testsSort, testsStatus, collegeId, departmentId, batchId, studentYear, studentScope, passoutYear, passoutCohortId]);
 
-  // Reset the deep-dive table page when the test, its filters, or the sort change.
+  // Reset the deep-dive table page when the test, its search, or the sort change.
   useEffect(() => {
     setDetailPage(1);
-  }, [testId, detailSearch, detailResult, sortState]);
+  }, [testId, detailSearch, deepDiveSort]);
 
   // A fresh deep dive starts with clean filters and the Performance view.
   useEffect(() => {
     setDetailSearch("");
-    setDetailResult("all");
+    setDeepDiveSort("date");
     setDeepDiveView("performance");
   }, [testId]);
 
@@ -1021,25 +1032,30 @@ export default function ReportsPage() {
             <DistributionSummary stats={scope.distributionStats} />
           </ChartCard>
 
-          <article className="space-y-3 rounded-2xl border border-border bg-card p-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <h3 className="text-lg font-semibold text-text-primary">Student results</h3>
+          <article className="rounded-2xl border border-border bg-card">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/70 p-4">
+              <div className="flex items-center gap-2">
+                <h3 className="text-lg font-semibold text-text-primary">Student Results</h3>
+                {testTableQuery.isFetching ? <span className="text-xs text-text-secondary">Updating…</span> : null}
+              </div>
               <div className="flex flex-wrap items-center gap-2">
                 <input
                   value={detailSearch}
                   onChange={(event) => setDetailSearch(event.target.value)}
-                  placeholder="Search student, roll no, department…"
+                  placeholder="Search student, roll no, batch…"
                   className="h-9 w-full max-w-xs rounded-lg border border-border bg-background px-3 text-sm"
                 />
                 <select
-                  value={detailResult}
-                  onChange={(event) => setDetailResult(event.target.value)}
-                  aria-label="Filter by result"
+                  value={deepDiveSort}
+                  onChange={(event) => setDeepDiveSort(event.target.value)}
+                  aria-label="Sort student results"
                   className="h-9 rounded-lg border border-border bg-background px-3 text-sm text-text-primary"
                 >
-                  <option value="all">All results</option>
-                  <option value="pass">Pass (40%+)</option>
-                  <option value="fail">Fail (below 40%)</option>
+                  <option value="score">Highest score</option>
+                  <option value="studentName">Name (A–Z)</option>
+                  <option value="violationCount">Most violations</option>
+                  <option value="timeTaken">Longest time</option>
+                  <option value="date">Most recent</option>
                 </select>
               </div>
             </div>
@@ -1047,56 +1063,52 @@ export default function ReportsPage() {
               <table className="min-w-full text-sm">
                 <thead>
                   <tr>
-                    <Th sortKey="rank" sortState={sortState} onSort={handleSort}>Rank</Th>
-                    <Th sortKey="name" sortState={sortState} onSort={handleSort}>Student</Th>
-                    <Th sortKey="department" sortState={sortState} onSort={handleSort}>Department</Th>
-                    <Th sortKey="avgScore" sortState={sortState} onSort={handleSort}>Avg Score</Th>
+                    <Th>Student</Th>
+                    <Th>Roll No</Th>
+                    <Th>Department</Th>
+                    <Th>Batch</Th>
+                    <Th>Score</Th>
                     <Th>Result</Th>
-                    <Th sortKey="violations" sortState={sortState} onSort={handleSort}>Violations</Th>
+                    <Th>Status</Th>
+                    <Th>Violations</Th>
                   </tr>
                 </thead>
                 <tbody>
-                  {detailPageRows.map((row) => (
-                    <tr key={`${row.studentId}-${row.rank}`} className="border-t border-border/70 hover:bg-muted/40">
-                      <td className="px-4 py-3 tabular-nums text-text-secondary">#{row.rank}</td>
+                  {testTableRows.map((row) => (
+                    <tr key={row.submissionId || row.id} className="border-t border-border/70 hover:bg-muted/40">
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-3">
-                          <Avatar name={row.name} seed={row.studentId} />
-                          <div className="min-w-0">
-                            <p className="truncate font-medium text-text-primary">{row.name}</p>
-                            <p className="truncate text-xs text-text-secondary">{row.rollNo}</p>
-                          </div>
+                          <Avatar name={row.studentName} seed={row.studentId} />
+                          <span className="font-medium text-text-primary">{row.studentName || "-"}</span>
                         </div>
                       </td>
-                      <td className="px-4 py-3 text-text-secondary">{row.department}</td>
-                      <td className="px-4 py-3"><ScoreBadge score={row.avgScore} /></td>
-                      <td className="px-4 py-3"><ResultBadge score={row.avgScore} /></td>
-                      <td className="px-4 py-3"><ViolationBadge count={row.violations} /></td>
+                      <td className="px-4 py-3 text-text-secondary">{row.studentRollNo || "-"}</td>
+                      <td className="px-4 py-3 text-text-secondary">{row.department || "-"}</td>
+                      <td className="px-4 py-3 text-text-secondary">{row.batch || "-"}</td>
+                      <td className="px-4 py-3"><ScoreBadge score={row.scorePercent ?? row.score} /></td>
+                      <td className="px-4 py-3"><ResultBadge status={row.status} score={row.scorePercent ?? row.score} /></td>
+                      <td className="px-4 py-3"><StatusBadge label={String(row.status || "-").toLowerCase()} variant={row.status === "SUBMITTED" ? "success" : "warning"} /></td>
+                      <td className="px-4 py-3"><ViolationBadge count={row.violationCount} /></td>
                     </tr>
                   ))}
-                  {detailFilteredRows.length === 0 ? (
+                  {testTableRows.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="px-4 py-8">
-                        <EmptyState
-                          title={attendedStudentRows.length === 0 ? "No submissions yet" : "No students match"}
-                          description={
-                            attendedStudentRows.length === 0
-                              ? "Student results appear once this test has submissions."
-                              : "Adjust the search or result filter to see students."
-                          }
-                        />
+                      <td colSpan={8} className="px-4 py-8">
+                        <EmptyState title="No submissions yet" description="Student results appear once this test has submissions." />
                       </td>
                     </tr>
                   ) : null}
                 </tbody>
               </table>
             </div>
-            <Pagination
-              page={detailSafePage}
-              totalPages={detailTotalPages}
-              total={detailFilteredRows.length}
-              onPageChange={setDetailPage}
-            />
+            <div className="border-t border-border/70 p-4">
+              <Pagination
+                page={testTablePagination.page}
+                totalPages={testTablePagination.totalPages}
+                total={testTablePagination.total}
+                onPageChange={setDetailPage}
+              />
+            </div>
           </article>
 
           {notAttendedStudents.length > 0 ? (

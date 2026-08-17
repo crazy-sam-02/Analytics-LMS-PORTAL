@@ -823,6 +823,183 @@ const getSuperReportTestsDashboard = asyncHandler(async (req, res) => {
   });
 });
 
+// Per-submission student results for a scoped test, mirroring the College Admin
+// getReportTableDashboard exactly (same scope helper, same row shape, same
+// server-side search/sort/pagination) so the super-admin test deep-dive shows an
+// identical batch-wise test report. The only difference is the college comes from
+// the query instead of the authenticated admin's token.
+const getSuperReportTableDashboard = asyncHandler(async (req, res) => {
+  const m = await models.init();
+  const db = m.dbClient;
+  const collegeId = normalizeId(req.query.collegeId);
+  const departmentId = normalizeId(req.query.departmentId);
+  const batchId = normalizeId(req.query.batchId);
+  const testId = normalizeId(req.query.testId);
+  const studentId = normalizeId(req.query.studentId);
+  const year = normalizeStudentYear(req.query.year);
+  const reportScopeFilters = {
+    studentScope: normalizeStudentScope(req.query.studentScope),
+    passoutYear: normalizePassoutYear(req.query.passoutYear),
+    passoutCohortId: normalizeOptionalId(req.query.passoutCohortId),
+  };
+  const studentLifecycleWhere = buildStudentLifecycleWhere(reportScopeFilters);
+  const dateFrom = toValidDate(req.query.dateFrom);
+  const dateTo = toValidDate(req.query.dateTo);
+  const page = Math.max(Number(req.query.page || 1), 1);
+  const limit = Math.min(Math.max(Number(req.query.limit || 10), 1), 100);
+  const sortBy = String(req.query.sortBy || "date");
+  const sortDir = String(req.query.sortDir || "desc").toLowerCase() === "asc" ? "asc" : "desc";
+  const search = String(req.query.search || req.query.studentSearch || "").trim().toLowerCase();
+
+  if (!collegeId) {
+    throw new ApiError(400, "Select a college before viewing test results");
+  }
+
+  await validateReportScope({ db, collegeId, departmentId, batchId, studentId, testId, ...reportScopeFilters });
+
+  // Resolve the in-scope tests with the SAME visibility helper College Admin uses.
+  const departmentBatchIds = departmentId
+    ? (await db.batch.findMany({ where: { collegeId, departmentId }, select: { id: true } })).map((batch) => batch.id)
+    : [];
+  const scopedBatchIds = batchId ? [batchId] : departmentBatchIds;
+  const scopeTests = await db.test.findMany({
+    where: buildAdminTestVisibilityWhere({
+      collegeId,
+      departmentId: departmentId || null,
+      batchId: batchId || null,
+      batchIds: scopedBatchIds,
+      testId: testId || null,
+    }),
+    select: { id: true },
+  });
+  const testIds = scopeTests.map((test) => String(test.id));
+
+  if (testIds.length === 0) {
+    return res.status(200).json({ data: [], pagination: { page: 1, limit, total: 0, totalPages: 1 } });
+  }
+
+  const tableStudentWhere = {
+    collegeId,
+    ...studentLifecycleWhere,
+    ...(studentId ? { id: studentId } : {}),
+    ...(departmentId ? { departmentId } : {}),
+    ...(year ? { year } : {}),
+    ...buildBatchStudentWhere(batchId),
+  };
+  const tableStudents = await db.student.findMany({ where: tableStudentWhere, select: { id: true } });
+  const tableStudentIds = tableStudents.map((student) => String(student.id));
+  const submissionStudentFilter = studentId
+    ? (tableStudentIds.includes(String(studentId)) ? { userId: studentId } : { userId: { in: [] } })
+    : { userId: { in: tableStudentIds } };
+
+  const submissions = await db.submission.findMany({
+    where: {
+      collegeId,
+      status: { in: REPORTABLE_SUBMISSION_STATUSES },
+      testId: { in: testIds },
+      ...submissionStudentFilter,
+      ...(dateFrom || dateTo
+        ? { submittedAt: { ...(dateFrom ? { gte: dateFrom } : {}), ...(dateTo ? { lte: dateTo } : {}) } }
+        : {}),
+    },
+    include: {
+      user: {
+        select: {
+          id: true,
+          fullName: true,
+          studentId: true,
+          enrollNumber: true,
+          enrollmentNumber: true,
+          department: { select: { name: true } },
+          batch: { select: { name: true } },
+        },
+      },
+      test: {
+        select: { title: true, totalMarks: true, questions: { select: { id: true, marks: true } } },
+      },
+      violations: { select: { id: true, type: true, createdAt: true }, orderBy: { createdAt: "desc" } },
+      _count: { select: { violations: true } },
+    },
+    orderBy: { submittedAt: "desc" },
+  });
+
+  const resolveStudentId = (submission) => String(submission.userId || submission.user?.id || "");
+  const attemptsPerStudent = submissions.reduce((acc, submission) => {
+    const key = resolveStudentId(submission);
+    if (key) acc[key] = Number(acc[key] || 0) + 1;
+    return acc;
+  }, {});
+
+  let rows = submissions.map((submission) => {
+    const obtainedMarks = Number(submission.score || 0);
+    const totalMarks = Array.isArray(submission.test?.questions) && submission.test.questions.length > 0
+      ? submission.test.questions.reduce((sum, question) => sum + Number(question.marks || 0), 0)
+      : Number(submission.test?.totalMarks || 0);
+    const scorePercent = getScorePercent(submission);
+    const date = submission.submittedAt || submission.updatedAt || submission.createdAt || new Date();
+
+    return {
+      id: submission.id,
+      submissionId: submission.id,
+      testId: submission.testId,
+      studentId: resolveStudentId(submission),
+      studentName: submission.user?.fullName || "-",
+      studentRollNo: getStudentNumber(submission.user),
+      department: submission.user?.department?.name || "-",
+      batch: submission.user?.batch?.name || "-",
+      testName: submission.test?.title || "-",
+      score: scorePercent,
+      scorePercent,
+      accuracy: scorePercent,
+      obtainedMarks,
+      totalMarks,
+      timeTaken: Number(submission.timeSpentSeconds || 0),
+      attemptCount: Number(attemptsPerStudent[resolveStudentId(submission)] || 0),
+      status: submission.status || "IN_PROGRESS",
+      violationCount: Number(submission._count?.violations || submission.violations?.length || 0),
+      violations: (submission.violations || []).map((violation) => ({
+        id: violation.id,
+        type: violation.type,
+        anomalyId: violation.id,
+        anomalyType: violation.type,
+        testId: submission.testId,
+        testName: submission.test?.title || "Test",
+        submissionId: submission.id,
+        createdAt: violation.createdAt,
+      })),
+      date: new Date(date).toISOString(),
+    };
+  });
+
+  if (search) {
+    rows = rows.filter((row) =>
+      `${row.studentName} ${row.studentRollNo} ${row.department} ${row.batch} ${row.testName}`.toLowerCase().includes(search)
+    );
+  }
+
+  rows.sort((a, b) => {
+    const av = a?.[sortBy];
+    const bv = b?.[sortBy];
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    if (typeof av === "number" && typeof bv === "number") {
+      return sortDir === "asc" ? av - bv : bv - av;
+    }
+    return sortDir === "asc" ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
+  });
+
+  const total = rows.length;
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  const safePage = Math.min(page, totalPages);
+  const start = (safePage - 1) * limit;
+
+  res.status(200).json({
+    data: rows.slice(start, start + limit),
+    pagination: { page: safePage, limit, total, totalPages },
+  });
+});
+
 const getPassoutCohorts = asyncHandler(async (req, res) => {
   const m = await models.init();
   const db = m.dbClient;
@@ -1025,6 +1202,7 @@ module.exports = {
   generateSuperReport,
   getSuperReportAnalytics,
   getSuperReportTestsDashboard,
+  getSuperReportTableDashboard,
   getPassoutCohorts,
   getSuperReportJobs,
   downloadSuperReport,

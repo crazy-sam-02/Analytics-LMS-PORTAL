@@ -886,6 +886,7 @@ export const superAdminApi = {
   getPassoutCohorts: (params = "") => superAdminApiRequest(`/super-admin/reports/passout-cohorts${params}`),
   getReportAnalytics: (params = "") => superAdminApiRequest(`/super-admin/reports/analytics${params}`),
   getReportTests: (params = "") => superAdminApiRequest(`/super-admin/reports/tests${params}`),
+  getReportTable: (params = "") => superAdminApiRequest(`/super-admin/reports/table${params}`),
   getReportItemAnalysis: (params = "") => superAdminApiRequest(`/super-admin/reports/item-analysis${params}`),
   getReportIntegrity: (params = "") => superAdminApiRequest(`/super-admin/reports/integrity${params}`),
   getReportTrends: (params = "") => superAdminApiRequest(`/super-admin/reports/trends${params}`),

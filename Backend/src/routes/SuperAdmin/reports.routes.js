@@ -9,6 +9,7 @@ const {
 	generateSuperReport,
 	getSuperReportAnalytics,
 	getSuperReportTestsDashboard,
+	getSuperReportTableDashboard,
 	getPassoutCohorts,
 	getSuperReportJobs,
 	downloadSuperReport,
@@ -54,6 +55,7 @@ router.get("/", authenticateSuperAdmin, superReportReadLimiter, getSuperReportJo
 router.get("/passout-cohorts", authenticateSuperAdmin, superReportReadLimiter, getPassoutCohorts);
 router.get("/analytics", authenticateSuperAdmin, superReportReadLimiter, superReportCache, getSuperReportAnalytics);
 router.get("/tests", authenticateSuperAdmin, superReportReadLimiter, superReportCache, getSuperReportTestsDashboard);
+router.get("/table", authenticateSuperAdmin, superReportReadLimiter, superReportCache, getSuperReportTableDashboard);
 router.get("/item-analysis", authenticateSuperAdmin, superReportReadLimiter, superReportCache, getSuperReportItemAnalysis);
 router.get("/integrity", authenticateSuperAdmin, superReportReadLimiter, superReportCache, getSuperReportIntegrity);
 router.get("/trends", authenticateSuperAdmin, superReportReadLimiter, superReportCache, getSuperReportTrends);

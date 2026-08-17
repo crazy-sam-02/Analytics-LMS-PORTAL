@@ -312,11 +312,16 @@ export default function ReportsPage({ basePathOverride = null, showStudentDepart
   });
 
   const testTableQuery = useQuery({
-    queryKey: [`${queryKeyPrefix}-test-table-v1`, testId, deepDivePage, deepDiveSearch.trim(), deepDiveSort, studentScope, passoutYear, passoutCohortId],
+    queryKey: [`${queryKeyPrefix}-test-table-v2`, testId, departmentId, batchId, deepDivePage, deepDiveSearch.trim(), deepDiveSort, studentScope, passoutYear, passoutCohortId],
     queryFn: () =>
       adminApi.getReportTable(
         toQueryString({
           testId,
+          // Carry the active department/batch scope so a per-test results table
+          // opened from the Batch tab is narrowed to that batch's students, not
+          // every student who took the test.
+          departmentId: departmentId || undefined,
+          batchId: batchId || undefined,
           page: deepDivePage,
           limit: 10,
           sortBy: deepDiveSort,

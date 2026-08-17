@@ -135,7 +135,14 @@ const buildAdminTestVisibilityWhere = ({ collegeId, departmentId = null, batchId
 
   if (departmentId) {
     scopeParts.push(buildDepartmentAssignmentFilter({ departmentId, batchIds }));
-  } else if (batchId) {
+  } else if (batchId && !testId) {
+    // A batch on its own filters the tests LIST to that batch's tests. But a
+    // specific test pinned by id is already uniquely identified — the batch is
+    // only a student-scoping filter for that test's report, never an
+    // authorization boundary. Gating the pinned test by batch assignment here
+    // wrongly excludes "everyone"/"department_wise" tests the batch's students
+    // actually took, yielding an empty report for a valid batch + test selection.
+    // (When a department is present its filter still applies for authorization.)
     scopeParts.push(buildBatchAssignmentFilter([batchId]));
   }
 
