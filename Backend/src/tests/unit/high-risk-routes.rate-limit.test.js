@@ -280,6 +280,7 @@ describe("high-risk route rate limit wiring", () => {
         generateSuperReport: mockMiddleware,
         getSuperReportAnalytics: mockMiddleware,
         getSuperReportTestsDashboard: mockMiddleware,
+        getSuperReportTableDashboard: mockMiddleware,
         getPassoutCohorts: mockMiddleware,
         getSuperReportJobs: mockMiddleware,
         downloadSuperReport: mockMiddleware,
