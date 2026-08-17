@@ -11,6 +11,7 @@ const { ApiError, asyncHandler } = require("../../utils/http");
 const { clampPercent, getSubmissionScorePercent, getTestTotalMarks } = require("../../utils/score");
 const { collectSubmissions } = require("../../services/submission-batch.service");
 const { isQuestionCorrect } = require("../../services/test.service");
+const { buildAdminTestVisibilityWhere } = require("../../utils/admin-test-access");
 const {
   REPORTABLE_SUBMISSION_STATUSES,
   buildStudentLifecycleWhere,
@@ -19,6 +20,11 @@ const {
   normalizePassoutYear,
   normalizeOptionalId,
 } = require("../../services/report-scope.service");
+
+// Prisma student filter that matches a student assigned to a batch either via the
+// scalar batchId or the batchIds[] array (students can belong to multiple batches).
+const buildBatchStudentWhere = (batchId) =>
+  batchId ? { OR: [{ batchId }, { batchIds: { in: [batchId] } }] } : {};
 
 const PASS_THRESHOLD_PERCENT = 40;
 
@@ -70,7 +76,7 @@ const buildSuperReportCollegeWhere = (collegeId) => ({
   ],
 });
 
-const validateReportScope = async ({ db, collegeId, departmentId, studentId, testId, studentScope, passoutYear, passoutCohortId }) => {
+const validateReportScope = async ({ db, collegeId, departmentId, batchId, studentId, testId, studentScope, passoutYear, passoutCohortId }) => {
   if (collegeId) {
     const college = await db.college.findUnique({ where: { id: collegeId }, select: { id: true, isActive: true } });
     if (!college || !college.isActive) {
@@ -88,6 +94,22 @@ const validateReportScope = async ({ db, collegeId, departmentId, studentId, tes
     });
     if (!department) {
       throw new ApiError(404, "Department not found for selected college");
+    }
+  }
+
+  if (batchId) {
+    // Validate the batch belongs to the college only. A "global" batch spans
+    // several departments (departmentId null, departmentIds[] populated), so
+    // constraining by departmentId here would wrongly reject a valid selection.
+    const batch = await db.batch.findFirst({
+      where: {
+        id: batchId,
+        ...(collegeId ? { collegeId } : {}),
+      },
+      select: { id: true },
+    });
+    if (!batch) {
+      throw new ApiError(404, "Batch not found for selected report scope");
     }
   }
 
@@ -169,6 +191,7 @@ const getSuperReportAnalytics = asyncHandler(async (req, res) => {
   const db = m.dbClient;
   const collegeId = normalizeId(req.query.collegeId);
   const departmentId = normalizeId(req.query.departmentId);
+  const batchId = normalizeId(req.query.batchId);
   const studentId = normalizeId(req.query.studentId);
   const testId = normalizeId(req.query.testId);
   const year = normalizeStudentYear(req.query.year);
@@ -185,7 +208,7 @@ const getSuperReportAnalytics = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Select a college before viewing super admin report analytics");
   }
 
-  await validateReportScope({ db, collegeId, departmentId, studentId, testId, ...reportScopeFilters });
+  await validateReportScope({ db, collegeId, departmentId, batchId, studentId, testId, ...reportScopeFilters });
   const submittedAtFilter = {
     ...(dateFrom ? { gte: dateFrom } : {}),
     ...(dateTo ? { lte: dateTo } : {}),
@@ -205,26 +228,24 @@ const getSuperReportAnalytics = asyncHandler(async (req, res) => {
     ...(collegeId ? { collegeId } : {}),
     ...studentLifecycleWhere,
     ...(departmentId ? { departmentId } : {}),
+    ...buildBatchStudentWhere(batchId),
     ...(studentId ? { id: studentId } : {}),
     ...(year ? { year } : {}),
   };
 
-  const testWhere = {
-    ...(collegeId ? { collegeId } : {}),
-    ...(departmentId ? {
-      OR: [
-        { departmentId },
-        { assignedTo: { in: [departmentId] } },
-        ...(departmentBatchIds.length > 0
-          ? [
-              { batchId: { in: departmentBatchIds } },
-              { batchAssignments: { some: { batchId: { in: departmentBatchIds } } } },
-            ]
-          : []),
-      ],
-    } : {}),
-    ...(testId ? { id: testId } : {}),
-  };
+  // Test scope resolved with the SAME visibility helper the College Admin report
+  // uses, so a Super Admin sees exactly the tests a College Admin would for the
+  // same college / department / batch — including "everyone"-assigned tests, and,
+  // when a batch is selected, that batch's tests. A selected batch narrows the
+  // batch scope to that single batch (mirroring resolveAdminTestScope).
+  const scopedBatchIds = batchId ? [batchId] : departmentBatchIds;
+  const testWhere = buildAdminTestVisibilityWhere({
+    collegeId,
+    departmentId: departmentId || null,
+    batchId: batchId || null,
+    batchIds: scopedBatchIds,
+    testId: testId || null,
+  });
   const [students, tests, departments] = await Promise.all([
     db.student.findMany({
       where: studentWhere,
@@ -664,19 +685,21 @@ const getSuperReportTestsDashboard = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Select a college before viewing test reports");
   }
 
+  // Resolve the tests a College Admin would see for this scope: everyone-assigned
+  // tests, the department's tests, and (when a batch is selected) that batch's
+  // tests — not only the batch_wise-assigned ones. This is the same helper the
+  // College Admin tests dashboard uses, so both portals list identical tests.
+  const departmentBatchIds = departmentId
+    ? (await db.batch.findMany({ where: { collegeId, departmentId }, select: { id: true } })).map((batch) => batch.id)
+    : [];
+  const scopedBatchIds = batchId ? [batchId] : departmentBatchIds;
   const tests = await db.test.findMany({
-    where: {
+    where: buildAdminTestVisibilityWhere({
       collegeId,
-      ...(departmentId ? { departmentId } : {}),
-      ...(batchId
-        ? {
-            OR: [
-              { batchId },
-              { batchAssignments: { some: { batchId } } },
-            ],
-          }
-        : {}),
-    },
+      departmentId: departmentId || null,
+      batchId: batchId || null,
+      batchIds: scopedBatchIds,
+    }),
     select: {
       id: true,
       title: true,
@@ -700,7 +723,7 @@ const getSuperReportTestsDashboard = asyncHandler(async (req, res) => {
       collegeId,
       ...buildStudentLifecycleWhere(reportScopeFilters),
       ...(departmentId ? { departmentId } : {}),
-      ...(batchId ? { batchId } : {}),
+      ...buildBatchStudentWhere(batchId),
     },
     select: { id: true },
   });

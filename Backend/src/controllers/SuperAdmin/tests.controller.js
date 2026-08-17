@@ -879,6 +879,13 @@ const updateGlobalTest = asyncHandler(async (req, res) => {
     }
   });
 
+  // The test actually being edited must be the target for its OWN college — never
+  // a sibling clone or the source test that merely shares this college. Without
+  // this, editing a draft clone would resolve to the source/original test (which
+  // may be completed) and overwrite ITS questions and scope, corrupting the
+  // original while leaving the clone unchanged.
+  familyTestByCollege.set(existing.collegeId, { id: existing.id, collegeId: existing.collegeId });
+
   const adminByCollege = new Map();
   admins.forEach((item) => {
     if (!adminByCollege.has(item.collegeId)) {

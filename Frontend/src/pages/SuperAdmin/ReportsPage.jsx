@@ -299,12 +299,16 @@ export default function ReportsPage() {
   });
 
   const scopeQuery = useQuery({
-    queryKey: ["super-report-analytics-scope-v4", collegeId, departmentId, testId, studentYear, studentScope, passoutYear, passoutCohortId],
+    queryKey: ["super-report-analytics-scope-v5", collegeId, departmentId, batchId, testId, studentYear, studentScope, passoutYear, passoutCohortId],
     queryFn: () =>
       superAdminApi.getReportAnalytics(
         toQueryString({
           collegeId,
           departmentId,
+          // Batch scoping mirrors College Admin: the analytics narrow to the
+          // selected batch's students (and that batch's tests), so the whole
+          // report view — metrics, charts, per-test deep-dive — reflects it.
+          batchId: batchId || undefined,
           testId,
           year: studentYear || undefined,
           studentScope,
@@ -312,9 +316,9 @@ export default function ReportsPage() {
           passoutCohortId: passoutCohortId || undefined,
         })
       ),
-    // The Batch tab is driven purely by the batch-scoped tests list, so skip the
-    // heavy analytics fetch there unless a test deep-dive is open.
-    enabled: hasCollegeSelected && (isTestDeepDive || ["overview", "departments", "student"].includes(mode)),
+    // Enabled on the Batch tab too, so a selected batch renders a real batch-scoped
+    // report (not just the tests list), and on any open test deep-dive.
+    enabled: hasCollegeSelected && (isTestDeepDive || ["overview", "departments", "student", "batch"].includes(mode)),
     staleTime: 45000,
   });
 
@@ -673,6 +677,11 @@ export default function ReportsPage() {
         filters: {
           collegeId: collegeId || undefined,
           departmentId: departmentId || undefined,
+          // Carry the active batch filter through to the export so the generated
+          // PDF is batch-scoped exactly like the College Admin report (whose core,
+          // buildInstitutionReportPayload, narrows students to this batch). Without
+          // it the report silently ignores the batch selection.
+          batchId: batchId || undefined,
           studentId: mode === "student" ? studentId || undefined : undefined,
           testId: testId === "all" ? undefined : testId,
           year: studentYear || undefined,
@@ -1315,7 +1324,109 @@ export default function ReportsPage() {
                 ))}
               </select>
             </label>
+            {selectedBatch ? (
+              <p className="mt-2 text-xs text-text-secondary">
+                Showing the report scoped to <span className="font-medium text-text-primary">{selectedBatch.name}</span>.
+              </p>
+            ) : null}
           </article>
+
+          {loading ? (
+            <AnalyticsSkeleton />
+          ) : scopeQuery.isError ? (
+            <section className="rounded-2xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-500">Unable to load batch report data.</section>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+                {overviewStatCards.map((item) => (
+                  <StatCard key={item.key} {...item} />
+                ))}
+              </div>
+
+              <div className="grid gap-4 lg:grid-cols-2">
+                <ChartCard title="Score Distribution" height="h-[240px]">
+                  <ScoreDonutChart data={scope.distribution || []} total={toNumber(metrics.attemptedStudents)} />
+                </ChartCard>
+                <ChartCard title="Topic-wise Performance" height="h-[240px]">
+                  <TopicPieChart data={subjectData} />
+                </ChartCard>
+              </div>
+
+              <article className="overflow-x-auto rounded-2xl border border-border bg-card">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/70 p-4">
+                  <div>
+                    <h3 className="text-lg font-semibold text-text-primary">
+                      {selectedBatch ? `${selectedBatch.name} — Student Performance` : "Batch Student Performance"}
+                    </h3>
+                    <p className="text-xs text-text-secondary">Ranked by average score. Click a student to open their report.</p>
+                  </div>
+                  <span className="rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-text-secondary">
+                    {sortedStudentRows.length} {sortedStudentRows.length === 1 ? "entry" : "entries"}
+                  </span>
+                </div>
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr>
+                      <Th sortKey="rank" sortState={sortState} onSort={handleSort}>S.No</Th>
+                      <Th sortKey="name" sortState={sortState} onSort={handleSort}>Student Name</Th>
+                      <Th sortKey="department" sortState={sortState} onSort={handleSort}>Department</Th>
+                      <Th sortKey="year" sortState={sortState} onSort={handleSort}>Year</Th>
+                      <Th sortKey="avgScore" sortState={sortState} onSort={handleSort}>Avg Score</Th>
+                      <Th>Result</Th>
+                      <Th sortKey="testsTaken" sortState={sortState} onSort={handleSort}>Tests</Th>
+                      <Th sortKey="violations" sortState={sortState} onSort={handleSort}>Violations</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visibleStudentRows.map((row) => (
+                      <tr key={row.studentId} className="border-t border-border/70 hover:bg-muted/40">
+                        <td className="px-4 py-3 tabular-nums text-text-secondary">{row.rank ? `#${row.rank}` : "-"}</td>
+                        <td className="px-4 py-3">
+                          <button
+                            type="button"
+                            onClick={() => updateParams({ college: row.collegeId || collegeId || "", department: row.departmentId || departmentId, student_id: row.studentId, mode: "student" })}
+                            className="flex items-center gap-3 text-left"
+                          >
+                            <Avatar name={row.name} seed={row.studentId} />
+                            <span className="min-w-0">
+                              <span className="block truncate font-medium text-text-primary hover:text-chart-1">{row.name}</span>
+                              <span className="block truncate text-xs font-normal text-text-secondary">{row.rollNo}</span>
+                            </span>
+                          </button>
+                        </td>
+                        <td className="px-4 py-3 text-text-secondary">{row.department}</td>
+                        <td className="px-4 py-3 text-text-secondary">{row.year ? `${row.year} YEAR` : "-"}</td>
+                        <td className="px-4 py-3"><ScoreBadge score={row.avgScore} /></td>
+                        <td className="px-4 py-3">{row.testsTaken > 0 ? <ResultBadge score={row.avgScore} /> : <span className="text-text-secondary">-</span>}</td>
+                        <td className="px-4 py-3">{row.testsTaken}</td>
+                        <td className="px-4 py-3"><ViolationBadge count={row.violations} /></td>
+                      </tr>
+                    ))}
+                    {visibleStudentRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={8} className="px-4 py-8">
+                          <EmptyState title="No students in this batch scope" description="Students appear once they are assigned to the selected batch." />
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
+                {sortedStudentRows.length > visibleStudentRows.length ? (
+                  <div className="flex items-center justify-between gap-3 border-t border-border/70 px-4 py-3 text-xs text-text-secondary">
+                    <span>Showing {visibleStudentRows.length} of {sortedStudentRows.length} students.</span>
+                    <button
+                      type="button"
+                      onClick={() => setStudentVisibleLimit((value) => value + 100)}
+                      className="rounded-lg border border-border px-3 py-1 font-semibold text-text-primary hover:bg-muted"
+                    >
+                      Show more
+                    </button>
+                  </div>
+                ) : null}
+              </article>
+            </>
+          )}
+
           {renderTestsListCard()}
         </section>
       ) : null}

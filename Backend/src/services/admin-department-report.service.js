@@ -555,44 +555,45 @@ const aggregateInstitutionReport = ({ meta, students = [], submissions = [], inc
   };
 };
 
-const buildDepartmentReportPayload = async ({ db, job }) => {
+/**
+ * Role-agnostic core that assembles the full "Institution Assessment Report"
+ * payload for an already-resolved college / department / batch scope. This is the
+ * single source of truth for the comprehensive multi-page report: the College
+ * Admin and Super Admin builders both delegate here, so their PDFs are identical
+ * for the same scope. Scope resolution (who the requester is, which college /
+ * department applies) is the caller's job; this function only fetches data and
+ * aggregates it.
+ */
+const buildInstitutionReportPayload = async ({
+  db,
+  job,
+  collegeId,
+  departmentId = null,
+  batchId = null,
+  collegeName = "-",
+  departmentFallbackName = "-",
+}) => {
   const filters = job.filters || {};
-  const admin = await db.admin.findUnique({
-    where: { id: job.adminId },
-    include: {
-      department: { select: { id: true, name: true } },
-      college: { select: { id: true, name: true } },
-    },
-  });
-
-  const collegeId = job.collegeId;
-  // Prefer an explicit filter department, then the admin's own department.
-  // A college-wide admin (no department) falls back to a college-wide scope
-  // instead of throwing, so the report renders for every panel.
-  const departmentId = filters.departmentId
-    ? String(filters.departmentId)
-    : admin?.departmentId
-      ? String(admin.departmentId)
-      : null;
-  const batchId = filters.batchId ? String(filters.batchId) : null;
+  const scopedDepartmentId = departmentId ? String(departmentId) : null;
+  const scopedBatchId = batchId ? String(batchId) : null;
   const testId = filters.testId ? String(filters.testId) : null;
   const year = filters.year ? Number(filters.year) : null;
   const studentLifecycleWhere = buildStudentLifecycleWhere(filters);
 
-  const batchWhere = { collegeId, ...(departmentId ? { departmentId } : {}) };
+  const batchWhere = { collegeId, ...(scopedDepartmentId ? { departmentId: scopedDepartmentId } : {}) };
   const scopeBatches = await db.batch.findMany({
     where: batchWhere,
     select: { id: true, name: true, academicYear: true, departmentId: true },
   });
   const scopeBatchIds = scopeBatches.map((batch) => String(batch.id));
-  const scopedBatch = batchId ? scopeBatches.find((batch) => String(batch.id) === batchId) : null;
+  const scopedBatch = scopedBatchId ? scopeBatches.find((batch) => String(batch.id) === scopedBatchId) : null;
 
-  if (batchId && !scopedBatch) {
+  if (scopedBatchId && !scopedBatch) {
     throw new Error("Batch not found for this department");
   }
 
   const departments = await db.department.findMany({
-    where: { collegeId, ...(departmentId ? { id: departmentId } : {}) },
+    where: { collegeId, ...(scopedDepartmentId ? { id: scopedDepartmentId } : {}) },
     select: { id: true, name: true },
   });
   const departmentNameById = new Map(departments.map((dept) => [String(dept.id), dept.name]));
@@ -600,7 +601,7 @@ const buildDepartmentReportPayload = async ({ db, job }) => {
   const tests = await buildTestScope({
     db,
     collegeId,
-    departmentId,
+    departmentId: scopedDepartmentId,
     batchIds: scopeBatchIds,
     testId,
   });
@@ -617,10 +618,10 @@ const buildDepartmentReportPayload = async ({ db, job }) => {
 
   const studentWhere = {
     collegeId,
-    ...(departmentId ? { departmentId } : {}),
+    ...(scopedDepartmentId ? { departmentId: scopedDepartmentId } : {}),
     ...studentLifecycleWhere,
     ...(year ? { year } : {}),
-    ...(batchId ? { OR: [{ batchId }, { batchIds: { in: [batchId] } }] } : {}),
+    ...(scopedBatchId ? { OR: [{ batchId: scopedBatchId }, { batchIds: { in: [scopedBatchId] } }] } : {}),
   };
 
   const students = await db.student.findMany({
@@ -631,8 +632,8 @@ const buildDepartmentReportPayload = async ({ db, job }) => {
   });
 
   const meta = {
-    departmentName: departmentId ? departmentNameById.get(departmentId) || admin?.department?.name || "-" : "All Departments",
-    collegeName: admin?.college?.name || "-",
+    departmentName: scopedDepartmentId ? departmentNameById.get(scopedDepartmentId) || departmentFallbackName : "All Departments",
+    collegeName: collegeName || "-",
     testTitle,
     subject: selectedTest?.subject || (tests.length === 1 ? tests[0]?.subject : "") || "Placement Assessment",
     semester: resolveSemester(filters),
@@ -654,9 +655,9 @@ const buildDepartmentReportPayload = async ({ db, job }) => {
     const submissionDateFilter = buildSubmissionDateFilter(filters);
     const submissionUserWhere = {
       ...studentLifecycleWhere,
-      ...(departmentId ? { departmentId } : {}),
+      ...(scopedDepartmentId ? { departmentId: scopedDepartmentId } : {}),
       ...(year ? { year } : {}),
-      ...(batchId ? { OR: [{ batchId }, { batchIds: { in: [batchId] } }] } : {}),
+      ...(scopedBatchId ? { OR: [{ batchId: scopedBatchId }, { batchIds: { in: [scopedBatchId] } }] } : {}),
     };
 
     [submissions, incompleteSubmissions] = await Promise.all([
@@ -694,8 +695,39 @@ const buildDepartmentReportPayload = async ({ db, job }) => {
   return aggregateInstitutionReport({ meta, students: scopedStudents, submissions, incompleteSubmissions, departmentNameById, questionAnalytics });
 };
 
+const buildDepartmentReportPayload = async ({ db, job }) => {
+  const filters = job.filters || {};
+  const admin = await db.admin.findUnique({
+    where: { id: job.adminId },
+    include: {
+      department: { select: { id: true, name: true } },
+      college: { select: { id: true, name: true } },
+    },
+  });
+
+  // Prefer an explicit filter department, then the admin's own department.
+  // A college-wide admin (no department) falls back to a college-wide scope
+  // instead of throwing, so the report renders for every panel.
+  const departmentId = filters.departmentId
+    ? String(filters.departmentId)
+    : admin?.departmentId
+      ? String(admin.departmentId)
+      : null;
+
+  return buildInstitutionReportPayload({
+    db,
+    job,
+    collegeId: job.collegeId,
+    departmentId,
+    batchId: filters.batchId ? String(filters.batchId) : null,
+    collegeName: admin?.college?.name || "-",
+    departmentFallbackName: admin?.department?.name || "-",
+  });
+};
+
 module.exports = {
   buildDepartmentReportPayload,
+  buildInstitutionReportPayload,
   aggregateInstitutionReport,
   buildQuestionAnalytics,
   isStudentAssignedToTest,

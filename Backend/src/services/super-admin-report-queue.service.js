@@ -9,6 +9,7 @@ const { getSubmissionScorePercent } = require("../utils/score");
 const { REPORTABLE_SUBMISSION_STATUSES, buildStudentLifecycleWhere } = require("./report-scope.service");
 const {
   aggregateInstitutionReport,
+  buildInstitutionReportPayload,
   buildQuestionAnalytics,
   isStudentAssignedToTest,
   buildReportId,
@@ -216,12 +217,45 @@ if (Queue && redisClient && queueConnection) {
   }
 }
 
+// A college-scoped Super Admin report reuses the College Admin report pipeline
+// verbatim (buildInstitutionReportPayload) so the two PDFs are identical for the
+// same college / department / batch. Scope is resolved here from the job filters;
+// the shared core does the rest.
+const buildScopedInstitutionPayload = async (db, job) => {
+  const filters = job.filters || {};
+  const college = filters.collegeId
+    ? await db.college.findUnique({ where: { id: filters.collegeId }, select: { name: true } })
+    : null;
+  return buildInstitutionReportPayload({
+    db,
+    job,
+    collegeId: filters.collegeId,
+    departmentId: filters.departmentId ? String(filters.departmentId) : null,
+    batchId: filters.batchId ? String(filters.batchId) : null,
+    collegeName: college?.name || "-",
+    departmentFallbackName: "-",
+  });
+};
+
 const buildGlobalReportPayload = async (db, job) => {
   const filters = job.filters || {};
 
-  // Selecting a specific test always yields the full single-test Institution
-  // report (scoped to that test's college, optionally a department), regardless
-  // of the chosen report type. Only test-less reports stay platform-wide lists.
+  // Every report generated from the Super Admin Reports page is college-scoped
+  // (the UI requires a college before exporting). Such reports reuse the College
+  // Admin pipeline verbatim (buildInstitutionReportPayload) so the two PDFs are
+  // identical for the same college / department / batch / test — INCLUDING when a
+  // specific test is selected. This MUST be checked before the test-only branch
+  // below: otherwise a test-selected report would fall into buildDepartmentAcademicPayload,
+  // a divergent path that ignores batchId and re-implements the scoping, producing
+  // different totals/rankings than College Admin for the same selection.
+  if (filters.collegeId) {
+    return buildScopedInstitutionPayload(db, job);
+  }
+
+  // Fallback for a test selected WITHOUT a college. This is not reachable from the
+  // Reports page (which always pins a college, enforced in generateSuperReport),
+  // but the test still identifies its own college, so derive the single-test
+  // Institution report from it rather than emitting an empty list.
   if (filters.testId) {
     return buildDepartmentAcademicPayload(db, filters, job);
   }
