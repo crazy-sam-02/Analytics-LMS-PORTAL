@@ -169,7 +169,7 @@ docker compose $CF exec api1 npm run prod:check     # MUST print "Readiness chec
 
 ```bash
 docker compose $CF exec api1 npm run create -- \
-  --name="Director" --email="director@analyticsedify.com" --password="SupAdmin@analytics123"
+  --name="Mohan" --email="moonsara2209@gmail.com" --password="Sara@0609"
 docker compose $CF exec api1 npm run verify
 ```
 
