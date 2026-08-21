@@ -5,6 +5,16 @@ import { useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Clock3 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   clearAnswer,
@@ -471,31 +481,41 @@ export default function TestEnvironmentPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={submitWarningOpen} onOpenChange={setSubmitWarningOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2"><AlertTriangle className="size-5 text-warning" />Submit Test?</DialogTitle>
-            <DialogDescription>
-              Once you submit, you cannot edit your answers. Are you sure you want to submit now?
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setSubmitWarningOpen(false)}>
+      <AlertDialog
+        open={submitWarningOpen}
+        onOpenChange={(open) => {
+          if (submit_status === "submitting") {
+            return;
+          }
+          setSubmitWarningOpen(open);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="size-5 text-warning" />
+              Confirm Test Submission
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to submit this test? Once submitted, you cannot cancel or edit your answers.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={submit_status === "submitting"}>
               Cancel
-            </Button>
-            <Button
-              type="button"
+            </AlertDialogCancel>
+            <AlertDialogAction
               onClick={() => {
                 setSubmitWarningOpen(false);
                 trySubmit("manual_submit");
               }}
               disabled={submit_status === "submitting" || submit_status === "submitted"}
             >
-              Confirm Submit
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+              {submit_status === "submitting" ? "Submitting..." : "Submit Test"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </section>
   );
 }
