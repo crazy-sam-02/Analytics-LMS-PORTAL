@@ -1,21 +1,16 @@
 import { useMemo, useState } from "react";
-import { LockKeyhole, ShieldCheck, SlidersHorizontal } from "lucide-react";
-import { useDispatch, useSelector } from "react-redux";
+import { LockKeyhole, ShieldCheck } from "lucide-react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { setTheme } from "@/features/Students/uiSlice";
 import { studentApi } from "@/services/studentApi";
 import { profileQueryOptions } from "@/services/studentQueries";
 import { openSupportMail } from "@/lib/supportMail";
 import { ui } from "@/styles/ui-tokens";
 
 export default function SettingsPage() {
-  const dispatch = useDispatch();
-  const selectedTheme = useSelector((state) => state.ui.theme || "system");
   const profileQuery = useQuery(profileQueryOptions());
   const user = profileQuery.data;
 
@@ -144,27 +139,6 @@ export default function SettingsPage() {
         <div className="mt-4 rounded-xl border border-primary/20 bg-primary/10 p-3 text-xs text-primary-dark">
           <div className="flex items-center gap-2 font-semibold"><ShieldCheck className="size-3.5" /> Security Notice</div>
           <p className="mt-1 text-primary">Use at least 8 characters with one number and one special character.</p>
-        </div>
-      </article>
-
-      <article className={`${ui.card} ${ui.cardPadding}`}>
-        <div className="mb-4 flex items-center gap-2">
-          <div className="grid size-9 place-items-center rounded-lg bg-violet-100 text-violet-600"><SlidersHorizontal className="size-4" /></div>
-          <h2 className="text-lg font-semibold text-text-primary">Theme</h2>
-        </div>
-
-        <div className="space-y-3 rounded-xl border border-border bg-background p-3">
-          <p className="text-sm text-text-secondary">Choose how the LMS should render colors for your workspace.</p>
-          <Select value={selectedTheme} onValueChange={(value) => dispatch(setTheme(value))}>
-            <SelectTrigger className="w-full bg-card">
-              <SelectValue placeholder="Select theme" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="light">Light</SelectItem>
-              <SelectItem value="dark">Dark</SelectItem>
-              <SelectItem value="system">System</SelectItem>
-            </SelectContent>
-          </Select>
         </div>
       </article>
 
