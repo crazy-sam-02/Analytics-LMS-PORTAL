@@ -32,7 +32,6 @@ const {
   buildStudentAssignmentScope,
   isStudentAssignedToTest,
 } = require("../../services/student-test-assignment.service");
-const { REPORTABLE_SUBMISSION_STATUSES } = require("../../services/report-scope.service");
 
 const HEARTBEAT_STALE_SECONDS = 20;
 const HEARTBEAT_FORCE_AUTOSUBMIT_SECONDS = 15 * 60;
@@ -1696,21 +1695,7 @@ const getAttemptResult = asyncHandler(async (req, res) => {
     );
   }
 
-  const [rankedScores, summary] = await Promise.all([
-    db.submission.findMany({
-      where: {
-        testId: submission.testId,
-        status: { in: REPORTABLE_SUBMISSION_STATUSES },
-      },
-      select: { score: true },
-      orderBy: { score: "desc" },
-    }),
-    calculateSubmissionScore(submission.id),
-  ]);
-
-  const total = rankedScores.length || 1;
-  const higherCount = rankedScores.filter((item) => Number(item.score || 0) > Number(summary?.score ?? 0)).length;
-  const percentile = Number((((total - higherCount) / total) * 100).toFixed(2));
+  const summary = await calculateSubmissionScore(submission.id);
   const hydratedTest = attachResolvedTestConfiguration(submission.test);
   const totalMarks = getTestTotalMarks(submission.test);
   const scorePercent = getSubmissionScorePercent({
@@ -1755,7 +1740,6 @@ const getAttemptResult = asyncHandler(async (req, res) => {
     percentage: scorePercent,
     score_percent: scorePercent,
     accuracy: scorePercent,
-    percentile,
     time_taken: Number(submission.timeSpentSeconds || 0),
     review_mode: reviewMode,
     test_status: hydratedTest?.status || null,

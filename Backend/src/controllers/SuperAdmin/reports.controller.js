@@ -66,6 +66,64 @@ const getViolationCount = (submission) =>
   Number(submission?._count?.violations ?? submission?.violations?.length ?? submission?.violationCount ?? 0);
 const getStudentNumber = (student = {}) => student.enrollNumber || student.enrollmentNumber || student.studentId || "-";
 
+// Test-assignment resolution ported verbatim from the College Admin report
+// (Admin/reports.controller.js) so a Super Admin viewing a per-test deep-dive
+// scopes the SAME students a College Admin would: only those actually assigned to
+// the selected test. Without this, the deep-dive Participation card, Total
+// Students, and Not-Attended list counted every student in the college/department/
+// batch scope, diverging from the College Admin numbers.
+const normalizeIdList = (values = []) =>
+  [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))];
+
+const getStudentBatchIds = (student = {}) =>
+  normalizeIdList([student.batchId, ...(Array.isArray(student.batchIds) ? student.batchIds : [])]);
+
+const getTestBatchIds = (test = {}) =>
+  normalizeIdList([
+    test.batchId,
+    ...(Array.isArray(test.batchAssignments) ? test.batchAssignments.map((assignment) => assignment.batchId) : []),
+  ]);
+
+const normalizeYearList = (values = []) =>
+  Array.isArray(values)
+    ? [...new Set(values.map((value) => Number(value)).filter((value) => Number.isInteger(value) && value >= 1 && value <= 4))]
+    : [];
+
+const isStudentAssignedToTest = (student = {}, test = null) => {
+  if (!test?.id) return true;
+
+  const assignmentMethod = String(test.assignmentMethod || "").trim().toLowerCase();
+  const studentDepartmentId = String(student.departmentId || "").trim();
+  const studentBatchIds = getStudentBatchIds(student);
+  const testYears = normalizeYearList(test.years);
+
+  if (testYears.length > 0 && !testYears.includes(Number(student.year))) {
+    return false;
+  }
+
+  if (assignmentMethod === "everyone") {
+    return true;
+  }
+
+  if (assignmentMethod === "department_wise") {
+    const departmentIds = normalizeIdList([test.departmentId, ...(Array.isArray(test.assignedTo) ? test.assignedTo : [])]);
+    return departmentIds.length > 0 && departmentIds.includes(studentDepartmentId);
+  }
+
+  if (assignmentMethod === "batch_wise") {
+    const batchIds = getTestBatchIds(test);
+    return batchIds.length > 0 && studentBatchIds.some((batchId) => batchIds.includes(batchId));
+  }
+
+  const legacyDepartmentIds = normalizeIdList([test.departmentId, ...(Array.isArray(test.assignedTo) ? test.assignedTo : [])]);
+  const legacyBatchIds = getTestBatchIds(test);
+  return (
+    (legacyDepartmentIds.length > 0 && legacyDepartmentIds.includes(studentDepartmentId))
+    || (legacyBatchIds.length > 0 && studentBatchIds.some((batchId) => legacyBatchIds.includes(batchId)))
+    || (legacyDepartmentIds.length === 0 && legacyBatchIds.length === 0)
+  );
+};
+
 const toObjectIdIfValid = (value) =>
   mongoose.Types.ObjectId.isValid(String(value || "")) ? new mongoose.Types.ObjectId(String(value)) : value;
 
@@ -246,7 +304,7 @@ const getSuperReportAnalytics = asyncHandler(async (req, res) => {
     batchIds: scopedBatchIds,
     testId: testId || null,
   });
-  const [students, tests, departments] = await Promise.all([
+  const [allStudents, tests, departments] = await Promise.all([
     db.student.findMany({
       where: studentWhere,
       include: {
@@ -266,6 +324,11 @@ const getSuperReportAnalytics = asyncHandler(async (req, res) => {
         departmentId: true,
         assignedTo: true,
         batchId: true,
+        // Assignment metadata required to narrow students to the selected test,
+        // matching the College Admin report's isStudentAssignedToTest.
+        assignmentMethod: true,
+        years: true,
+        batchAssignments: { select: { batchId: true } },
       },
     }),
     db.department.findMany({
@@ -279,6 +342,16 @@ const getSuperReportAnalytics = asyncHandler(async (req, res) => {
       orderBy: [{ collegeId: "asc" }, { name: "asc" }],
     }),
   ]);
+
+  // When a specific test is selected, narrow the student population to those
+  // actually assigned to it — exactly as the College Admin report does — so every
+  // downstream metric (Total Students, Participation, Not Attended, per-student
+  // rows, department rollups) is computed over the same denominator as College
+  // Admin. With no test selected, all scoped students are used.
+  const selectedTest = testId ? tests.find((test) => String(test.id) === String(testId)) || null : null;
+  const students = selectedTest
+    ? allStudents.filter((student) => isStudentAssignedToTest(student, selectedTest))
+    : allStudents;
 
   const scopedTestIds = new Set(tests.map((test) => test.id));
   const scopedStudentIds = new Set(students.map((student) => student.id));

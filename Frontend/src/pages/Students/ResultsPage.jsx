@@ -34,10 +34,13 @@ const clampPercent = (value) => clampNumber(toNumber(value, 0), 0, 100);
 const formatPercent = (value) => `${Math.round(clampPercent(value))}%`;
 
 const formatDuration = (secondsInput) => {
-  const seconds = Math.max(0, toNumber(secondsInput));
-  const mins = Math.floor(seconds / 60);
-  const secs = Math.floor(seconds % 60);
-  return `${mins}m ${String(secs).padStart(2, "0")}s`;
+  const totalSeconds = Math.max(0, Math.round(toNumber(secondsInput)));
+  const hrs = Math.floor(totalSeconds / 3600);
+  const mins = Math.floor((totalSeconds % 3600) / 60);
+  const secs = totalSeconds % 60;
+  if (hrs > 0) return `${hrs} hr ${mins} min ${secs} sec`;
+  if (mins > 0) return `${mins} min ${secs} sec`;
+  return `${secs} sec`;
 };
 
 const resolveReviewMode = (payload) =>
@@ -183,7 +186,6 @@ export default function ResultsPage() {
   const result = useMemo(() => resultQuery.data || {}, [resultQuery.data]);
 
   const score = toNumber(result?.score ?? result?.summary?.score, 0);
-  const percentile = toNumber(result?.percentile ?? result?.summary?.percentile, 0);
   const timeTakenRaw = result?.time_taken ?? result?.timeTaken ?? result?.timeSpentSeconds;
   const timeTaken = toNumber(timeTakenRaw, 0);
   const reviewMode = resolveReviewMode(result);
@@ -452,8 +454,8 @@ export default function ResultsPage() {
                 <p className="text-xs text-primary-foreground/60">Total score</p>
               </div>
               <div className="text-right">
-                <p className="text-xs uppercase tracking-[0.2em] text-primary-foreground/60">Percentile</p>
-                <p className="text-2xl font-semibold">{formatPercent(percentile)}</p>
+                <p className="text-xs uppercase tracking-[0.2em] text-primary-foreground/60">Percentage</p>
+                <p className="text-2xl font-semibold">{formatPercent(summaryPercent)}</p>
               </div>
             </div>
             <div className="mt-4">
@@ -510,11 +512,11 @@ export default function ResultsPage() {
                 <p className="mt-1 text-xs text-text-secondary">Pace per question</p>
               </Card>
               <Card className="p-4">
-                <p className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Time taken</p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Test Time Taken</p>
                 <p className="mt-2 text-2xl font-semibold text-text-primary">
                   {timeTakenRaw == null ? "-" : formatDuration(timeTaken)}
                 </p>
-                <p className="mt-1 text-xs text-text-secondary">Total duration</p>
+                <p className="mt-1 text-xs text-text-secondary">Actual time spent</p>
               </Card>
             </div>
 

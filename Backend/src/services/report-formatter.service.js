@@ -695,7 +695,6 @@ const formatStudentWiseReport = (rows = [], generatedAt, expiresAt, isGlobal = f
       testName: row.testName || "-",
       date: row.date || row.submittedAt || null,
       scorePercent: num(row.scorePercent ?? row.accuracy ?? row.score),
-      percentile: row.percentile == null ? null : num(row.percentile),
       timeTaken: num(row.timeTaken),
       violationsCount: num(row.violationsCount || row.violationCount),
       status: row.status || "-",

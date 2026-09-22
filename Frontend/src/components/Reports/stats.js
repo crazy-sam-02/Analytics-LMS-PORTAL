@@ -84,11 +84,3 @@ export const describeDistribution = (values) => {
     max: round2(nums[nums.length - 1]),
   };
 };
-
-// Percentile rank (0-100) of `value` within a set, with a small-sample guard.
-export const percentileRank = (values, value, minSample = 5) => {
-  const nums = toSortedNumbers(values);
-  if (nums.length < minSample) return null;
-  const below = nums.filter((item) => item < value).length;
-  return round2((below / nums.length) * 100);
-};

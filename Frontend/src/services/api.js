@@ -732,6 +732,7 @@ export const adminApi = {
   createBatch: (body) => adminApiRequest("/admin/batches", { method: "POST", body: JSON.stringify(body) }),
   bulkBatchStudents: (batchId, body) => adminApiRequest(`/admin/batches/${batchId}/students/bulk`, { method: "POST", body: JSON.stringify(body) }),
   removeBatchStudent: (batchId, studentId) => adminApiRequest(`/admin/batches/${batchId}/students/${studentId}`, { method: "DELETE" }),
+  deleteStudent: (studentId) => adminApiRequest(`/admin/students/${studentId}`, { method: "DELETE" }),
   archiveBatch: (batchId) => adminApiRequest(`/admin/batches/${batchId}/archive`, { method: "PATCH", body: JSON.stringify({}) }),
   assignTestToBatch: (testId, body) => adminApiRequest(`/admin/tests/${testId}/assign-batch`, { method: "POST", body: JSON.stringify(body) }),
   assignTestToDepartment: (testId, body) => adminApiRequest(`/admin/tests/${testId}/assign-department`, { method: "POST", body: JSON.stringify(body) }),

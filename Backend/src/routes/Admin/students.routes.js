@@ -42,5 +42,6 @@ router.get("/import-jobs/:jobId", authenticatePlatformAdmin, adminStudentReadLim
 router.get("/:studentId", authenticatePlatformAdmin, adminStudentReadLimiter, requireAnyPermission("manage_students", "view_students"), validate(studentIdParamSchema), studentsController.getStudentProfile);
 router.get("/:studentId/performance", authenticatePlatformAdmin, adminStudentReadLimiter, requireAnyPermission("manage_students", "view_students"), requirePermission("view_reports"), studentsController.getStudentPerformance);
 router.patch("/:studentId/assign-batch", authenticatePlatformAdmin, adminStudentWriteLimiter, requirePermission("manage_students", "manage_batches"), validate(assignStudentBatchSchema), studentsController.assignStudentToBatch);
+router.delete("/:studentId", authenticatePlatformAdmin, adminStudentWriteLimiter, requirePermission("manage_students"), validate(studentIdParamSchema), studentsController.deleteStudent);
 
 module.exports = router;

@@ -21,6 +21,7 @@ import {
   submitTestCreation,
   toggleBatchId,
   setTestCreationContext,
+  setTestCreationIsCollegeAdmin,
   updateQuestionRow,
   updateRestrictionsField,
   updateTestCreationField,
@@ -32,6 +33,7 @@ import { fetchSuperColleges } from "@/features/SuperAdmin/superAdminPanelSlice";
 import { adminApi, superAdminApi } from "@/services/api";
 import usePermission from "@/hooks/usePermission";
 import { ADMIN_PERMISSIONS } from "@/features/Admin/adminPermissions";
+import { isCollegeAdminRole } from "@/features/Admin/adminRole";
 import {
   fetchQuestionBankQuestions,
   fetchQuestionSubjects,
@@ -144,6 +146,9 @@ export default function TestCreationDialog({ context = "admin", onCreated, hideT
   const superAdminUser = useSelector((state) => state.superAdminAuth?.superAdmin || null);
   const scopedUser = isSuperAdminContext ? superAdminUser : (adminUser || studentUser);
   const currentUserDeptId = resolveDepartmentId(scopedUser?.departmentId || scopedUser?.department);
+  // College Admins oversee the whole college and have no single department, so
+  // they get a department picker instead of the department-admin's locked scope.
+  const isCollegeAdmin = !isSuperAdminContext && isCollegeAdminRole(scopedUser?.role);
   const colleges = useSelector((state) => state.superAdminPanel?.colleges ?? EMPTY_ARRAY);
   const qbState = useSelector((state) => (isSuperAdminContext ? state.superQuestionBank : state.questionBank));
   const qb = qbState || DEFAULT_QB_STATE;
@@ -154,12 +159,12 @@ export default function TestCreationDialog({ context = "admin", onCreated, hideT
   // questions and assignment scope are locked server-side after publishing.
   const isNonDraftEdit = isEditMode && Boolean(editingTestStatus) && editingTestStatus !== "DRAFT";
   const draftKey = isSuperAdminContext ? SUPER_ADMIN_DRAFT_KEY : ADMIN_DRAFT_KEY;
-  const visibleDepartments = isSuperAdminContext
+  const visibleDepartments = isSuperAdminContext || isCollegeAdmin
     ? departments
     : Array.isArray(departments)
     ? departments.filter((d) => String(d.id) === String(currentUserDeptId))
     : departments;
-  const visibleStudents = isSuperAdminContext
+  const visibleStudents = isSuperAdminContext || isCollegeAdmin
     ? students
     : Array.isArray(students)
     ? students.filter((s) => String(s.departmentId) === String(currentUserDeptId))
@@ -237,6 +242,12 @@ export default function TestCreationDialog({ context = "admin", onCreated, hideT
     }
     localStorage.setItem(draftKey, JSON.stringify(form));
   }, [draftKey, form, isEditMode, open]);
+
+  // Keep the slice aware of College-Admin scope so step-2 validation can allow
+  // college-wide batch assignment (no owning department required).
+  useEffect(() => {
+    dispatch(setTestCreationIsCollegeAdmin(isCollegeAdmin));
+  }, [dispatch, isCollegeAdmin]);
 
   useEffect(() => {
     if (open) {
@@ -1489,8 +1500,14 @@ export default function TestCreationDialog({ context = "admin", onCreated, hideT
                                 : "border-border bg-card hover:border-border"
                             }`}
                           >
-                            <p className="text-sm font-semibold text-text-primary">All students in your department</p>
-                            <p className="mt-1 text-xs text-text-secondary">Assign to every student within your department.</p>
+                            <p className="text-sm font-semibold text-text-primary">
+                              {isCollegeAdmin ? "Department-wise" : "All students in your department"}
+                            </p>
+                            <p className="mt-1 text-xs text-text-secondary">
+                              {isCollegeAdmin
+                                ? "Assign to every student in a chosen department."
+                                : "Assign to every student within your department."}
+                            </p>
                           </button>
 
                           <button
@@ -1508,16 +1525,65 @@ export default function TestCreationDialog({ context = "admin", onCreated, hideT
                             }`}
                           >
                             <p className="text-sm font-semibold text-text-primary">Batch-wise assignment</p>
-                            <p className="mt-1 text-xs text-text-secondary">Select specific batches in your department.</p>
+                            <p className="mt-1 text-xs text-text-secondary">
+                              {isCollegeAdmin
+                                ? "Select specific batches across the college."
+                                : "Select specific batches in your department."}
+                            </p>
                           </button>
                         </div>
 
-
+                        {/* College Admins have no single department, so they pick one.
+                            Department-wise: required target department.
+                            Batch-wise: optional department filter to narrow the batch list. */}
+                        {isCollegeAdmin && (form.assignmentMethod === "department_wise" || form.assignmentMethod === "batch_wise") ? (
+                          <div className="space-y-2">
+                            <label className="text-sm text-text-secondary">
+                              {form.assignmentMethod === "department_wise"
+                                ? "Target department"
+                                : "Filter batches by department (optional)"}
+                            </label>
+                            <Select
+                              value={
+                                form.departmentId
+                                  ? String(form.departmentId)
+                                  : (form.assignmentMethod === "batch_wise" ? "__all__" : "")
+                              }
+                              onValueChange={(value) => {
+                                const nextDepartmentId = value === "__all__" ? "" : value;
+                                dispatch(updateTestCreationField({ key: "departmentId", value: nextDepartmentId }));
+                                // Reset batch selection whenever the department scope changes.
+                                dispatch(updateTestCreationField({ key: "batchIds", value: [] }));
+                              }}
+                            >
+                              <SelectTrigger className="max-w-md">
+                                <SelectValue placeholder="Select a department" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {form.assignmentMethod === "batch_wise" ? (
+                                  <SelectItem value="__all__">All departments</SelectItem>
+                                ) : null}
+                                {visibleDepartments.map((department) => (
+                                  <SelectItem key={department.id} value={String(department.id)}>
+                                    {department.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            {errors.departmentId ? <p className="text-xs text-danger">{errors.departmentId}</p> : null}
+                          </div>
+                        ) : null}
 
                         {form.assignmentMethod === "department_wise" ? (
-                          <div className="rounded-xl border border-success/30 bg-success/10 px-4 py-3 text-sm text-success">
-                            This test will be assigned to all students in <strong>{visibleDepartments.find((department) => department.id === form.departmentId)?.name || "your department"}</strong>.
-                          </div>
+                          isCollegeAdmin && !form.departmentId ? (
+                            <div className="rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
+                              Select a department above to assign this test.
+                            </div>
+                          ) : (
+                            <div className="rounded-xl border border-success/30 bg-success/10 px-4 py-3 text-sm text-success">
+                              This test will be assigned to all students in <strong>{visibleDepartments.find((department) => String(department.id) === String(form.departmentId))?.name || "your department"}</strong>.
+                            </div>
+                          )
                         ) : null}
 
                         {form.assignmentMethod === "batch_wise" ? (

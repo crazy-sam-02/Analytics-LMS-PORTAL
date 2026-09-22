@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import SkeletonBlock from "@/components/common/SkeletonBlock";
 import PermissionDenied from "@/components/Admin/PermissionDenied";
+import ConfirmActionDialog from "@/components/Admin/ConfirmActionDialog";
 import usePermission from "@/hooks/usePermission";
 import { ADMIN_PERMISSIONS } from "@/features/Admin/adminPermissions";
 
@@ -29,6 +30,7 @@ export default function BatchesPage() {
   const [batchIdInput, setBatchIdInput] = useState("");
   const [bulkBatchId, setBulkBatchId] = useState("");
   const [banner, setBanner] = useState({ type: "", title: "", message: "" });
+  const [pendingStudentDelete, setPendingStudentDelete] = useState(null);
 
   const admin = useAdminAuthState()?.admin;
   const adminDeptId = admin?.department?.id || admin?.departmentId || "";
@@ -133,6 +135,22 @@ export default function BatchesPage() {
       setBanner({ type: "error", title: "Removal failed", message: error?.message || "Could not remove student from batch." });
       toast.error(error?.message || "Failed to remove student.");
     },
+  });
+
+  const deleteStudentMutation = useMutation({
+    mutationFn: (studentId) => adminApi.deleteStudent(studentId),
+    onSuccess: () => {
+      toast.success("Student account deleted.");
+      setBanner({ type: "success", title: "Student deleted", message: "The student account has been permanently deleted." });
+      queryClient.invalidateQueries({ queryKey: ["admin-batch-detail", selectedBatchId] });
+      queryClient.invalidateQueries({ queryKey: ["admin-batches"] });
+      queryClient.invalidateQueries({ queryKey: ["admin-students-directory"] });
+    },
+    onError: (error) => {
+      setBanner({ type: "error", title: "Delete failed", message: error?.message || "Could not delete the student account." });
+      toast.error(error?.message || "Failed to delete student account.");
+    },
+    onSettled: () => setPendingStudentDelete(null),
   });
 
   const assignTestMutation = useMutation({
@@ -405,9 +423,14 @@ export default function BatchesPage() {
                         <p className="text-xs text-text-secondary">{student.email} • Attempts: {student._count?.submissions || 0}</p>
                       </div>
                       {canManageBatchStudents ? (
-                        <Button variant="outline" size="sm" onClick={() => removeStudentMutation.mutate({ batchId: selectedBatch.id, studentId: student.id })}>
-                          Remove
-                        </Button>
+                        <div className="flex items-center gap-2">
+                          <Button variant="outline" size="sm" onClick={() => removeStudentMutation.mutate({ batchId: selectedBatch.id, studentId: student.id })}>
+                            Remove
+                          </Button>
+                          <Button variant="destructive" size="sm" onClick={() => setPendingStudentDelete(student)}>
+                            Delete
+                          </Button>
+                        </div>
                       ) : null}
                     </div>
                   ))}
@@ -575,6 +598,17 @@ export default function BatchesPage() {
               </CardContent>
             </Card>
       ) : null}
+
+      <ConfirmActionDialog
+        open={Boolean(pendingStudentDelete)}
+        onOpenChange={(open) => { if (!open) setPendingStudentDelete(null); }}
+        title="Delete student account?"
+        description={pendingStudentDelete ? `This permanently deletes ${pendingStudentDelete.fullName || pendingStudentDelete.email}'s account. This cannot be undone.` : ""}
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        confirmVariant="destructive"
+        onConfirm={() => deleteStudentMutation.mutateAsync(pendingStudentDelete.id)}
+      />
     </div>
   );
 }

@@ -66,8 +66,9 @@ const formatDuration = (secondsInput) => {
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
-  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
-  return `${minutes}m ${seconds}s`;
+  if (hours > 0) return `${hours} hr ${minutes} min ${seconds} sec`;
+  if (minutes > 0) return `${minutes} min ${seconds} sec`;
+  return `${seconds} sec`;
 };
 
 const getStudentNumber = (student = {}) =>
@@ -311,21 +312,6 @@ const buildStudentReportPayload = async ({ db, userId, filters = {} }) => {
       throw new ApiError(404, "No submitted attempt found for selected test", { test_id: testId }, "TEST_REPORT_NOT_FOUND");
     }
 
-    const [rankedScores] = await Promise.all([
-      db.submission.findMany({
-        where: {
-          testId: target.testId,
-          status: { in: REPORTABLE_SUBMISSION_STATUSES },
-        },
-        select: { score: true },
-        orderBy: { score: "desc" },
-      }),
-    ]);
-
-    const totalRanked = rankedScores.length || 1;
-    const higherCount = rankedScores.filter((item) => Number(item.score || 0) > Number(target.score || 0)).length;
-    const percentile = Number((((totalRanked - higherCount) / totalRanked) * 100).toFixed(2));
-
     const revealQuestionDetails = canRevealCorrectAnswers(target.test);
     const testCompleted = isTestCompleted(target.test);
     const reviewMode = revealQuestionDetails ? "show_all" : resolveReviewMode(target.test);
@@ -366,7 +352,6 @@ const buildStudentReportPayload = async ({ db, userId, filters = {} }) => {
       total_marks: Number(totalMarks || 0),
       obtained_marks: obtainedMarks,
       percentage: toPercent(percentage),
-      percentile,
       time_analytics: {
         total_time: Number(target.timeSpentSeconds || 0),
         avg_time_per_question:
@@ -455,8 +440,7 @@ const buildStudentReportHtml = ({ student, payload, filters, generatedAt }) => {
         <div class="metrics-grid">
           <div class="metric-card"><div class="metric-value">${escapeHtml(formatMarksPair(byTest.obtained_marks, byTest.total_marks))}</div><div class="metric-label">Marks</div></div>
           <div class="metric-card"><div class="metric-value">${escapeHtml(formatPercent(byTest.percentage))}</div><div class="metric-label">Percentage</div></div>
-          <div class="metric-card"><div class="metric-value">${byTest.percentile == null ? "-" : escapeHtml(`${Number(byTest.percentile).toFixed(1)}%`)}</div><div class="metric-label">Percentile</div></div>
-          <div class="metric-card"><div class="metric-value">${escapeHtml(formatDuration(byTest.time_analytics?.total_time))}</div><div class="metric-label">Total Time</div></div>
+          <div class="metric-card"><div class="metric-value">${escapeHtml(formatDuration(byTest.time_analytics?.total_time))}</div><div class="metric-label">Test Time Taken</div></div>
         </div>
       </section>
 

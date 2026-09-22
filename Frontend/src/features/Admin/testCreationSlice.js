@@ -70,6 +70,7 @@ const createDefaultForm = () => ({
 
 const initialState = {
   context: "admin",
+  isCollegeAdmin: false,
   mode: "create",
   editingTestId: null,
   editingTestStatus: null,
@@ -84,6 +85,7 @@ const initialState = {
 
 export const createInitialTestCreationState = () => ({
   ...initialState,
+  isCollegeAdmin: false,
   errors: {},
   stepTitles: [...STEP_TITLES],
   form: createDefaultForm(),
@@ -246,7 +248,7 @@ const normalizeQuestion = (question) => ({
 });
 
 export const validateCurrentStep = (state) => {
-  const { form, step, context, mode } = state;
+  const { form, step, context, mode, isCollegeAdmin } = state;
   const errors = {};
 
   if (step === 0) {
@@ -310,7 +312,10 @@ export const validateCurrentStep = (state) => {
     }
 
     if (form.assignmentMethod === "batch_wise") {
-      if (context !== "super_admin" && !String(form.departmentId || "").trim()) {
+      // Department admins are locked to their own department, so a department
+      // must resolve before batches. College admins assign college-wide and may
+      // pick batches across departments, so no department is required.
+      if (context !== "super_admin" && !isCollegeAdmin && !String(form.departmentId || "").trim()) {
         errors.departmentId = "Select a department before choosing batches";
       }
       if (!form.batchIds.length) {
@@ -661,6 +666,9 @@ const testCreationSlice = createSlice({
     setTestCreationContext: (state, action) => {
       state.context = action.payload === "super_admin" ? "super_admin" : "admin";
     },
+    setTestCreationIsCollegeAdmin: (state, action) => {
+      state.isCollegeAdmin = Boolean(action.payload);
+    },
     setQuestionInputMode: (state, action) => {
       state.form.questionInputMode = action.payload;
     },
@@ -757,6 +765,7 @@ export const {
   toggleBatchId,
   clearBatches,
   setTestCreationContext,
+  setTestCreationIsCollegeAdmin,
   setQuestionInputMode,
   addQuestionsFromBank,
   addQuestionRow,

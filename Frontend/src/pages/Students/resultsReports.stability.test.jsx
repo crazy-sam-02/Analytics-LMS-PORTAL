@@ -60,7 +60,7 @@ describe("Student results and reports pages", () => {
   it("renders the results page without crashing during query updates", async () => {
     studentApi.getAttemptResult.mockResolvedValue({
       score: 78,
-      percentile: 92,
+      percentage: 78,
       time_taken: 750,
       review_mode: "show_score_only",
       test: {
@@ -83,7 +83,7 @@ describe("Student results and reports pages", () => {
   it("shows zero-valued answers instead of treating them as unanswered", async () => {
     studentApi.getAttemptResult.mockResolvedValue({
       score: 5,
-      percentile: 50,
+      percentage: 50,
       time_taken: 120,
       review_mode: "show_all",
       is_test_completed: true,
@@ -126,7 +126,6 @@ describe("Student results and reports pages", () => {
             total_marks: 100,
             obtained_marks: 82,
             percentage: 82,
-            percentile: 91,
             time_analytics: {
               total_time: "42m",
               avg_time_per_question: "1m 24s",

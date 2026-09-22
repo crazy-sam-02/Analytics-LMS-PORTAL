@@ -811,12 +811,13 @@ export default function ReportsPage() {
   const loading = collegesQuery.isLoading || (hasCollegeSelected && scopeQuery.isLoading);
 
   const violationCount = toNumber(metrics.violations);
-  const avgScoreTier =
-    metrics.avgScore >= 75
-      ? { badge: "Distinction", badgeTone: "success" }
-      : metrics.avgScore >= 50
-        ? { badge: "Average", badgeTone: "info" }
-        : { badge: "Below Avg", badgeTone: "warning" };
+  // Same avg-score tier badges as the College Admin report (Excellent / Healthy /
+  // Needs Attention, clamped) so an identical score reads the same in both portals.
+  const avgScoreTier = clampPercent(metrics.avgScore) >= 75
+    ? { badge: "Excellent", badgeTone: "success" }
+    : clampPercent(metrics.avgScore) >= 50
+      ? { badge: "Healthy", badgeTone: "info" }
+      : { badge: "Needs Attention", badgeTone: "danger" };
 
   const overviewStatCards = [
     {
@@ -861,7 +862,7 @@ export default function ReportsPage() {
     },
   ];
 
-  const healthLabel = metrics.avgScore >= 75 ? "Excellent" : metrics.avgScore >= 50 ? "Healthy" : "Needs Attention";
+  const healthLabel = clampPercent(metrics.avgScore) >= 75 ? "Excellent" : clampPercent(metrics.avgScore) >= 50 ? "Healthy" : "Needs Attention";
   const insightMessage = hasCollegeSelected
     ? `Average score is ${formatPercent(metrics.avgScore)} across ${toNumber(metrics.totalSubmissions).toLocaleString()} submissions with a ${formatPercent(metrics.passRate)} pass rate. ${violationCount > 10 ? `${violationCount} integrity flags need review.` : "Integrity flags are within healthy limits."}`
     : "Select a college to view institutional health.";
@@ -1021,7 +1022,7 @@ export default function ReportsPage() {
 
           <div className="grid gap-4 lg:grid-cols-[2fr_2fr]">
             <ChartCard title="Score Distribution" height="h-[220px]">
-              <ScoreDonutChart data={scope.distribution || []} total={studentRows.length} />
+              <ScoreDonutChart data={scope.distribution || []} total={toNumber(metrics.attemptedStudents)} />
             </ChartCard>
             <ChartCard title="Subject-wise Scores" height="h-[240px]">
               <TopicPieChart data={subjectData} />

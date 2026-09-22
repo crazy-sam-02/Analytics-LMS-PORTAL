@@ -1005,9 +1005,6 @@ export function InsightCard({ title, message, action, icon }) {
 
 export function StudentIdentityCard({ student, stats }) {
   if (!student) return null;
-  const percentile = Number(stats?.percentile || 0);
-  const percentileClass =
-    percentile >= 90 ? "text-green-500" : percentile >= 70 ? "text-chart-1" : percentile >= 50 ? "text-yellow-500" : "text-red-500";
 
   return (
     <article className="rounded-2xl border border-border bg-card p-5">
@@ -1027,14 +1024,7 @@ export function StudentIdentityCard({ student, stats }) {
         <div className="flex flex-wrap gap-8">
           <div className="text-center">
             <p className="text-2xl font-bold tabular-nums text-text-primary">{stats.avg != null ? `${Number(stats.avg).toFixed(1)}%` : "-"}</p>
-            <p className="text-[11px] text-text-secondary">avg score</p>
-          </div>
-          <div className="text-center">
-            <p className={`text-2xl font-bold tabular-nums ${percentileClass}`} title={stats.totalSubmissions < 5 ? "Needs 5+ submissions" : "Percentile"}>
-              {stats.totalSubmissions < 5 ? "N/A" : `${Math.round(percentile)}%`}
-            </p>
-            <p className="text-[11px] text-text-secondary">percentile</p>
-            {stats.totalSubmissions < 5 ? <p className="text-[10px] text-text-secondary">Needs 5+ submissions</p> : null}
+            <p className="text-[11px] text-text-secondary">avg percentage</p>
           </div>
           <div className="text-center">
             <p className="text-2xl font-bold tabular-nums text-text-primary">#{stats.rank || "-"}</p>

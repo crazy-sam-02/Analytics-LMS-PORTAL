@@ -419,7 +419,14 @@ const buildReportAnalyticsPayload = async (req, queryOverrides = {}) => {
 
   const attendedRows = studentRows.filter((row) => row.testsTaken > 0);
   const ranked = [...attendedRows].sort((a, b) => b.avgScore - a.avgScore).map((item, index) => ({ ...item, rank: index + 1 }));
-  const avgScore = ranked.length ? ranked.reduce((sum, row) => sum + row.avgScore, 0) / ranked.length : 0;
+  // Submission-weighted average (mean of every submission's score %), matching the
+  // Super Admin report's shared aggregation pipeline ($avg over submissions). This
+  // is the standard "average score" and keeps the KPI card identical across both
+  // portals; the earlier student-weighted mean diverged whenever students took
+  // unequal numbers of tests.
+  const avgScore = scopedSubmissions.length
+    ? scopedSubmissions.reduce((sum, row) => sum + getScorePercent(row), 0) / scopedSubmissions.length
+    : 0;
   const passRate = scopedSubmissions.length
     ? (scopedSubmissions.filter((row) => getScorePercent(row) >= 40).length / scopedSubmissions.length) * 100
     : 0;
@@ -454,12 +461,26 @@ const buildReportAnalyticsPayload = async (req, queryOverrides = {}) => {
     score: toPercent(stat.total / Math.max(1, stat.count)),
   }));
 
+  // Group scoped submissions by the submitting student's department / batch so the
+  // comparative rows use the SAME submission-weighted avg + per-submission pass
+  // rate as the Super Admin report's aggregation service (byDepartment $avg /
+  // passing-over-submissions). Participation stays students-based (distinct
+  // attempted students / students in scope).
+  const submissionsByDepartment = new Map();
+  scopedSubmissions.forEach((row) => {
+    const key = row.user?.departmentId || "unknown";
+    const list = submissionsByDepartment.get(key) || [];
+    list.push(row);
+    submissionsByDepartment.set(key, list);
+  });
+
   const departmentComparative = departments.map((department) => {
     const rows = studentRows.filter((row) => row.departmentId === department.id);
-    const attendedDepartmentRows = rows.filter((row) => row.testsTaken > 0);
-    const deptAvg = attendedDepartmentRows.length ? attendedDepartmentRows.reduce((sum, row) => sum + row.avgScore, 0) / attendedDepartmentRows.length : 0;
-    const deptParticipation = rows.length ? (attendedDepartmentRows.length / rows.length) * 100 : 0;
-    const deptPassRate = attendedDepartmentRows.length ? (attendedDepartmentRows.filter((row) => row.avgScore >= 40).length / attendedDepartmentRows.length) * 100 : 0;
+    const deptSubs = submissionsByDepartment.get(department.id) || [];
+    const deptAttempted = new Set(deptSubs.map((row) => resolveSubmissionStudentId(row)).filter(Boolean));
+    const deptAvg = deptSubs.length ? deptSubs.reduce((sum, row) => sum + getScorePercent(row), 0) / deptSubs.length : 0;
+    const deptPassRate = deptSubs.length ? (deptSubs.filter((row) => getScorePercent(row) >= 40).length / deptSubs.length) * 100 : 0;
+    const deptParticipation = rows.length ? (deptAttempted.size / rows.length) * 100 : 0;
     return {
       departmentId: department.id,
       departmentName: department.name,
@@ -469,12 +490,17 @@ const buildReportAnalyticsPayload = async (req, queryOverrides = {}) => {
     };
   });
 
+  const submissionInBatch = (row, batchId) =>
+    row.user?.batchId === batchId ||
+    (Array.isArray(row.user?.batchIds) && row.user.batchIds.some((id) => String(id) === String(batchId)));
+
   const batchComparative = batches.map((batch) => {
     const rows = studentRows.filter((row) => row.batchId === batch.id || row.batchIds.includes(batch.id));
-    const attendedBatchRows = rows.filter((row) => row.testsTaken > 0);
-    const value = attendedBatchRows.length ? attendedBatchRows.reduce((sum, row) => sum + row.avgScore, 0) / attendedBatchRows.length : 0;
-    const pass = attendedBatchRows.length ? (attendedBatchRows.filter((row) => row.avgScore >= 40).length / attendedBatchRows.length) * 100 : 0;
-    const participation = rows.length ? (attendedBatchRows.length / rows.length) * 100 : 0;
+    const batchSubs = scopedSubmissions.filter((row) => submissionInBatch(row, batch.id));
+    const batchAttempted = new Set(batchSubs.map((row) => resolveSubmissionStudentId(row)).filter(Boolean));
+    const value = batchSubs.length ? batchSubs.reduce((sum, row) => sum + getScorePercent(row), 0) / batchSubs.length : 0;
+    const pass = batchSubs.length ? (batchSubs.filter((row) => getScorePercent(row) >= 40).length / batchSubs.length) * 100 : 0;
+    const participation = rows.length ? (batchAttempted.size / rows.length) * 100 : 0;
     return {
       batchId: batch.id,
       batchName: batch.name,
@@ -506,7 +532,6 @@ const buildReportAnalyticsPayload = async (req, queryOverrides = {}) => {
       testId: row.testId,
       testName: row.test?.title || "Test",
       scorePercent: getScorePercent(row),
-      percentile: row.percentile ?? null,
       timeTaken: Number(row.timeSpentSeconds || 0),
       date: row.submittedAt || row.updatedAt || row.createdAt,
       status: row.status,
@@ -1654,7 +1679,6 @@ const getReportStudentDetailDashboard = asyncHandler(async (req, res) => {
       accuracy,
       obtainedMarks,
       totalMarks,
-      percentile: submission.percentile ?? null,
       timeTaken: Number(submission.timeSpentSeconds || 0),
       status: submission.status,
       date: (submission.submittedAt || submission.updatedAt || submission.createdAt || new Date()).toISOString(),

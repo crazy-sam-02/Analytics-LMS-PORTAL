@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git --no-pager diff --stat)",
+      "Bash(npm run *)",
+      "Bash(npm test *)",
+      "Bash(timeout 300 npm test)",
+      "Bash(git --no-pager diff Backend/src/controllers/Admin/reports.controller.js Backend/src/services/report-formatter.service.js Backend/src/services/admin-report-queue.service.js)",
+      "Bash(git --no-pager diff Backend/src/controllers/Admin/tests.controller.js Backend/src/controllers/SuperAdmin/tests.controller.js Backend/src/app.js)",
+      "Bash(timeout 60 node scripts/prod-readiness-check.js)",
+      "Bash(npx jest *)",
+      "Bash(npx eslint *)",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(grep -rn \"results/:\" app/ pages/)",
+      "Bash(grep -rln \"hidden\\\\|can_review\\\\|canReview\\\\|review_mode\\\\|reviewMode\" pages/Students components/Students app/Students)",
+      "Bash(echo \"LINT EXIT: $?\")",
+      "Bash(cat routes/Admin/reports.routes.js)",
+      "Bash(cat routes/SuperAdmin/reports.routes.js)"
+    ]
+  }
+}

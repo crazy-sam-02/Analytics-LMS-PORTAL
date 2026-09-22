@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import TypedConfirmDialog from "@/components/SuperAdmin/TypedConfirmDialog";
+import ConfirmActionDialog from "@/components/Admin/ConfirmActionDialog";
 import SkeletonBlock from "@/components/common/SkeletonBlock";
 
 export default function BatchesPage() {
@@ -19,6 +20,7 @@ export default function BatchesPage() {
   const [editCollegeId, setEditCollegeId] = useState("");
   const [editForm, setEditForm] = useState({ name: "", year: new Date().getFullYear(), departmentId: "" });
   const [pendingDelete, setPendingDelete] = useState(null);
+  const [pendingStudentDelete, setPendingStudentDelete] = useState(null);
   const [selectedStudentId, setSelectedStudentId] = useState("");
   const [selectedStudentIds, setSelectedStudentIds] = useState([]);
   const [selectedStudentRecords, setSelectedStudentRecords] = useState({});
@@ -153,6 +155,21 @@ export default function BatchesPage() {
     onError: (error) => {
       toast.error(error?.message || "Failed to delete batch.");
     },
+  });
+
+  const deleteStudentMutation = useMutation({
+    mutationFn: (student) =>
+      superAdminApi.deleteStudent(student.id, { confirmationText: `DELETE ${student.studentId || student.id}` }),
+    onSuccess: () => {
+      toast.success("Student account deleted.");
+      if (selectedStudentId === pendingStudentDelete?.id) setSelectedStudentId("");
+      studentsQuery.refetch();
+      batchesQuery.refetch();
+    },
+    onError: (error) => {
+      toast.error(error?.message || "Failed to delete student account.");
+    },
+    onSettled: () => setPendingStudentDelete(null),
   });
 
   const assignBatchMutation = useMutation({
@@ -899,6 +916,13 @@ export default function BatchesPage() {
                                 <p>{student.department?.name || "-"}</p>
                                 <p>{Array.isArray(student.batchIds) && student.batchIds.length > 0 ? `${student.batchIds.length} batch(es)` : "No batches"}</p>
                               </div>
+                              <Button
+                                variant="destructive"
+                                size="sm"
+                                onClick={(event) => { event.stopPropagation(); setPendingStudentDelete(student); }}
+                              >
+                                Delete
+                              </Button>
                             </div>
                           ))}
                           {(studentPagination?.pages || 1) > 1 ? (
@@ -981,6 +1005,17 @@ export default function BatchesPage() {
             deleteBatchMutation.mutate({ batchId: pendingDelete.id, confirmationText: typedText });
           }
         }}
+      />
+
+      <ConfirmActionDialog
+        open={Boolean(pendingStudentDelete)}
+        onOpenChange={(open) => { if (!open) setPendingStudentDelete(null); }}
+        title="Delete student account?"
+        description={pendingStudentDelete ? `This permanently deletes ${pendingStudentDelete.fullName || pendingStudentDelete.email}'s account. This cannot be undone.` : ""}
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        confirmVariant="destructive"
+        onConfirm={() => deleteStudentMutation.mutateAsync(pendingStudentDelete)}
       />
     </div>
   );

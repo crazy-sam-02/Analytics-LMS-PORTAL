@@ -179,6 +179,39 @@ const getStudentImportJob = asyncHandler(async (req, res) => {
   res.status(200).json(job);
 });
 
+const deleteStudent = asyncHandler(async (req, res) => {
+  const collegeId = req.collegeId;
+  const adminId = req.admin.id;
+  const scopedDepartmentId = getScopedDepartmentId(req, { requiredForDepartmentAdmin: false });
+  const { studentId } = req.params;
+  const m = await models.init();
+  const db = m.dbClient;
+
+  const existing = await db.student.findFirst({ where: { id: studentId, collegeId } });
+  if (!existing) {
+    throw new ApiError(404, "Student not found");
+  }
+
+  if (scopedDepartmentId) {
+    assertDepartmentScope(req, existing.departmentId, "Student is outside the admin department scope");
+  }
+
+  await db.student.delete({ where: { id: studentId } });
+  await revokeStudentRefreshTokens(db, studentId);
+
+  await createAuditLog({
+    action: "ADMIN_DELETE_STUDENT",
+    targetType: "STUDENT",
+    targetId: existing.id,
+    collegeId,
+    adminId,
+    beforeState: existing,
+    afterState: null,
+  });
+
+  res.status(200).json({ id: studentId });
+});
+
 module.exports = {
   getStudents,
   createStudent,
@@ -188,4 +221,5 @@ module.exports = {
   bulkImportStudents,
   promoteStudentsYear,
   getStudentImportJob,
+  deleteStudent,
 };
