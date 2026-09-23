@@ -254,19 +254,83 @@ docker compose --env-file Backend/.env.production -f docker-compose.monitoring.y
 
 Prometheus scrapes `api1/api2/api3`. Keep Grafana behind localhost/VPN only.
 
-## Step 16 — One-click redeploys via GitHub Actions (optional)
+## Step 16 — CI/CD with GitHub Actions (optional)
 
-`.github/workflows/deploy-vps.yml` is ready. Add these repo **Secrets**:
+The repo ships two workflows under `.github/workflows/`:
 
-| Secret | Value |
-|---|---|
-| `VPS_HOST` | your VPS IP / hostname |
-| `VPS_USER` | `deploy` |
-| `VPS_PATH` | `/var/www/lms-portal` |
-| `VPS_SSH_KEY` | a private key whose public half is in `~deploy/.ssh/authorized_keys` |
+| Workflow | File | Trigger | What it does |
+|---|---|---|---|
+| **CI** | `ci.yml` | every `push` and `pull_request` | Backend: `npm ci`, ESLint, Jest (with a Mongo 7 service container). Frontend: `npm ci`, ESLint, Vitest, `vite build`. |
+| **CD** | `deploy-vps.yml` | manual (`workflow_dispatch`) | SSHes into the VPS, `git reset --hard origin/main`, rebuilds the Docker stack, runs migrations + indexes, runs `prod:check`, curls `/api/ready`. |
 
-Then: GitHub → **Actions → Deploy VPS → Run workflow**. It pulls `origin/main`,
-rebuilds, migrates, runs `prod:check`, and curls `/api/ready`.
+### 16a — Enable CI (no setup needed)
+
+CI works out of the box — it needs **no secrets**. Just push to the repo
+(or open a PR) and check **GitHub → Actions → CI**. Both jobs must pass before
+you merge/deploy.
+
+Local equivalents:
+
+```bash
+# Backend
+cd Backend && npm ci && npm run lint -- --quiet && npm test -- --runInBand
+
+# Frontend
+cd Frontend && npm ci && npm run lint -- --quiet && npm test && npm run build
+```
+
+> Backend tests expect a Mongo on `127.0.0.1:27017` (or set `MONGODB_URI`);
+> CI provides one automatically via a service container.
+
+### 16b — Enable CD (deploy secrets)
+
+1. **Create a deploy SSH keypair** (on your workstation):
+   ```bash
+   ssh-keygen -t ed25519 -f lms_deploy_key -N "" -C "github-actions-deploy"
+   ssh-copy-id -i lms_deploy_key.pub deploy@YOUR_VPS_IP
+   # if ssh-copy-id isn't available, append the .pub to
+   # ~deploy/.ssh/authorized_keys on the VPS manually
+   ```
+2. **Add repo secrets** — GitHub → **Settings → Secrets and variables →
+   Actions → New repository secret**:
+
+   | Secret | Value |
+   |---|---|
+   | `VPS_HOST` | your VPS IP / hostname |
+   | `VPS_USER` | `deploy` |
+   | `VPS_PATH` | `/var/www/lms-portal` |
+   | `VPS_SSH_KEY` | the **private** key (`lms_deploy_key` contents) |
+
+3. **Run it** — GitHub → **Actions → Deploy VPS → Run workflow**.
+
+> Remember Step 5: the health-check URL in `deploy-vps.yml` hardcodes
+> `lms.analyticsedify.com` — replace it if you use a different domain.
+
+### 16c — Auto-deploy on push to main (optional)
+
+By default CD is manual-only. To deploy automatically after CI passes on
+`main`, edit `.github/workflows/deploy-vps.yml`:
+
+```yaml
+on:
+  workflow_dispatch:          # keep manual trigger too
+  push:
+    branches: [main]
+```
+
+Recommended: make `deploy` a *required* check and gate it on CI by running it
+only after CI succeeds — simplest is to keep the manual trigger, or split CI
+into a reusable workflow and call it from the deploy job.
+
+### 16d — Branch protection (recommended)
+
+GitHub → **Settings → Branches → Add rule** for `main`:
+
+- Require status checks to pass before merging → select **`backend`**, **`frontend`**
+- Require a pull request before merging
+- Do not allow force pushes
+
+This guarantees nothing reaches the VPS without green CI.
 
 ---
 
